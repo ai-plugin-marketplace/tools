@@ -1,0 +1,35 @@
+{
+  "name": "ai-plugin-marketplace-tools",
+  "version": "0.0.0",
+  "private": true,
+  "description": "Toolkit monorepo for authoring AI coding-assistant plugins (Claude Code, Cursor, Gemini CLI, Kiro, Vercel Skills CLI).",
+  "type": "module",
+  "packageManager": "pnpm@10.30.3",
+  "scripts": {
+    "build": "tsc --build",
+    "clean": "tsc --build --clean && rimraf 'packages/*/dist'",
+    "typecheck": "tsc --build",
+    "lint": "eslint packages/",
+    "format": "prettier --write .",
+    "format:check": "prettier --check .",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "check": "pnpm run typecheck && pnpm run lint && pnpm run format:check && pnpm run test"
+  },
+  "devDependencies": {
+    "@eslint/js": "^9.18.0",
+    "@types/node": "^22.10.2",
+    "@typescript-eslint/parser": "^8.20.0",
+    "eslint": "^9.18.0",
+    "eslint-config-prettier": "^10.0.1",
+    "prettier": "^3.4.2",
+    "rimraf": "^6.0.1",
+    "tsx": "^4.19.2",
+    "typescript": "^5.7.3",
+    "typescript-eslint": "^8.20.0",
+    "vitest": "^3.0.2"
+  },
+  "engines": {
+    "node": ">=20.0.0"
+  }
+}

@@ -1,0 +1,36 @@
+/**
+ * @ai-plugin-marketplace/core — public API.
+ *
+ * Only the exports listed here are part of the public contract. Per §8.1 of the architecture
+ * spec (`docs/specs/architecture.md`), the package's only public subpath is the root — types
+ * and functions import from `@ai-plugin-marketplace/core` directly, not from `/types`,
+ * `/config`, `/targets`, or any internal subpath.
+ */
+
+export { defineConfig } from './config.js';
+export type { AipmConfig, AipmConfigInput } from './config.js';
+
+export {
+  build,
+  validate,
+  scaffold,
+  migrate,
+  checkSupport,
+  addTarget,
+  listTargets,
+} from './pipeline/operations.js';
+
+export type {
+  TargetId,
+  BuildOptions,
+  BuildResult,
+  GeneratedFile,
+  ValidateOptions,
+  ValidationResult,
+  Finding,
+  FindingCode,
+  ScaffoldOptions,
+  MigrateOptions,
+  MigrateResult,
+  SupportReport,
+} from './pipeline/types.js';

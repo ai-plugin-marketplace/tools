@@ -1,0 +1,152 @@
+/**
+ * I/O layer for the Gemini CLI target: copies a plugin's canonical files into a
+ * standalone export directory, rewriting agent tool names along the way.
+ *
+ * @see docs/specs/architecture.md §7 (mechanical transformations)
+ * @see docs/specs/architecture.md §12.4 (transform step + per-target folder layout)
+ */
+
+import * as fs from 'node:fs';
+import * as path from 'node:path';
+
+import { rewriteAgentFrontmatterTools } from './transform.js';
+
+// ---------------------------------------------------------------------------
+// Internal file-system helpers (mirrors build-standalone.ts utilities)
+// ---------------------------------------------------------------------------
+
+function copyFile(src: string, dest: string): void {
+  fs.mkdirSync(path.dirname(dest), { recursive: true });
+  fs.copyFileSync(src, dest);
+}
+
+function copyDir(src: string, dest: string): void {
+  if (!fs.existsSync(src)) return;
+  fs.mkdirSync(dest, { recursive: true });
+  for (const entry of fs.readdirSync(src, { withFileTypes: true })) {
+    const srcPath = path.join(src, entry.name);
+    const destPath = path.join(dest, entry.name);
+    if (entry.isDirectory()) {
+      copyDir(srcPath, destPath);
+    } else {
+      copyFile(srcPath, destPath);
+    }
+  }
+}
+
+function copyIfExists(src: string, dest: string): boolean {
+  if (!fs.existsSync(src)) return false;
+  if (fs.statSync(src).isDirectory()) {
+    copyDir(src, dest);
+  } else {
+    copyFile(src, dest);
+  }
+  return true;
+}
+
+function cleanDir(dir: string): void {
+  if (fs.existsSync(dir)) {
+    fs.rmSync(dir, { recursive: true });
+  }
+}
+
+/** Collect all file paths under `dir` relative to `dir`. */
+function collectRelativePaths(dir: string): string[] {
+  const results: string[] = [];
+  for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
+    if (entry.isDirectory()) {
+      for (const sub of collectRelativePaths(path.join(dir, entry.name))) {
+        results.push(path.join(entry.name, sub));
+      }
+    } else {
+      results.push(entry.name);
+    }
+  }
+  return results;
+}
+
+// ---------------------------------------------------------------------------
+// Agent rewriting
+// ---------------------------------------------------------------------------
+
+/**
+ * Rewrite all `.md` files inside `agentsDir` in-place, translating Claude Code tool
+ * names to Gemini CLI equivalents. Returns a map of filename → dropped tools.
+ */
+function rewriteAgentsDir(agentsDir: string): Record<string, string[]> {
+  const droppedToolsByAgent: Record<string, string[]> = {};
+
+  if (!fs.existsSync(agentsDir)) return droppedToolsByAgent;
+
+  for (const file of fs.readdirSync(agentsDir)) {
+    if (!file.endsWith('.md')) continue;
+
+    const filePath = path.join(agentsDir, file);
+    const original = fs.readFileSync(filePath, 'utf-8');
+    const { content, droppedTools } = rewriteAgentFrontmatterTools(original);
+
+    fs.writeFileSync(filePath, content, 'utf-8');
+
+    if (droppedTools.length > 0) {
+      droppedToolsByAgent[file] = droppedTools;
+    }
+  }
+
+  return droppedToolsByAgent;
+}
+
+// ---------------------------------------------------------------------------
+// Public API
+// ---------------------------------------------------------------------------
+
+/**
+ * Build the Gemini CLI standalone export for a single plugin. Copies the canonical
+ * set of files/dirs from `pluginDir` into `destDir`, rewriting agent `.md` files'
+ * tool names along the way. Matches the output of `buildGeminiStandalone` in the
+ * template's `build-standalone.ts`.
+ *
+ * Impure (I/O): reads from pluginDir, writes to destDir. Clears destDir first.
+ *
+ * @param pluginDir - Absolute path to the source plugin directory.
+ * @param destDir   - Absolute path to the destination directory (cleared before writing).
+ * @returns `emitted`: paths relative to destDir for every file written.
+ *          `droppedToolsByAgent`: map of agent filename → dropped Claude tool names.
+ */
+export function bundleGeminiPlugin(
+  pluginDir: string,
+  destDir: string,
+): { emitted: string[]; droppedToolsByAgent: Record<string, string[]> } {
+  cleanDir(destDir);
+
+  // ── Flat files (only if present) ──────────────────────────────────────────
+  const flatFiles = ['gemini-extension.json', 'GEMINI.md', 'README.md', 'LICENSE'];
+  for (const name of flatFiles) {
+    copyIfExists(path.join(pluginDir, name), path.join(destDir, name));
+  }
+
+  // ── Directories: skills/ and agents/ ─────────────────────────────────────
+  const plainDirs = ['skills', 'agents'];
+  for (const dir of plainDirs) {
+    copyIfExists(path.join(pluginDir, dir), path.join(destDir, dir));
+  }
+
+  // Rewrite agent tool names after copying
+  const droppedToolsByAgent = rewriteAgentsDir(path.join(destDir, 'agents'));
+
+  // ── commands/: .toml files only ───────────────────────────────────────────
+  const commandsSrc = path.join(pluginDir, 'commands');
+  const commandsDest = path.join(destDir, 'commands');
+  if (fs.existsSync(commandsSrc)) {
+    const tomlFiles = fs.readdirSync(commandsSrc).filter((f) => f.endsWith('.toml'));
+    if (tomlFiles.length > 0) {
+      fs.mkdirSync(commandsDest, { recursive: true });
+      for (const file of tomlFiles) {
+        copyFile(path.join(commandsSrc, file), path.join(commandsDest, file));
+      }
+    }
+  }
+
+  const emitted = collectRelativePaths(destDir);
+
+  return { emitted, droppedToolsByAgent };
+}

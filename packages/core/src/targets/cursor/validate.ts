@@ -1,0 +1,252 @@
+/**
+ * Per-target validator for the Cursor target.
+ *
+ * Responsibilities (v0.1.0):
+ *   1. Manifest file refs resolve — checks that paths in .cursor-plugin/plugin.json
+ *      exist on disk with the correct type (directory for skills, .md for agents,
+ *      either for commands). Hooks refs are intentionally excluded: the hooks field
+ *      typically points at `hooks/claude.json`, which is a Claude-target generated
+ *      artifact and is not guaranteed to exist in a Cursor-only build context.
+ *   2. Cursor rule frontmatter — validates YAML frontmatter in rules/*.mdc files
+ *      against cursorRuleFrontmatterSchema. Files with no frontmatter block are
+ *      silently skipped.
+ *
+ * Cross-target concerns (envelope adherence, name consistency, MCP key sync,
+ * marketplace registration, freshness) are NOT checked here.
+ *
+ * @see packages/core/docs/specs/architecture.md §10 (validation contract)
+ * @see packages/core/docs/specs/architecture.md §8.1 (Finding, FindingCode)
+ */
+
+import * as fs from 'node:fs';
+import * as path from 'node:path';
+
+import { parse as parseYaml } from 'yaml';
+
+import type { Finding } from '../../pipeline/types.js';
+import { cursorPluginManifestSchema, cursorRuleFrontmatterSchema } from './schemas.js';
+
+// ---------------------------------------------------------------------------
+// Helpers
+// ---------------------------------------------------------------------------
+
+function makeInvalid(plugin: string, message: string, hint?: string): Finding {
+  const finding: Finding = { severity: 'hard', code: 'schema-invalid', plugin, message };
+  if (hint !== undefined) finding.hint = hint;
+  return finding;
+}
+
+/**
+ * Normalise a manifest field that may be a single string path, an array of
+ * string paths, or an inline object (which has no resolvable paths). Returns
+ * only the string path entries.
+ */
+function normalisePathField(
+  value: string | string[] | Record<string, unknown> | undefined,
+): string[] {
+  if (value === undefined) return [];
+  if (typeof value === 'string') return [value];
+  if (Array.isArray(value)) return value.filter((v): v is string => typeof v === 'string');
+  // Inline object (record of commands, inline hooks object) — no paths to check.
+  return [];
+}
+
+// ---------------------------------------------------------------------------
+// Manifest file-ref validation
+// ---------------------------------------------------------------------------
+
+function validateManifestFileRefs(pluginDir: string, pluginName: string): Finding[] {
+  const manifestPath = path.join(pluginDir, '.cursor-plugin', 'plugin.json');
+  if (!fs.existsSync(manifestPath)) return [];
+
+  let raw: unknown;
+  try {
+    raw = JSON.parse(fs.readFileSync(manifestPath, 'utf-8'));
+  } catch {
+    return [
+      makeInvalid(
+        pluginName,
+        `.cursor-plugin/plugin.json is not valid JSON`,
+        'Ensure the file is well-formed JSON.',
+      ),
+    ];
+  }
+
+  const parsed = cursorPluginManifestSchema.safeParse(raw);
+  if (!parsed.success) {
+    const issues = parsed.error.issues.map((i) => i.message).join('; ');
+    return [
+      makeInvalid(
+        pluginName,
+        `.cursor-plugin/plugin.json failed schema validation: ${issues}`,
+        'Verify the manifest fields match the cursor plugin manifest schema.',
+      ),
+    ];
+  }
+
+  const manifest = parsed.data;
+  const findings: Finding[] = [];
+
+  // Ref groups: skills → directory, agents → .md file, commands → either.
+  // hooks is intentionally excluded — hooks/claude.json is a Claude-generated
+  // artifact and is not guaranteed present in a Cursor-only build context.
+  const refGroups: { field: string; paths: string[]; mustBeDir?: boolean }[] = [
+    { field: 'skills', paths: normalisePathField(manifest.skills), mustBeDir: true },
+    { field: 'agents', paths: normalisePathField(manifest.agents), mustBeDir: false },
+    { field: 'commands', paths: normalisePathField(manifest.commands) },
+  ];
+
+  for (const { field, paths: refPaths, mustBeDir } of refGroups) {
+    for (const refPath of refPaths) {
+      // All manifest paths must start with "./"
+      if (!refPath.startsWith('./')) {
+        findings.push(
+          makeInvalid(
+            pluginName,
+            `.cursor-plugin/plugin.json: ${field} path must start with "./": ${refPath}`,
+            `Change the path to start with "./" (e.g. "./${refPath.replace(/^\/+/, '')}").`,
+          ),
+        );
+        continue;
+      }
+
+      // Paths must not contain ".." segments (path traversal guard)
+      if (refPath.includes('..')) {
+        findings.push(
+          makeInvalid(
+            pluginName,
+            `.cursor-plugin/plugin.json: ${field} path must not contain "..": ${refPath}`,
+            'Use a path relative to the plugin root without ".." traversal.',
+          ),
+        );
+        continue;
+      }
+
+      const resolved = path.join(pluginDir, refPath.slice(2));
+
+      if (!fs.existsSync(resolved)) {
+        findings.push(
+          makeInvalid(
+            pluginName,
+            `.cursor-plugin/plugin.json: ${field} references non-existent path: ${refPath}`,
+            `Create the missing ${field === 'skills' ? 'directory' : 'file'} at ${resolved}.`,
+          ),
+        );
+        continue;
+      }
+
+      const stat = fs.statSync(resolved);
+
+      if (mustBeDir === true && !stat.isDirectory()) {
+        findings.push(
+          makeInvalid(
+            pluginName,
+            `.cursor-plugin/plugin.json: ${field} path must be a directory, but a file was found: ${refPath}`,
+            `The ${field} field expects a directory path, not a file path.`,
+          ),
+        );
+      } else if (mustBeDir === false && !stat.isFile()) {
+        findings.push(
+          makeInvalid(
+            pluginName,
+            `.cursor-plugin/plugin.json: ${field} path must be a file, but a directory was found: ${refPath}`,
+            `The ${field} field expects a file path, not a directory path.`,
+          ),
+        );
+      }
+    }
+  }
+
+  return findings;
+}
+
+// ---------------------------------------------------------------------------
+// Cursor rule frontmatter validation
+// ---------------------------------------------------------------------------
+
+/**
+ * Parse the YAML frontmatter block from a .mdc file.
+ *
+ * Returns `null` when no frontmatter block is present (plain content is valid).
+ * Returns the parsed object when a frontmatter block is found.
+ * Throws if the YAML inside the block is malformed.
+ */
+function parseMdcFrontmatter(content: string): Record<string, unknown> | null {
+  // Frontmatter is strictly between a leading `---\n` and the next `---`
+  if (!content.startsWith('---\n') && !content.startsWith('---\r\n')) return null;
+
+  const end = content.indexOf('\n---', 4);
+  if (end === -1) return null;
+
+  const yamlText = content.slice(4, end);
+  // yaml.parse returns `unknown`; we cast to a loose record type so Zod can
+  // validate the actual field types downstream.
+  const parsed = parseYaml(yamlText) as unknown;
+  // An empty frontmatter block parses to null/undefined — treat as no frontmatter.
+  if (parsed === null || parsed === undefined) return null;
+  return parsed as Record<string, unknown>;
+}
+
+function validateCursorRules(pluginDir: string, pluginName: string): Finding[] {
+  const rulesDir = path.join(pluginDir, 'rules');
+  if (!fs.existsSync(rulesDir)) return [];
+
+  const findings: Finding[] = [];
+
+  const entries = fs.readdirSync(rulesDir, { withFileTypes: true });
+  for (const entry of entries) {
+    if (!entry.isFile() || !entry.name.endsWith('.mdc')) continue;
+
+    const filePath = path.join(rulesDir, entry.name);
+    const content = fs.readFileSync(filePath, 'utf-8');
+
+    let frontmatter: Record<string, unknown> | null;
+    try {
+      frontmatter = parseMdcFrontmatter(content);
+    } catch {
+      findings.push(
+        makeInvalid(
+          pluginName,
+          `rules/${entry.name}: frontmatter YAML is malformed`,
+          'Ensure the YAML between the --- delimiters is valid.',
+        ),
+      );
+      continue;
+    }
+
+    // No frontmatter block → skip (plain .mdc content is valid)
+    if (frontmatter === null) continue;
+
+    const result = cursorRuleFrontmatterSchema.safeParse(frontmatter);
+    if (!result.success) {
+      const issues = result.error.issues.map((i) => `${i.path.join('.')}: ${i.message}`).join('; ');
+      findings.push(
+        makeInvalid(
+          pluginName,
+          `rules/${entry.name}: frontmatter failed schema validation: ${issues}`,
+          'Check the alwaysApply (boolean), globs (string[]), and description (string) fields.',
+        ),
+      );
+    }
+  }
+
+  return findings;
+}
+
+// ---------------------------------------------------------------------------
+// Public API
+// ---------------------------------------------------------------------------
+
+/**
+ * Run all Cursor-specific validators against a plugin directory.
+ *
+ * `pluginDir` is the absolute path to a `plugins/<name>/` directory.
+ * All findings use `plugin: path.basename(pluginDir)`.
+ */
+export function validateCursorPlugin(pluginDir: string): Finding[] {
+  const pluginName = path.basename(pluginDir);
+  return [
+    ...validateManifestFileRefs(pluginDir, pluginName),
+    ...validateCursorRules(pluginDir, pluginName),
+  ];
+}

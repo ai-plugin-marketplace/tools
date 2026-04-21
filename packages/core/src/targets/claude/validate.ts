@@ -1,0 +1,361 @@
+/**
+ * Per-target validators for the Claude Code target.
+ *
+ * These checks go beyond schema shape validation — they verify filesystem facts and
+ * cross-file consistency within the Claude target. Schema shape errors are caught by
+ * `claudePluginManifestSchema` (Stage 2); the checks here require reading the filesystem.
+ *
+ * Cross-target concerns (envelope-adherence, name-consistency, mcp-key-sync,
+ * marketplace-registration, freshness) are out of scope for this module.
+ *
+ * @see docs/specs/architecture.md §10 (validation contract), §8.1 (Finding types)
+ * @see docs/specs/architecture.md §12.5 (internal module shape)
+ */
+
+import * as fs from 'node:fs';
+import * as path from 'node:path';
+
+import { parse as parseYaml } from 'yaml';
+
+import type { Finding } from '../../pipeline/types.js';
+import {
+  claudeAgentFrontmatterSchema,
+  claudeHooksFileSchema,
+  claudePluginManifestSchema,
+} from './schemas.js';
+
+// ---------------------------------------------------------------------------
+// Internal helpers
+// ---------------------------------------------------------------------------
+
+/**
+ * Build a hard `schema-invalid` Finding scoped to the given plugin.
+ */
+function hardFinding(pluginName: string, message: string, hint?: string): Finding {
+  const finding: Finding = {
+    severity: 'hard',
+    code: 'schema-invalid',
+    plugin: pluginName,
+    message,
+  };
+  if (hint !== undefined) {
+    finding.hint = hint;
+  }
+  return finding;
+}
+
+/**
+ * Normalize a manifest field that can be a string path, an array of string paths,
+ * or a non-path value (object/undefined). Returns only the string path entries.
+ */
+function normalizePathField(
+  value: string | string[] | Record<string, unknown> | undefined,
+): string[] {
+  if (value === undefined) return [];
+  if (typeof value === 'string') return [value];
+  if (Array.isArray(value)) return value.filter((v): v is string => typeof v === 'string');
+  // Object value (inline hooks object, record of commands) — no paths to check
+  return [];
+}
+
+// ---------------------------------------------------------------------------
+// Manifest file-ref validation
+// ---------------------------------------------------------------------------
+
+/**
+ * Validate that all file/directory references in `.claude-plugin/plugin.json`
+ * resolve to real filesystem entries.
+ *
+ * Per §10.1: path refs must not contain `..` and must exist on disk.
+ * Field-level invariants:
+ *   - `skills`: the ref must point to a directory
+ *   - `agents`: the ref must point to a `.md` file
+ *   - `hooks`: the ref (if a string) must point to a `.json` file
+ *   - `commands`: the ref can be a file or directory; existence is sufficient
+ */
+function validateManifestFileRefs(pluginDir: string, pluginName: string): Finding[] {
+  const manifestPath = path.join(pluginDir, '.claude-plugin', 'plugin.json');
+  if (!fs.existsSync(manifestPath)) return [];
+
+  let raw: unknown;
+  try {
+    raw = JSON.parse(fs.readFileSync(manifestPath, 'utf-8')) as unknown;
+  } catch {
+    return [
+      hardFinding(
+        pluginName,
+        `.claude-plugin/plugin.json is not valid JSON`,
+        `fix the JSON syntax in ${manifestPath}`,
+      ),
+    ];
+  }
+
+  const parseResult = claudePluginManifestSchema.safeParse(raw);
+  if (!parseResult.success) {
+    // Shape errors are reported by the schema validator — skip ref checking
+    return [];
+  }
+
+  const manifest = parseResult.data;
+  const findings: Finding[] = [];
+
+  // skills: directory path(s)
+  for (const ref of normalizePathField(manifest.skills)) {
+    const finding = checkRef(pluginDir, pluginName, 'skills', ref, 'directory');
+    if (finding !== null) findings.push(finding);
+  }
+
+  // agents: .md file path(s)
+  for (const ref of normalizePathField(manifest.agents)) {
+    const finding = checkRef(pluginDir, pluginName, 'agents', ref, 'md-file');
+    if (finding !== null) findings.push(finding);
+  }
+
+  // commands: path string(s) — file or directory, just check existence
+  for (const ref of normalizePathField(manifest.commands)) {
+    const finding = checkRef(pluginDir, pluginName, 'commands', ref, 'any');
+    if (finding !== null) findings.push(finding);
+  }
+
+  // hooks: path string → .json file (inline objects have no path to check)
+  if (typeof manifest.hooks === 'string') {
+    const finding = checkRef(pluginDir, pluginName, 'hooks', manifest.hooks, 'json-file');
+    if (finding !== null) findings.push(finding);
+  }
+
+  return findings;
+}
+
+type RefKind = 'directory' | 'md-file' | 'json-file' | 'any';
+
+function checkRef(
+  pluginDir: string,
+  pluginName: string,
+  field: string,
+  ref: string,
+  kind: RefKind,
+): Finding | null {
+  // Schema already enforces `./` prefix and `.md`/`.json` suffixes, but we
+  // re-check gracefully so the validator is robust against schema bypass.
+  if (!ref.startsWith('./')) {
+    return hardFinding(
+      pluginName,
+      `.claude-plugin/plugin.json ${field} path must start with "./": ${ref}`,
+      `change the path to start with "./"`,
+    );
+  }
+
+  if (ref.includes('..')) {
+    return hardFinding(
+      pluginName,
+      `.claude-plugin/plugin.json ${field} path must not contain "..": ${ref}`,
+      `remove parent-directory traversal segments from the path`,
+    );
+  }
+
+  const normalized = ref.slice(2); // strip leading "./"
+  const resolved = path.join(pluginDir, normalized);
+
+  if (!fs.existsSync(resolved)) {
+    const hint = buildMissingHint(pluginName, field, ref);
+    return hardFinding(
+      pluginName,
+      `.claude-plugin/plugin.json ${field} references non-existent path: ${ref}`,
+      hint,
+    );
+  }
+
+  const stat = fs.statSync(resolved);
+
+  if (kind === 'directory' && !stat.isDirectory()) {
+    return hardFinding(
+      pluginName,
+      `.claude-plugin/plugin.json ${field} path must be a directory, but is a file: ${ref}`,
+      `create a directory at ${ref} or remove the reference from plugin.json`,
+    );
+  }
+
+  if (kind === 'md-file') {
+    if (!stat.isFile()) {
+      return hardFinding(
+        pluginName,
+        `.claude-plugin/plugin.json ${field} path must be a .md file: ${ref}`,
+        `create an agent .md file at ${ref}`,
+      );
+    }
+    if (!ref.endsWith('.md')) {
+      return hardFinding(
+        pluginName,
+        `.claude-plugin/plugin.json ${field} path must end with ".md": ${ref}`,
+        `rename the file to end with ".md"`,
+      );
+    }
+  }
+
+  if (kind === 'json-file') {
+    if (!stat.isFile()) {
+      return hardFinding(
+        pluginName,
+        `.claude-plugin/plugin.json ${field} path must be a .json file: ${ref}`,
+        `create the hooks JSON file at ${ref}`,
+      );
+    }
+    if (!ref.endsWith('.json')) {
+      return hardFinding(
+        pluginName,
+        `.claude-plugin/plugin.json ${field} path must end with ".json": ${ref}`,
+        `rename the file to end with ".json"`,
+      );
+    }
+  }
+
+  return null;
+}
+
+function buildMissingHint(pluginName: string, field: string, ref: string): string {
+  const relPath = ref.slice(2); // strip "./"
+  if (field === 'agents') {
+    return `create plugins/${pluginName}/${relPath} or remove the reference from plugin.json`;
+  }
+  if (field === 'skills') {
+    return `create a directory at plugins/${pluginName}/${relPath} or remove the reference from plugin.json`;
+  }
+  if (field === 'hooks') {
+    return `run \`aipm build\` to generate the hooks JSON, or remove the reference from plugin.json`;
+  }
+  return `create plugins/${pluginName}/${relPath} or remove the reference from plugin.json`;
+}
+
+// ---------------------------------------------------------------------------
+// Agent frontmatter validation
+// ---------------------------------------------------------------------------
+
+/**
+ * Validate YAML frontmatter of all `.md` files directly under `agents/` (one level deep).
+ * Each file must have a frontmatter block and it must satisfy `claudeAgentFrontmatterSchema`.
+ */
+function validateAgentFrontmatter(pluginDir: string, pluginName: string): Finding[] {
+  const agentsDir = path.join(pluginDir, 'agents');
+  if (!fs.existsSync(agentsDir)) return [];
+
+  const entries = fs.readdirSync(agentsDir, { withFileTypes: true });
+  const findings: Finding[] = [];
+
+  for (const entry of entries) {
+    if (!entry.isFile() || !entry.name.endsWith('.md')) continue;
+
+    const agentPath = path.join(agentsDir, entry.name);
+    const relPath = `agents/${entry.name}`;
+    const content = fs.readFileSync(agentPath, 'utf-8');
+
+    // Require a frontmatter block: must start with "---\n" and have a closing "---"
+    const fmMatch = /^---\r?\n([\s\S]*?)\r?\n---/m.exec(content);
+    if (fmMatch === null) {
+      findings.push(
+        hardFinding(
+          pluginName,
+          `${relPath}: agent .md has no frontmatter block`,
+          `add a YAML frontmatter block between --- markers at the top of ${relPath}`,
+        ),
+      );
+      continue;
+    }
+
+    const frontmatterYaml = fmMatch[1] ?? '';
+    let parsed: unknown;
+    try {
+      parsed = parseYaml(frontmatterYaml);
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      findings.push(
+        hardFinding(
+          pluginName,
+          `${relPath}: frontmatter YAML parse error: ${msg}`,
+          `fix the YAML syntax in the frontmatter of ${relPath}`,
+        ),
+      );
+      continue;
+    }
+
+    const result = claudeAgentFrontmatterSchema.safeParse(parsed);
+    if (!result.success) {
+      const issues = result.error.issues
+        .map((i) => `${i.path.join('.') || '(root)'}: ${i.message}`)
+        .join('; ');
+      findings.push(
+        hardFinding(
+          pluginName,
+          `${relPath}: frontmatter does not match schema — ${issues}`,
+          `ensure ${relPath} frontmatter includes required fields: name, description`,
+        ),
+      );
+    }
+  }
+
+  return findings;
+}
+
+// ---------------------------------------------------------------------------
+// Hooks file validation
+// ---------------------------------------------------------------------------
+
+/**
+ * If `hooks/claude.json` exists, validate it parses as JSON and matches
+ * `claudeHooksFileSchema`. Missing file → no finding (the file is optional).
+ */
+function validateHooksFile(pluginDir: string, pluginName: string): Finding[] {
+  const hooksPath = path.join(pluginDir, 'hooks', 'claude.json');
+  if (!fs.existsSync(hooksPath)) return [];
+
+  let raw: unknown;
+  try {
+    raw = JSON.parse(fs.readFileSync(hooksPath, 'utf-8')) as unknown;
+  } catch {
+    return [
+      hardFinding(
+        pluginName,
+        `hooks/claude.json is not valid JSON`,
+        `fix the JSON syntax in hooks/claude.json or regenerate it with \`aipm build\``,
+      ),
+    ];
+  }
+
+  const result = claudeHooksFileSchema.safeParse(raw);
+  if (!result.success) {
+    const issues = result.error.issues
+      .map((i) => `${i.path.join('.') || '(root)'}: ${i.message}`)
+      .join('; ');
+    return [
+      hardFinding(
+        pluginName,
+        `hooks/claude.json does not match the hooks schema — ${issues}`,
+        `check that hooks use only known event names (PreToolUse, PostToolUse, Stop, UserPromptSubmit) and regenerate with \`aipm build\``,
+      ),
+    ];
+  }
+
+  return [];
+}
+
+// ---------------------------------------------------------------------------
+// Public entry point
+// ---------------------------------------------------------------------------
+
+/**
+ * Run all Claude-specific validators against a plugin directory.
+ *
+ * `pluginDir` is the absolute path to a `plugins/<name>/` directory.
+ * Returns zero or more Findings. Callers combine these with other targets'
+ * findings and the cross-target findings in the pipeline validator.
+ *
+ * All findings emitted here use `plugin: path.basename(pluginDir)`.
+ */
+export function validateClaudePlugin(pluginDir: string): Finding[] {
+  const pluginName = path.basename(pluginDir);
+
+  return [
+    ...validateManifestFileRefs(pluginDir, pluginName),
+    ...validateAgentFrontmatter(pluginDir, pluginName),
+    ...validateHooksFile(pluginDir, pluginName),
+  ];
+}

@@ -25,11 +25,17 @@
     "clean": "rimraf dist *.tsbuildinfo"
   },
   "dependencies": {
-    "@ai-plugin-marketplace/core": "workspace:*"
+    "@ai-plugin-marketplace/core": "workspace:^"
   },
   "publishConfig": {
     "access": "public"
   },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/ai-plugin-marketplace/tools.git",
+    "directory": "packages/cli"
+  },
+  "license": "MIT",
   "engines": {
     "node": ">=20.0.0"
   }

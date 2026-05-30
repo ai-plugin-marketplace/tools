@@ -28,6 +28,12 @@
   "publishConfig": {
     "access": "public"
   },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/ai-plugin-marketplace/tools.git",
+    "directory": "packages/core"
+  },
+  "license": "MIT",
   "engines": {
     "node": ">=20.0.0"
   }

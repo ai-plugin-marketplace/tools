@@ -10,3 +10,6 @@ coverage/
 !.env.example
 .turbo/
 scratch/
+
+# Claude Code local configuration (auto-added)
+.claude/*.local.*

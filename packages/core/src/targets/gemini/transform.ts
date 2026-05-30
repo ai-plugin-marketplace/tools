@@ -9,6 +9,8 @@
  * @see docs/specs/architecture.md §12.5 (internal module shape)
  */
 
+import { parse as parseYaml } from 'yaml';
+
 import type { GeminiToolName } from './schemas.js';
 
 // ---------------------------------------------------------------------------
@@ -92,4 +94,103 @@ export function rewriteAgentFrontmatterTools(mdContent: string): {
   );
 
   return { content: rewritten, droppedTools };
+}
+
+// ---------------------------------------------------------------------------
+// Hooks translation (Claude YAML → Gemini JSON)
+// ---------------------------------------------------------------------------
+
+/**
+ * Minimal local type for a single hook entry (command runner).
+ * Defined here rather than imported from claude/ to honour the cross-target-import
+ * prohibition enforced by ESLint (§3.4).
+ */
+interface GeminiHookEntry {
+  type?: string;
+  command?: string;
+  [key: string]: unknown;
+}
+
+/**
+ * Minimal local type for a single hook matcher block.
+ */
+interface GeminiHookMatcher {
+  matcher?: string;
+  description?: string;
+  hooks?: GeminiHookEntry[];
+  [key: string]: unknown;
+}
+
+/**
+ * Minimal local type for the top-level hooks file object.
+ * Mirrors the shape used by `build-hooks.ts` in the template repo — a plain
+ * object whose optional `hooks` key maps event names to arrays of matchers.
+ *
+ * @see /Users/mnorth/Development/ai-plugin-marketplace-template/src/build-hooks.ts
+ *      `HooksFile` interface (reference)
+ */
+interface GeminiHooksFile {
+  hooks?: Record<string, GeminiHookMatcher[]>;
+  [key: string]: unknown;
+}
+
+/**
+ * Deep-clone a parsed hooks object and translate `matcher` tool-name strings from
+ * Claude Code PascalCase names to Gemini CLI snake_case equivalents via
+ * {@link CLAUDE_TO_GEMINI_TOOLS}.
+ *
+ * Matchers that have no entry in the table (e.g. glob patterns, non-tool identifiers)
+ * are preserved unchanged — exact port of `translateHooksForGemini` in `build-hooks.ts`.
+ *
+ * Pure: no I/O, no side-effects. The input object is never mutated.
+ *
+ * @param source - Parsed hooks object (as returned by the `yaml` package's `parse`).
+ * @returns A new hooks object with matcher strings translated for Gemini CLI.
+ *
+ * @see https://geminicli.com/docs/extensions/reference/ — Gemini CLI hooks format
+ * @see /Users/mnorth/Development/ai-plugin-marketplace-template/src/build-hooks.ts
+ *      `translateHooksForGemini` (reference implementation)
+ */
+export function translateHooksForGemini(source: GeminiHooksFile): GeminiHooksFile {
+  const cloned = JSON.parse(JSON.stringify(source)) as GeminiHooksFile;
+  const { hooks } = cloned;
+  if (!hooks) return cloned;
+
+  for (const event of Object.keys(hooks)) {
+    const matchers = hooks[event];
+    if (!Array.isArray(matchers)) continue;
+    for (const m of matchers) {
+      if (typeof m.matcher === 'string') {
+        const translated = CLAUDE_TO_GEMINI_TOOLS[m.matcher];
+        if (translated !== undefined) {
+          m.matcher = translated;
+        }
+      }
+    }
+  }
+
+  return cloned;
+}
+
+/**
+ * One-shot conversion: parse a `hooks/claude.yaml` string, translate all tool-name
+ * matchers for Gemini CLI, and serialize as pretty-printed JSON.
+ *
+ * Output format: 2-space indent, trailing newline — byte-identical to the output of
+ * `convertHookFile(hooksDir, yamlFile, "gemini")` in the template's `build-hooks.ts`.
+ *
+ * Pure: no I/O. Throws if the YAML is malformed.
+ *
+ * @param yamlContent - Raw YAML string (contents of `hooks/claude.yaml` or `.yml`).
+ * @returns Pretty-printed JSON string with trailing newline.
+ * @throws {Error} If the YAML is malformed.
+ *
+ * @see https://geminicli.com/docs/extensions/reference/ — Gemini CLI hooks format
+ * @see /Users/mnorth/Development/ai-plugin-marketplace-template/src/build-hooks.ts
+ *      `convertHookFile` (reference implementation, gemini branch)
+ */
+export function convertClaudeHooksYamlToGeminiJson(yamlContent: string): string {
+  const parsed = parseYaml(yamlContent) as GeminiHooksFile;
+  const translated = translateHooksForGemini(parsed);
+  return JSON.stringify(translated, null, 2) + '\n';
 }

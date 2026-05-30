@@ -9,7 +9,7 @@
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 
-import { rewriteAgentFrontmatterTools } from './transform.js';
+import { convertClaudeHooksYamlToGeminiJson, rewriteAgentFrontmatterTools } from './transform.js';
 
 // ---------------------------------------------------------------------------
 // Internal file-system helpers (mirrors build-standalone.ts utilities)
@@ -143,6 +143,23 @@ export function bundleGeminiPlugin(
       for (const file of tomlFiles) {
         copyFile(path.join(commandsSrc, file), path.join(commandsDest, file));
       }
+    }
+  }
+
+  // ── hooks/hooks.json: translate Claude YAML → Gemini JSON ────────────────
+  // Gemini CLI looks for `hooks/hooks.json` regardless of the YAML source filename.
+  // Try claude.yaml first, then claude.yml, matching build-hooks.ts behaviour.
+  const hooksSrc = path.join(pluginDir, 'hooks');
+  const yamlCandidates = ['claude.yaml', 'claude.yml'];
+  for (const candidate of yamlCandidates) {
+    const yamlPath = path.join(hooksSrc, candidate);
+    if (fs.existsSync(yamlPath)) {
+      const yamlContent = fs.readFileSync(yamlPath, 'utf-8');
+      const jsonContent = convertClaudeHooksYamlToGeminiJson(yamlContent);
+      const hooksDestDir = path.join(destDir, 'hooks');
+      fs.mkdirSync(hooksDestDir, { recursive: true });
+      fs.writeFileSync(path.join(hooksDestDir, 'hooks.json'), jsonContent, 'utf-8');
+      break;
     }
   }
 

@@ -13,7 +13,9 @@ import { describe, expect, it } from 'vitest';
 
 import {
   CLAUDE_TO_GEMINI_TOOLS,
+  convertClaudeHooksYamlToGeminiJson,
   rewriteAgentFrontmatterTools,
+  translateHooksForGemini,
   translateToolName,
 } from './transform.js';
 
@@ -249,5 +251,161 @@ Body.
 `;
     const { droppedTools } = rewriteAgentFrontmatterTools(allMapped);
     expect(droppedTools).toStrictEqual([]);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// translateHooksForGemini — pure translation of matcher tool names
+// ---------------------------------------------------------------------------
+
+describe('translateHooksForGemini', () => {
+  it('translates a known Claude tool matcher (Write → write_file)', () => {
+    const source = {
+      hooks: {
+        PostToolUse: [{ matcher: 'Write', description: 'log writes', hooks: [] }],
+      },
+    };
+    const result = translateHooksForGemini(source);
+    expect(result.hooks?.PostToolUse?.[0]?.matcher).toBe('write_file');
+  });
+
+  it('preserves an unmapped matcher string unchanged', () => {
+    const source = {
+      hooks: {
+        PostToolUse: [{ matcher: '*.ts', description: 'glob pattern', hooks: [] }],
+      },
+    };
+    const result = translateHooksForGemini(source);
+    expect(result.hooks?.PostToolUse?.[0]?.matcher).toBe('*.ts');
+  });
+
+  it('translates all seven known Claude tool matchers', () => {
+    const input: Record<string, string> = {
+      Read: 'read_file',
+      Write: 'write_file',
+      Edit: 'replace',
+      Glob: 'glob',
+      Grep: 'search_file_content',
+      Bash: 'run_shell_command',
+      Agent: 'activate_skill',
+    };
+    const matchers = Object.keys(input).map((m) => ({ matcher: m, hooks: [] }));
+    const source = { hooks: { PostToolUse: matchers } };
+    const result = translateHooksForGemini(source);
+
+    for (const [claude, gemini] of Object.entries(input)) {
+      const translated = result.hooks?.PostToolUse?.find((m) => m.matcher === gemini);
+      expect(translated?.matcher, `${claude} → ${gemini}`).toBe(gemini);
+    }
+  });
+
+  it('passes through an object with no hooks key unchanged', () => {
+    const source = { schemaVersion: '1', other: 'value' };
+    const result = translateHooksForGemini(source);
+    expect(result).toStrictEqual(source);
+  });
+
+  it('does not mutate the input object', () => {
+    const source = {
+      hooks: { PostToolUse: [{ matcher: 'Write', hooks: [] }] },
+    };
+    const originalMatcher = source.hooks.PostToolUse[0].matcher;
+    translateHooksForGemini(source);
+    expect(source.hooks.PostToolUse[0].matcher).toBe(originalMatcher);
+  });
+
+  it('preserves non-matcher fields on each matcher block', () => {
+    const source = {
+      hooks: {
+        PostToolUse: [
+          {
+            matcher: 'Write',
+            description: 'log writes',
+            hooks: [{ type: 'command', command: 'echo hi' }],
+          },
+        ],
+      },
+    };
+    const result = translateHooksForGemini(source);
+    const block = result.hooks?.PostToolUse?.[0];
+    expect(block?.description).toBe('log writes');
+    expect(block?.hooks?.[0]?.command).toBe('echo hi');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// convertClaudeHooksYamlToGeminiJson — YAML string → Gemini JSON string
+// ---------------------------------------------------------------------------
+
+/** Exact oracle YAML from plugins/skill-evaluator/hooks/claude.yaml */
+const SKILL_EVALUATOR_HOOKS_YAML = `hooks:
+  PostToolUse:
+    - matcher: Write
+      description: Log evaluation report writes to a structured log file
+      hooks:
+        - type: command
+          command: >-
+            if echo "$TOOL_INPUT" | grep -q 'evaluation-report';
+            then echo "[$(date -u +%Y-%m-%dT%H:%M:%SZ)] Evaluation report written"
+            >> .evaluation-log.jsonl; fi
+`;
+
+/** Exact oracle JSON from dist/gemini/skill-evaluator/hooks/hooks.json */
+const SKILL_EVALUATOR_HOOKS_JSON = `{
+  "hooks": {
+    "PostToolUse": [
+      {
+        "matcher": "write_file",
+        "description": "Log evaluation report writes to a structured log file",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "if echo \\"$TOOL_INPUT\\" | grep -q 'evaluation-report'; then echo \\"[$(date -u +%Y-%m-%dT%H:%M:%SZ)] Evaluation report written\\" >> .evaluation-log.jsonl; fi"
+          }
+        ]
+      }
+    ]
+  }
+}
+`;
+
+describe('convertClaudeHooksYamlToGeminiJson', () => {
+  it('produces byte-identical output to the oracle for skill-evaluator hooks', () => {
+    const result = convertClaudeHooksYamlToGeminiJson(SKILL_EVALUATOR_HOOKS_YAML);
+    expect(result).toBe(SKILL_EVALUATOR_HOOKS_JSON);
+  });
+
+  it('translates Write matcher → write_file', () => {
+    const yaml = `hooks:\n  PostToolUse:\n    - matcher: Write\n      hooks: []\n`;
+    const json: unknown = JSON.parse(convertClaudeHooksYamlToGeminiJson(yaml));
+    expect(
+      (json as { hooks: { PostToolUse: { matcher: string }[] } }).hooks.PostToolUse[0].matcher,
+    ).toBe('write_file');
+  });
+
+  it('preserves an unmapped matcher string in the output', () => {
+    const yaml = `hooks:\n  PostToolUse:\n    - matcher: "*.ts"\n      hooks: []\n`;
+    const json: unknown = JSON.parse(convertClaudeHooksYamlToGeminiJson(yaml));
+    expect(
+      (json as { hooks: { PostToolUse: { matcher: string }[] } }).hooks.PostToolUse[0].matcher,
+    ).toBe('*.ts');
+  });
+
+  it('outputs 2-space indented JSON with a trailing newline', () => {
+    const yaml = `hooks:\n  PostToolUse:\n    - matcher: Write\n      hooks: []\n`;
+    const result = convertClaudeHooksYamlToGeminiJson(yaml);
+    expect(result).toMatch(/^\{\n {2}/);
+    expect(result.endsWith('\n')).toBe(true);
+  });
+
+  it('throws on malformed YAML', () => {
+    expect(() => convertClaudeHooksYamlToGeminiJson(':\n  invalid: [\n  yaml')).toThrow();
+  });
+
+  it('passes through an object with no hooks key (empty/minimal YAML)', () => {
+    const yaml = `schemaVersion: "1"\n`;
+    const result = convertClaudeHooksYamlToGeminiJson(yaml);
+    const parsed: unknown = JSON.parse(result);
+    expect(parsed).toStrictEqual({ schemaVersion: '1' });
   });
 });

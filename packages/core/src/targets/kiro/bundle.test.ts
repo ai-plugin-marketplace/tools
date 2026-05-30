@@ -13,13 +13,15 @@ import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+
+import { TEMPLATE_REPO } from '../../test-support/template-repo.js';
 import { bundleKiroPlugin } from './bundle.js';
 
 // ---------------------------------------------------------------------------
 // Path constants — absolute to avoid cwd dependency
 // ---------------------------------------------------------------------------
 
-const TEMPLATE_ROOT = '/Users/mnorth/Development/ai-plugin-marketplace-template';
+const TEMPLATE_ROOT = TEMPLATE_REPO;
 const PLUGIN_SRC = path.join(TEMPLATE_ROOT, 'plugins', 'skill-evaluator');
 const ORACLE_DIR = path.join(TEMPLATE_ROOT, 'dist', 'kiro', 'skill-evaluator');
 

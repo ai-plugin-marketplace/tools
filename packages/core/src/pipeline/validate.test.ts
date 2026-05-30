@@ -8,6 +8,8 @@ import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+
+import { TEMPLATE_REPO } from '../test-support/template-repo.js';
 import {
   validateCrossTarget,
   validateEnvelopeAdherence,
@@ -534,10 +536,6 @@ describe('validateCrossTarget()', () => {
 // ---------------------------------------------------------------------------
 
 describe('parity: real skill-evaluator plugin', () => {
-  const TEMPLATE_REPO = path.resolve(
-    path.dirname(new URL(import.meta.url).pathname),
-    '../../../../../ai-plugin-marketplace-template',
-  );
   const SKILL_EVALUATOR_SRC = path.join(TEMPLATE_REPO, 'plugins', 'skill-evaluator');
 
   /**

@@ -17,6 +17,7 @@ import * as path from 'node:path';
 
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
+import { TEMPLATE_REPO } from '../../test-support/template-repo.js';
 import { validateCursorPlugin } from './validate.js';
 
 // ---------------------------------------------------------------------------
@@ -242,13 +243,7 @@ describe('validateCursorPlugin — .mdc frontmatter failures', () => {
 
 describe('validateCursorPlugin — skill-evaluator parity', () => {
   it('produces zero findings for the real skill-evaluator plugin', () => {
-    // Resolve relative to this source file's directory so the test is
-    // location-independent.
-    const templateRoot = path.resolve(
-      import.meta.dirname,
-      '../../../../../../ai-plugin-marketplace-template',
-    );
-    const pluginDir = path.join(templateRoot, 'plugins', 'skill-evaluator');
+    const pluginDir = path.join(TEMPLATE_REPO, 'plugins', 'skill-evaluator');
 
     if (!fs.existsSync(pluginDir)) {
       // The template repo is a sibling repo; skip gracefully if not checked out.

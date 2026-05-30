@@ -17,16 +17,13 @@ import * as path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
 import type { Finding } from '../../pipeline/types.js';
+import { TEMPLATE_REPO } from '../../test-support/template-repo.js';
 import { validateClaudePlugin } from './validate.js';
 
 // ---------------------------------------------------------------------------
 // Template repo path (for the parity test)
 // ---------------------------------------------------------------------------
 
-const TEMPLATE_REPO = path.resolve(
-  import.meta.dirname,
-  '../../../../../../ai-plugin-marketplace-template',
-);
 const SKILL_EVALUATOR_DIR = path.join(TEMPLATE_REPO, 'plugins', 'skill-evaluator');
 
 // ---------------------------------------------------------------------------

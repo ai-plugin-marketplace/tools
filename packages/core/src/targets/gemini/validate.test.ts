@@ -11,13 +11,13 @@ import * as path from 'node:path';
 
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
+import { TEMPLATE_REPO } from '../../test-support/template-repo.js';
 import { validateGeminiPlugin } from './validate.js';
 
 // ---------------------------------------------------------------------------
 // Paths to template repo (test-only references; never imported as code)
 // ---------------------------------------------------------------------------
 
-const TEMPLATE_REPO = '/Users/mnorth/Development/ai-plugin-marketplace-template';
 const SKILL_EVALUATOR_DIR = path.join(TEMPLATE_REPO, 'plugins', 'skill-evaluator');
 
 // ---------------------------------------------------------------------------

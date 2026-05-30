@@ -25,7 +25,7 @@ import type { Finding, TargetId } from './types.js';
  * exist on disk for a target NOT in the envelope, that is an adherence violation.
  * Directories are listed without trailing slash; `existsSync` works for either.
  */
-const TARGET_OWNED_ARTIFACTS: Record<TargetId, string[]> = {
+export const TARGET_OWNED_ARTIFACTS: Record<TargetId, string[]> = {
   claude: [
     '.claude-plugin/plugin.json',
     '.claude-plugin',
@@ -42,7 +42,7 @@ const TARGET_OWNED_ARTIFACTS: Record<TargetId, string[]> = {
  * Shared artifacts that require at least one of the listed targets in the envelope.
  * `.mcp.json` is the Claude/Cursor MCP config format, shared between those two targets.
  */
-const SHARED_ARTIFACTS: { file: string; anyOf: TargetId[] }[] = [
+export const SHARED_ARTIFACTS: { file: string; anyOf: TargetId[] }[] = [
   { file: '.mcp.json', anyOf: ['claude', 'cursor'] },
 ];
 
@@ -51,7 +51,7 @@ const SHARED_ARTIFACTS: { file: string; anyOf: TargetId[] }[] = [
  * in the envelope is an adherence violation.
  * Vercel requires at least one skills/<name>/SKILL.md — handled specially below.
  */
-const TARGET_MIN_REQUIRED: Record<TargetId, string[]> = {
+export const TARGET_MIN_REQUIRED: Record<TargetId, string[]> = {
   claude: ['.claude-plugin/plugin.json'],
   cursor: ['.cursor-plugin/plugin.json'],
   gemini: ['gemini-extension.json'],

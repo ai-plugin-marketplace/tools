@@ -49,7 +49,11 @@ function renderPackageJson(name: string, toolkitVersion: string): string {
       scaffold: 'aipm scaffold',
     },
     devDependencies: {
+      // cli provides the `aipm` binary; core provides `defineConfig` for each
+      // plugin's `aipm.config.ts` import (§6.1). Both pinned to the same toolkit
+      // version and upgraded together via `pnpm up`.
       '@ai-plugin-marketplace/cli': `^${toolkitVersion}`,
+      '@ai-plugin-marketplace/core': `^${toolkitVersion}`,
     },
   };
   return `${JSON.stringify(pkg, null, 2)}\n`;

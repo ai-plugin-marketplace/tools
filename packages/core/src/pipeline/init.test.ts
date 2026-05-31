@@ -109,8 +109,10 @@ describe('runInit', () => {
     const repoDir = path.join(tmpDir, 'pinned');
     await runInit(repoDir);
     const pkg = readPackageJson(repoDir);
-    // §11: the template depends on @ai-plugin-marketplace/cli via ^semver.
+    // §11: the template depends on @ai-plugin-marketplace/cli via ^semver;
+    // core rides along (same version) so each plugin's aipm.config.ts can import defineConfig (§6.1).
     expect(pkg.devDependencies?.['@ai-plugin-marketplace/cli']).toBe(`^${CORE_VERSION}`);
+    expect(pkg.devDependencies?.['@ai-plugin-marketplace/core']).toBe(`^${CORE_VERSION}`);
   });
 
   it('emits a private, ESM package.json with the aipm scripts (§3.2)', async () => {

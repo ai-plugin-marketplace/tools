@@ -140,6 +140,92 @@ function orderTargets(targets: readonly TargetId[]): TargetId[] {
 }
 
 // ---------------------------------------------------------------------------
+// Marketplace registration (§4.4, §10.1.4)
+// ---------------------------------------------------------------------------
+
+/**
+ * The template-level marketplace registries that a plugin must be registered in, keyed by the
+ * target whose presence in the envelope requires registration (§4.4). Both registries live at the
+ * **repo root**, not inside any plugin: `<repoRoot>/.claude-plugin/marketplace.json` (Claude) and
+ * `<repoRoot>/.cursor-plugin/marketplace.json` (Cursor).
+ *
+ * Mirrors `validateMarketplaceRegistration` in `validate.ts`: those two targets, those two paths.
+ */
+const MARKETPLACE_REGISTRIES: { target: TargetId; dir: string }[] = [
+  { target: 'claude', dir: '.claude-plugin' },
+  { target: 'cursor', dir: '.cursor-plugin' },
+];
+
+/** A single plugin entry in a marketplace registry. */
+interface MarketplaceEntry {
+  name: string;
+  source: string;
+}
+
+/** Minimal shape of a marketplace registry file. Extra keys are preserved on rewrite. */
+interface MarketplaceRegistry {
+  plugins?: MarketplaceEntry[];
+  [key: string]: unknown;
+}
+
+/** The canonical `source` value for a plugin's registry entry (§4.4 — `./plugins/<name>`). */
+function expectedSource(pluginName: string): string {
+  return `./plugins/${pluginName}`;
+}
+
+/**
+ * Register `pluginName` in the registry file at `registryPath`, creating it if absent.
+ *
+ * Idempotent: if an entry whose `name` already matches `pluginName` exists, the file is left
+ * untouched (no duplicate, no source rewrite — repairing a wrong source is the validator's job to
+ * report, not the scaffolder's to silently mutate). Output is 2-space JSON with a trailing newline.
+ *
+ * Existing entries and any extra top-level keys are preserved.
+ */
+function registerInMarketplace(registryPath: string, pluginName: string): void {
+  const entry: MarketplaceEntry = { name: pluginName, source: expectedSource(pluginName) };
+
+  let registry: MarketplaceRegistry;
+  if (fs.existsSync(registryPath)) {
+    const raw: unknown = JSON.parse(fs.readFileSync(registryPath, 'utf-8'));
+    // Tolerate a missing/!object/!plugins file by normalizing to a registry with a plugins array.
+    registry =
+      typeof raw === 'object' && raw !== null ? (raw as MarketplaceRegistry) : { plugins: [] };
+  } else {
+    registry = { plugins: [] };
+  }
+
+  const plugins = Array.isArray(registry.plugins) ? registry.plugins : [];
+  if (plugins.some((p) => p.name === pluginName)) {
+    return; // already registered — idempotent no-op
+  }
+
+  registry.plugins = [...plugins, entry];
+
+  writeFileEnsuringDir(registryPath, `${JSON.stringify(registry, null, 2)}\n`);
+}
+
+/**
+ * Register a plugin in every marketplace registry implied by its envelope (§4.4).
+ *
+ * For each of Claude/Cursor present in `targets`, create-or-append the plugin's entry in the
+ * corresponding `<repoRoot>/<dir>/marketplace.json`. Targets not in the envelope get no entry, so
+ * the scaffold→validate happy path stays clean (the validator forbids registration for
+ * undeclared targets).
+ */
+function registerPluginInMarketplaces(
+  repoRoot: string,
+  pluginName: string,
+  targets: readonly TargetId[],
+): void {
+  const envelope = new Set(targets);
+  for (const { target, dir } of MARKETPLACE_REGISTRIES) {
+    if (!envelope.has(target)) continue;
+    registerInMarketplace(path.join(repoRoot, dir, 'marketplace.json'), pluginName);
+  }
+}
+
+// ---------------------------------------------------------------------------
 // Filesystem helpers
 // ---------------------------------------------------------------------------
 
@@ -199,6 +285,10 @@ OR IN CONNECTION WITH THE USE OR PERFORMANCE OF THIS SOFTWARE.
  * files, and the canonical `README.md` / `LICENSE`. Default targets are all known IDs when
  * `opts.targets` is absent.
  *
+ * Also registers the plugin in the template-level marketplace registries (§4.4) for each of
+ * Claude/Cursor in the envelope (`repoRoot = dirname(pluginsDir)`), so the scaffolded plugin
+ * passes `validate`'s `marketplace-registration` check (§10.1.4) out of the box.
+ *
  * @throws Error when `name` is invalid or the plugin directory already exists.
  */
 export async function runScaffold(
@@ -231,6 +321,9 @@ export async function runScaffold(
     writeFileEnsuringDir(path.join(pluginDir, file.path), file.content);
   }
 
+  // Register in the repo-root marketplace registries (§4.4). repoRoot is the parent of pluginsDir.
+  registerPluginInMarketplaces(path.dirname(pluginsDir), name, targets);
+
   return Promise.resolve();
 }
 
@@ -250,6 +343,10 @@ export async function runScaffold(
  * (dynamic/computed targets), the config is left untouched and the error message instructs the
  * author to add the target manually — the function never leaves the envelope silently
  * inconsistent.
+ *
+ * When `target` is Claude or Cursor, the plugin is also registered in the corresponding
+ * repo-root marketplace registry (§4.4) so adding the target keeps `validate` green. repoRoot is
+ * the plugin's grandparent (`<repoRoot>/plugins/<name>`), matching `discoverPlugins`.
  *
  * @throws Error when `pluginDir` does not exist, a target file already exists, or the config's
  * targets array cannot be located for the update.
@@ -280,6 +377,10 @@ export async function runAddTarget(pluginDir: string, target: TargetId): Promise
   for (const file of files) {
     writeFileEnsuringDir(path.join(pluginDir, file.path), file.content);
   }
+
+  // Register in the repo-root marketplace registry when adding a registry-backed target (§4.4).
+  // repoRoot = dirname(dirname(pluginDir)) — the `<repoRoot>/plugins/<name>` grandparent.
+  registerPluginInMarketplaces(path.dirname(path.dirname(pluginDir)), pluginName, [target]);
 
   return Promise.resolve();
 }

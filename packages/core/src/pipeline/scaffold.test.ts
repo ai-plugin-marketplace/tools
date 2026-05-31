@@ -24,6 +24,23 @@ import {
   runScaffold,
   validatePluginName,
 } from './scaffold.js';
+import { runValidate } from './validate.js';
+
+interface MarketplaceRegistryShape {
+  plugins?: { name: string; source: string }[];
+  [key: string]: unknown;
+}
+
+/** Parse a marketplace registry file into its typed shape. */
+function readRegistry(repoRoot: string, dir: string): MarketplaceRegistryShape {
+  const full = path.join(repoRoot, dir, 'marketplace.json');
+  return JSON.parse(fs.readFileSync(full, 'utf-8')) as MarketplaceRegistryShape;
+}
+
+/** True iff the registry under `repoRoot/<dir>/marketplace.json` exists. */
+function registryExists(repoRoot: string, dir: string): boolean {
+  return fs.existsSync(path.join(repoRoot, dir, 'marketplace.json'));
+}
 
 // ---------------------------------------------------------------------------
 // Temp directory management
@@ -299,5 +316,133 @@ describe('runCheckSupport', () => {
     const pluginDir = path.join(tmpDir, 'bare');
     fs.mkdirSync(pluginDir, { recursive: true });
     await expect(runCheckSupport(pluginDir)).rejects.toThrow(/No aipm.config.ts/);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Marketplace registration (§4.4, §10.1.4)
+// ---------------------------------------------------------------------------
+
+describe('runScaffold — marketplace registration', () => {
+  // In a real repo, plugins live under <repoRoot>/plugins/<name>. We mirror that here so
+  // repoRoot = dirname(pluginsDir) = tmpDir and the registries land at the repo root.
+  function pluginsRoot(): string {
+    return path.join(tmpDir, 'plugins');
+  }
+
+  it('registers the plugin in both registries when claude+cursor are in the envelope', async () => {
+    await runScaffold('my-plugin', pluginsRoot(), { targets: ['claude', 'cursor'] });
+
+    const claudeReg = readRegistry(tmpDir, '.claude-plugin');
+    const cursorReg = readRegistry(tmpDir, '.cursor-plugin');
+
+    // Source form matches the validator's canonical `./plugins/<name>` (§4.4).
+    expect(claudeReg.plugins).toStrictEqual([{ name: 'my-plugin', source: './plugins/my-plugin' }]);
+    expect(cursorReg.plugins).toStrictEqual([{ name: 'my-plugin', source: './plugins/my-plugin' }]);
+  });
+
+  it('makes the scaffold→validate happy path clean (zero marketplace-registration findings)', async () => {
+    await runScaffold('my-plugin', pluginsRoot(), { targets: ['claude', 'cursor'] });
+
+    // Validate the whole repo root. Freshness (hooks/dist build artifacts) is a separate
+    // build-orchestrator concern not produced by scaffolding, so skip it to isolate the
+    // registration assertion — the gap this work closes.
+    const result = await runValidate(tmpDir, { skipFreshness: true });
+
+    const registrationFindings = result.findings.filter(
+      (f) => f.code === 'marketplace-registration',
+    );
+    expect(registrationFindings).toStrictEqual([]);
+    expect(result.passed).toBe(true);
+  });
+
+  it('creates NO marketplace files when the envelope has neither claude nor cursor', async () => {
+    await runScaffold('my-plugin', pluginsRoot(), { targets: ['gemini'] });
+
+    expect(registryExists(tmpDir, '.claude-plugin')).toBe(false);
+    expect(registryExists(tmpDir, '.cursor-plugin')).toBe(false);
+  });
+
+  it('registers only the registries implied by the envelope (claude only)', async () => {
+    await runScaffold('my-plugin', pluginsRoot(), { targets: ['claude', 'gemini'] });
+
+    expect(registryExists(tmpDir, '.claude-plugin')).toBe(true);
+    // Cursor not in the envelope → no cursor registry (the validator forbids registering it).
+    expect(registryExists(tmpDir, '.cursor-plugin')).toBe(false);
+  });
+
+  it('appends a second plugin to an existing registry without dropping the first', async () => {
+    await runScaffold('plugin-one', pluginsRoot(), { targets: ['claude'] });
+    await runScaffold('plugin-two', pluginsRoot(), { targets: ['claude'] });
+
+    const reg = readRegistry(tmpDir, '.claude-plugin');
+    expect(reg.plugins).toStrictEqual([
+      { name: 'plugin-one', source: './plugins/plugin-one' },
+      { name: 'plugin-two', source: './plugins/plugin-two' },
+    ]);
+  });
+
+  it('does not duplicate an entry when the plugin is already present (negative)', async () => {
+    const repoRoot = tmpDir;
+    // Pre-seed a registry that already lists the plugin.
+    const claudeDir = path.join(repoRoot, '.claude-plugin');
+    fs.mkdirSync(claudeDir, { recursive: true });
+    fs.writeFileSync(
+      path.join(claudeDir, 'marketplace.json'),
+      `${JSON.stringify({ plugins: [{ name: 'my-plugin', source: './plugins/my-plugin' }] }, null, 2)}\n`,
+      'utf-8',
+    );
+
+    await runScaffold('my-plugin', pluginsRoot(), { targets: ['claude'] });
+
+    const reg = readRegistry(repoRoot, '.claude-plugin');
+    expect(reg.plugins).toStrictEqual([{ name: 'my-plugin', source: './plugins/my-plugin' }]);
+  });
+
+  it('writes 2-space JSON with a trailing newline', async () => {
+    await runScaffold('my-plugin', pluginsRoot(), { targets: ['claude'] });
+    const raw = fs.readFileSync(path.join(tmpDir, '.claude-plugin', 'marketplace.json'), 'utf-8');
+    expect(raw.endsWith('\n')).toBe(true);
+    expect(raw).toContain('\n  "plugins"');
+  });
+});
+
+describe('runAddTarget — marketplace registration', () => {
+  function pluginsRoot(): string {
+    return path.join(tmpDir, 'plugins');
+  }
+
+  it('registers cursor when adding it to an existing claude-only plugin; idempotent on re-run', async () => {
+    await runScaffold('my-plugin', pluginsRoot(), { targets: ['claude'] });
+    const pluginDir = path.join(pluginsRoot(), 'my-plugin');
+
+    // Before: no cursor registry, cursor file absent.
+    expect(registryExists(tmpDir, '.cursor-plugin')).toBe(false);
+
+    await runAddTarget(pluginDir, 'cursor');
+
+    expect(fs.existsSync(path.join(pluginDir, '.cursor-plugin/plugin.json'))).toBe(true);
+    expect(readRegistry(tmpDir, '.cursor-plugin').plugins).toStrictEqual([
+      { name: 'my-plugin', source: './plugins/my-plugin' },
+    ]);
+
+    // Re-running add-target for the same registry must not duplicate the entry. The skeleton file
+    // now exists, so the call refuses to overwrite — but registration must remain a single entry.
+    await expect(runAddTarget(pluginDir, 'cursor')).rejects.toThrow(/Refusing to overwrite/);
+    expect(readRegistry(tmpDir, '.cursor-plugin').plugins).toStrictEqual([
+      { name: 'my-plugin', source: './plugins/my-plugin' },
+    ]);
+  });
+
+  it('does not touch any registry when adding a non-registry target (gemini)', async () => {
+    await runScaffold('my-plugin', pluginsRoot(), { targets: ['claude'] });
+    const pluginDir = path.join(pluginsRoot(), 'my-plugin');
+    const claudeBefore = readRegistry(tmpDir, '.claude-plugin');
+
+    await runAddTarget(pluginDir, 'gemini');
+
+    // Gemini is not registry-backed → no new registry, claude registry unchanged.
+    expect(registryExists(tmpDir, '.cursor-plugin')).toBe(false);
+    expect(readRegistry(tmpDir, '.claude-plugin')).toStrictEqual(claudeBefore);
   });
 });

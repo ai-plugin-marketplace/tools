@@ -62,6 +62,14 @@ export interface GeneratedFile {
 }
 
 // @public
+export function init(targetDir: string, opts?: InitOptions): Promise<void>;
+
+// @public
+export interface InitOptions {
+    name?: string;
+}
+
+// @public
 export function listTargets(): readonly TargetId[];
 
 // @public

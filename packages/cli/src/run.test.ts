@@ -9,10 +9,11 @@
  */
 
 import * as fs from 'node:fs';
+import * as os from 'node:os';
 import * as path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-import { describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
 import { run } from './run.js';
 
@@ -73,6 +74,38 @@ describe('aipm list-targets', () => {
     const { code, out } = await invoke(['list-targets']);
     expect(code).toBe(0);
     expect(out.trim().split('\n')).toEqual(['claude', 'cursor', 'gemini', 'kiro', 'vercel']);
+  });
+});
+
+describe('aipm init', () => {
+  let tmpDir: string;
+
+  beforeEach(() => {
+    tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'cli-init-test-'));
+  });
+
+  afterEach(() => {
+    if (tmpDir && fs.existsSync(tmpDir)) {
+      fs.rmSync(tmpDir, { recursive: true });
+    }
+  });
+
+  it('scaffolds a repo into the given dir, prints the path + next steps, and exits 0', async () => {
+    const target = path.join(tmpDir, 'new-repo');
+    const { code, out } = await invoke(['init', target]);
+    expect(code).toBe(0);
+    expect(out).toContain(`Created plugin repo at ${target}`);
+    expect(out).toContain('aipm scaffold');
+    expect(fs.existsSync(path.join(target, 'package.json'))).toBe(true);
+  });
+
+  it('fails (exit 1) when the target directory is non-empty', async () => {
+    const target = path.join(tmpDir, 'occupied');
+    fs.mkdirSync(target);
+    fs.writeFileSync(path.join(target, 'keep.txt'), 'x', 'utf-8');
+    const { code, err } = await invoke(['init', target]);
+    expect(code).toBe(1);
+    expect(err).toContain('init failed');
   });
 });
 

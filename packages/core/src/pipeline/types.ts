@@ -44,9 +44,13 @@ export const TARGET_IDS = [
  * this makes the union and the runtime array provably equivalent. Type-only — erased at compile
  * time, zero runtime cost.
  *
+ * Declared as a `declare const` (rather than a bare `type` alias) so `noUnusedLocals` does not
+ * flag it. The declaration is never emitted; it exists solely to keep the exhaustiveness check
+ * reachable.
+ *
  * @internal
  */
-type _targetIdsAreExhaustive = TargetId extends (typeof TARGET_IDS)[number] ? true : never;
+declare const _targetIdsAreExhaustive: TargetId extends (typeof TARGET_IDS)[number] ? true : never;
 
 // ---------------------------------------------------------------------------
 // Build
@@ -159,6 +163,22 @@ export interface ScaffoldOptions {
   targets?: readonly TargetId[];
   /** Description field for the generated plugin. */
   description?: string;
+}
+
+// ---------------------------------------------------------------------------
+// Init
+
+/**
+ * Options for {@link init}.
+ *
+ * @public
+ */
+export interface InitOptions {
+  /**
+   * Repo name written into the generated `package.json`. Defaults to the basename of the target
+   * directory.
+   */
+  name?: string;
 }
 
 // ---------------------------------------------------------------------------

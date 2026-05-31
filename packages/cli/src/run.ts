@@ -5,6 +5,7 @@
  * a process exit code. No business logic lives here (§8.2): argument parsing, human-readable
  * formatting, and exit codes only.
  *
+ *   aipm init [dir]
  *   aipm build [path]
  *   aipm validate [path]
  *   aipm scaffold <name>
@@ -22,6 +23,7 @@ import {
   addTarget,
   build,
   checkSupport,
+  init,
   listTargets,
   migrate,
   scaffold,
@@ -45,6 +47,7 @@ Usage:
   aipm <command> [arguments]
 
 Commands:
+  init [dir]                    Scaffold a new plugin repo (default: cwd)
   build [path]                  Build plugin artifacts (default: cwd)
   validate [path]               Run validators on plugins (default: cwd)
   scaffold <name>               Create a new plugin from templates
@@ -118,6 +121,15 @@ export async function run(argv: readonly string[], opts: RunOptions = {}): Promi
 
   try {
     switch (command) {
+      case 'init': {
+        const dir = rest[0] ?? process.cwd();
+        await init(dir);
+        const created = path.resolve(dir);
+        out.write(`Created plugin repo at ${created}.\n`);
+        out.write('Next: run `pnpm install`, then `aipm scaffold <name>` to add a plugin.\n');
+        return 0;
+      }
+
       case 'build': {
         const target = rest[0] ?? process.cwd();
         const results = await build(target);

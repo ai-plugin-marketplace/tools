@@ -13,12 +13,14 @@
 import * as path from 'node:path';
 
 import { runBuild } from './build.js';
+import { runInit } from './init.js';
 import { runScaffold, runAddTarget, runCheckSupport } from './scaffold.js';
 import { TARGET_IDS } from './types.js';
 import { runValidate } from './validate.js';
 import type {
   BuildOptions,
   BuildResult,
+  InitOptions,
   MigrateOptions,
   MigrateResult,
   ScaffoldOptions,
@@ -30,7 +32,7 @@ import type {
 
 /** True when running in a CI environment. Freshness findings are hard in CI, soft locally (§10.2). */
 function isCi(): boolean {
-  return Boolean(process.env.CI);
+  return Boolean(process.env['CI']);
 }
 
 /**
@@ -52,6 +54,18 @@ export function build(targetPath: string, opts?: BuildOptions): Promise<BuildRes
  */
 export function validate(targetPath: string, opts?: ValidateOptions): Promise<ValidationResult> {
   return runValidate(targetPath, { ...opts, ci: isCi() });
+}
+
+/**
+ * Scaffold a thin consumer repo (the "template") at `targetDir` that depends on
+ * `@ai-plugin-marketplace/cli` and holds plugin sources only (§3.2, §11). The generated
+ * `package.json` pins the cli dev dependency to a caret of the current toolkit version (§9.1
+ * lockstep). Refuses to write into a non-empty directory.
+ *
+ * @public
+ */
+export function init(targetDir: string, opts?: InitOptions): Promise<void> {
+  return runInit(targetDir, opts);
 }
 
 /**

@@ -67,6 +67,17 @@ Validate and brand a plugin configuration. Throws a `ZodError` on invalid input.
 </td></tr>
 <tr><td>
 
+[init(targetDir, opts)](./core.init.md)
+
+
+</td><td>
+
+Scaffold a thin consumer repo (the "template") at `targetDir` that depends on `@ai-plugin-marketplace/cli` and holds plugin sources only (§3.2, §11). The generated `package.json` pins the cli dev dependency to a caret of the current toolkit version (§9.1 lockstep). Refuses to write into a non-empty directory.
+
+
+</td></tr>
+<tr><td>
+
 [listTargets()](./core.listtargets.md)
 
 
@@ -176,6 +187,17 @@ A single validation finding.
 </td><td>
 
 A file produced or verified by the build.
+
+
+</td></tr>
+<tr><td>
+
+[InitOptions](./core.initoptions.md)
+
+
+</td><td>
+
+Options for [init()](./core.init.md)<!-- -->.
 
 
 </td></tr>

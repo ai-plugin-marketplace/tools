@@ -378,6 +378,7 @@ export type AipmConfig = AipmConfigInput & { readonly [aipmConfigBrand]: 'AipmCo
 export function defineConfig(config: AipmConfigInput): AipmConfig;
 
 // Operations
+export function init(dir: string, opts?: InitOptions): Promise<void>;
 export function build(path: string, opts?: BuildOptions): Promise<BuildResult[]>;
 export function validate(path: string, opts?: ValidateOptions): Promise<ValidationResult>;
 export function scaffold(name: string, opts: ScaffoldOptions): Promise<void>;
@@ -433,7 +434,13 @@ export interface MigrateResult {
   migrationsApplied: number; // 0 in v0.1.0
   filesChanged: string[];
 }
+
+export interface InitOptions {
+  name?: string; // repo name in the generated package.json; defaults to basename(dir)
+}
 ```
+
+**Why `init` lives in `core`.** `init` scaffolds the thin consumer repo described in §3.2 — `package.json` (private, ESM, with the `@ai-plugin-marketplace/cli` dev dependency pinned to a caret of the current toolkit version), both repo-root marketplace registries, an empty `plugins/`, a README, and a CI workflow that runs `aipm build` then `aipm validate` (§10.5). Pinning the dev dependency in lockstep with `core` (§9.1) is the seam that makes `pnpm up` the single upgrade path (§11). It refuses to write into a non-empty directory.
 
 **Why one `build` signature.** `path` may be a plugin directory or the repo root; the function detects which and either builds one plugin or all. Returns a length-1 array for single-plugin input. Avoids forking the return type on an operational detail.
 
@@ -457,6 +464,7 @@ export interface MigrateResult {
 
 | Subcommand                          | Wraps                                  |
 | ----------------------------------- | -------------------------------------- |
+| `aipm init [dir]`                   | `core.init(dir)` — default cwd         |
 | `aipm build [path]`                 | `core.build(path)` — default cwd       |
 | `aipm validate [path]`              | `core.validate(path)`                  |
 | `aipm scaffold <name>`              | `core.scaffold(name)`                  |
@@ -774,3 +782,4 @@ How do authors test their plugins? A `@ai-plugin-marketplace/testing` package (o
 | 0.2.0   | 2026-04-19 | Narrowed to two packages; deferred TSX and migrex; added forward-compatibility seams; integrated first review pass (bin rename, collapsed `build`/`buildAll`, explicit phase boundaries, first-class plugin version, marketplace.json ownership clarified).                                                                                                                                                                                                                                                                                                                                                       |
 | 0.3.0   | 2026-04-19 | Trimmed ceremony (removed internal-interface spec, collapsed duplicated rationale, dropped justifying-absence section); clarified `schemaVersion` as reserved-but-unvalidated in v0.1.0; added `migrate` and `list-targets` surfaces; pinned `BuildResult` shape; added generated-file sentinel; added cross-target-import CI check to bootstrap exit criteria.                                                                                                                                                                                                                                                   |
 | 0.4.0   | 2026-04-19 | Pre-1.0 API tightening: `Finding.code` as typed additive `FindingCode` union; dropped unused `'shared'` from `GeneratedFile.target`; split `AipmConfigInput` → branded `AipmConfig` with module-private brand symbol; `MigrateResult.status` discriminant added. Concrete reference file layout for per-target modules; cross-target-import CI tool named; sidecar-sentinel option for strict-schema hosts; public-subpath policy stated (root only in v0.1.0); migrate no-op caveat for future compatibility. Cuts: §13.1 "what must not happen during bootstrap" (restated elsewhere); redundant §1.3 sentence. |
+| 0.4.1   | 2026-05-31 | Added `init` to the public API: `core.init(dir, opts?)` + `aipm init [dir]` scaffold the thin consumer repo of §3.2 (private/ESM `package.json` with the `@ai-plugin-marketplace/cli` dev dependency pinned to a caret of the current toolkit version, both repo-root marketplace registries, empty `plugins/`, README, and a build→validate CI workflow). This makes the template generatable from the CLI and centrally versioned via `pnpm up` (§11).                                                                                                                                                          |

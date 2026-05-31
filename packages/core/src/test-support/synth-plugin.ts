@@ -24,7 +24,7 @@ import { TEMPLATE_REPO } from './template-repo.js';
 export const SYNTH_PLUGIN_NAME = 'skill-evaluator';
 
 /** Absolute path to the source plugin in the template checkout. */
-export const TEMPLATE_PLUGIN_DIR = path.join(TEMPLATE_REPO, 'plugins', SYNTH_PLUGIN_NAME);
+const TEMPLATE_PLUGIN_DIR = path.join(TEMPLATE_REPO, 'plugins', SYNTH_PLUGIN_NAME);
 
 /** Absolute paths to the committed dist oracles for the synth plugin. */
 export const ORACLE_GEMINI_DIR = path.join(TEMPLATE_REPO, 'dist', 'gemini', SYNTH_PLUGIN_NAME);
@@ -64,7 +64,7 @@ function copyDir(src: string, dest: string): void {
 }
 
 /** Render an `aipm.config.ts` source string for the given targets. */
-export function renderAipmConfig(targets: readonly TargetId[], version = '0.1.0'): string {
+function renderAipmConfig(targets: readonly TargetId[], version = '0.1.0'): string {
   const targetList = targets.map((t) => `'${t}'`).join(', ');
   return `import { defineConfig } from '@ai-plugin-marketplace/core';
 

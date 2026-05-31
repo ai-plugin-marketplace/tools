@@ -3,21 +3,69 @@
  */
 
 /**
+ * A host-platform identity. The closed union of target IDs this toolkit version knows about.
+ *
+ * Declared as an explicit literal union (matching the public contract in spec §8.1) rather than
+ * derived from `TARGET_IDS`. This keeps the public type self-contained: a
+ * `typeof TARGET_IDS` derivation would make the published `TargetId` depend on the non-exported
+ * `TARGET_IDS` const, which API Extractor reports as `ae-forgotten-export`. The runtime array
+ * below is validated against this union with `satisfies`, so the two cannot drift.
+ *
+ * @public
+ */
+export type TargetId = 'claude' | 'cursor' | 'gemini' | 'kiro' | 'vercel';
+
+/**
  * Canonical list of target IDs known to this toolkit version. Runtime-exposed so
  * `listTargets()` and config validation share one source of truth.
+ *
+ * `as const satisfies readonly TargetId[]` preserves the literal tuple type (required by
+ * `z.enum`) while guaranteeing every entry is a valid {@link TargetId}. The
+ * `_targetIdsAreExhaustive` assertion below closes the other direction (every {@link TargetId}
+ * appears here), so the union and the array cannot drift in either direction.
+ *
+ * Not part of the public API — `index.ts` re-exports only the `TargetId` type, not this runtime
+ * array. Marked `@internal` so the release-tag lint rule is satisfied without widening the
+ * public surface.
+ *
+ * @internal
  */
-export const TARGET_IDS = ['claude', 'cursor', 'gemini', 'kiro', 'vercel'] as const;
+export const TARGET_IDS = [
+  'claude',
+  'cursor',
+  'gemini',
+  'kiro',
+  'vercel',
+] as const satisfies readonly TargetId[];
 
-export type TargetId = (typeof TARGET_IDS)[number];
+/**
+ * Compile-time exhaustiveness guard: fails to typecheck if any {@link TargetId} member is missing
+ * from `TARGET_IDS`. Combined with the `satisfies` above (which rejects extra/invalid entries),
+ * this makes the union and the runtime array provably equivalent. Type-only — erased at compile
+ * time, zero runtime cost.
+ *
+ * @internal
+ */
+type _targetIdsAreExhaustive = TargetId extends (typeof TARGET_IDS)[number] ? true : never;
 
 // ---------------------------------------------------------------------------
 // Build
 
+/**
+ * Options for {@link build}.
+ *
+ * @public
+ */
 export interface BuildOptions {
   /** Abort after the first hard validation finding. Default: false. */
   failFast?: boolean;
 }
 
+/**
+ * Result of building a single plugin. One entry per plugin built.
+ *
+ * @public
+ */
 export interface BuildResult {
   /** Plugin directory name, e.g. 'skill-evaluator'. */
   plugin: string;
@@ -29,6 +77,11 @@ export interface BuildResult {
   durationMs: number;
 }
 
+/**
+ * A file produced or verified by the build.
+ *
+ * @public
+ */
 export interface GeneratedFile {
   /** Absolute path. */
   path: string;
@@ -41,11 +94,21 @@ export interface GeneratedFile {
 // ---------------------------------------------------------------------------
 // Validate
 
+/**
+ * Options for {@link validate}.
+ *
+ * @public
+ */
 export interface ValidateOptions {
   /** When true, skip the freshness check (§10.5). Default: false. */
   skipFreshness?: boolean;
 }
 
+/**
+ * Result of validating one or more plugins.
+ *
+ * @public
+ */
 export interface ValidationResult {
   findings: Finding[];
   /** True iff no hard findings were emitted. Soft findings do not flip this. */
@@ -55,6 +118,8 @@ export interface ValidationResult {
 /**
  * Enumerated finding codes. Additive — new codes arrive in toolkit MINOR releases; removing
  * or renaming a code is MAJOR. Consumers SHOULD handle unknown codes gracefully.
+ *
+ * @public
  */
 export type FindingCode =
   | 'envelope-invalid'
@@ -65,6 +130,11 @@ export type FindingCode =
   | 'marketplace-registration'
   | 'freshness';
 
+/**
+ * A single validation finding.
+ *
+ * @public
+ */
 export interface Finding {
   severity: 'hard' | 'soft';
   code: FindingCode;
@@ -79,6 +149,11 @@ export interface Finding {
 // ---------------------------------------------------------------------------
 // Scaffold
 
+/**
+ * Options for {@link scaffold}.
+ *
+ * @public
+ */
 export interface ScaffoldOptions {
   /** Targets to scaffold for. Defaults to all known targets. */
   targets?: readonly TargetId[];
@@ -89,11 +164,21 @@ export interface ScaffoldOptions {
 // ---------------------------------------------------------------------------
 // Migrate
 
+/**
+ * Options for {@link migrate}.
+ *
+ * @public
+ */
 export interface MigrateOptions {
   /** When true, print planned changes without writing. Default: false. */
   dryRun?: boolean;
 }
 
+/**
+ * Result of running {@link migrate}.
+ *
+ * @public
+ */
 export interface MigrateResult {
   /**
    * Discriminant so consumers distinguish "ran and did nothing" from "ran and applied zero
@@ -109,6 +194,11 @@ export interface MigrateResult {
 // ---------------------------------------------------------------------------
 // Support
 
+/**
+ * Diagnostic report from {@link checkSupport} describing a plugin's support envelope.
+ *
+ * @public
+ */
 export interface SupportReport {
   plugin: string;
   /** Targets the plugin declares support for. */

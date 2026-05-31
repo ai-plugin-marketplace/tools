@@ -1,0 +1,15 @@
+{
+  "$schema": "https://developer.microsoft.com/json-schemas/api-extractor/v7/api-extractor.schema.json",
+  "extends": "../../api-extractor-base.json",
+
+  /**
+   * Per-package API Extractor config for `@ai-plugin-marketplace/core`.
+   * Inherits report/docModel/dtsRollup/messages from the shared base. The
+   * entry point is the `tsc --build` declaration output (`dist/index.d.ts`);
+   * the trimmed rollup lands at `dist/core.d.ts`, which `package.json#types`
+   * points at.
+   */
+
+  "projectFolder": ".",
+  "mainEntryPointFilePath": "<projectFolder>/dist/index.d.ts"
+}

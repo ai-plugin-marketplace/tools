@@ -14,6 +14,8 @@ import { TARGET_IDS } from './pipeline/types.js';
 /**
  * Raw input shape accepted by `defineConfig`. Plugin authors type their config literal against
  * `AipmConfigInput` implicitly via `defineConfig`'s parameter.
+ *
+ * @public
  */
 export interface AipmConfigInput {
   /** Semver string identifying the plugin author's release. See §9.5 of the spec. */
@@ -22,11 +24,21 @@ export interface AipmConfigInput {
   targets: readonly TargetId[];
 }
 
+/**
+ * Module-private brand marker. Intentionally never exported (§8.1: "The brand symbol is
+ * module-private"). Marked `@internal` so API Extractor does not flag `AipmConfig`'s reference
+ * to it as `ae-forgotten-export`; the symbol carries no runtime value and does not appear in the
+ * trimmed public rollup.
+ *
+ * @internal
+ */
 declare const aipmConfigBrand: unique symbol;
 
 /**
  * Validated plugin configuration. Structurally identical to `AipmConfigInput` but carries a
  * module-private brand indicating `defineConfig` validated it at runtime.
+ *
+ * @public
  */
 export type AipmConfig = AipmConfigInput & {
   readonly [aipmConfigBrand]: 'AipmConfig';
@@ -53,6 +65,8 @@ const aipmConfigSchema = z
 
 /**
  * Validate and brand a plugin configuration. Throws a `ZodError` on invalid input.
+ *
+ * @public
  */
 export function defineConfig(config: AipmConfigInput): AipmConfig {
   const parsed = aipmConfigSchema.parse(config);

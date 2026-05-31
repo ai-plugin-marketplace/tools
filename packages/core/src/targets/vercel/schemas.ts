@@ -77,5 +77,3 @@ export const vercelSkillFrontmatterSchema = z
     description: z.string().min(1).max(SKILL_DESCRIPTION_MAX_LENGTH),
   })
   .loose();
-
-export type VercelSkillFrontmatter = z.infer<typeof vercelSkillFrontmatterSchema>;

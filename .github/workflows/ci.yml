@@ -30,11 +30,20 @@ jobs:
       - name: Typecheck
         run: pnpm run typecheck
 
+      - name: Dependency version consistency (syncpack)
+        run: pnpm run syncpack
+
       - name: Lint (includes cross-target-import isolation check per spec §3.4, §12.4, §13)
         run: pnpm run lint
 
+      - name: Dead code & unused dependencies (knip)
+        run: pnpm run knip
+
       - name: Format check
         run: pnpm run format:check
+
+      - name: API report up to date (API Extractor)
+        run: pnpm run api:check
 
       - name: Test
         run: pnpm run test

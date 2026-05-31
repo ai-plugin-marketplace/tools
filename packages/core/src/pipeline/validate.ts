@@ -38,7 +38,7 @@ import type { Finding, TargetId, ValidateOptions, ValidationResult } from './typ
  * exist on disk for a target NOT in the envelope, that is an adherence violation.
  * Directories are listed without trailing slash; `existsSync` works for either.
  */
-export const TARGET_OWNED_ARTIFACTS: Record<TargetId, string[]> = {
+const TARGET_OWNED_ARTIFACTS: Record<TargetId, string[]> = {
   claude: [
     '.claude-plugin/plugin.json',
     '.claude-plugin',
@@ -55,7 +55,7 @@ export const TARGET_OWNED_ARTIFACTS: Record<TargetId, string[]> = {
  * Shared artifacts that require at least one of the listed targets in the envelope.
  * `.mcp.json` is the Claude/Cursor MCP config format, shared between those two targets.
  */
-export const SHARED_ARTIFACTS: { file: string; anyOf: TargetId[] }[] = [
+const SHARED_ARTIFACTS: { file: string; anyOf: TargetId[] }[] = [
   { file: '.mcp.json', anyOf: ['claude', 'cursor'] },
 ];
 

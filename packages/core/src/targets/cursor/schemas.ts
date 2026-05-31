@@ -96,8 +96,6 @@ export const cursorPluginManifestSchema = z
   })
   .strict();
 
-export type CursorPluginManifest = z.infer<typeof cursorPluginManifestSchema>;
-
 // ---------------------------------------------------------------------------
 // cursorMcpConfigSchema
 //
@@ -119,8 +117,6 @@ export const cursorMcpConfigSchema = z
   })
   .strict();
 
-export type CursorMcpConfig = z.infer<typeof cursorMcpConfigSchema>;
-
 // ---------------------------------------------------------------------------
 // cursorRuleFrontmatterSchema
 //
@@ -136,5 +132,3 @@ export const cursorRuleFrontmatterSchema = z.object({
   globs: z.string().array().optional(),
   schemaVersion: z.string().optional(),
 });
-
-export type CursorRuleFrontmatter = z.infer<typeof cursorRuleFrontmatterSchema>;

@@ -37,6 +37,8 @@ function isCi(): boolean {
  * Build a single plugin or every plugin under a repo root. `path` may be a plugin directory
  * (contains `aipm.config.ts`) or a repo root (contains `plugins/`); the orchestrator detects
  * which and returns a length-1 array for single-plugin input. See §5.2, §8.1.
+ *
+ * @public
  */
 export function build(targetPath: string, opts?: BuildOptions): Promise<BuildResult[]> {
   return runBuild(targetPath, opts);
@@ -45,6 +47,8 @@ export function build(targetPath: string, opts?: BuildOptions): Promise<BuildRes
 /**
  * Validate a single plugin or every plugin under a repo root, in the order defined by §10.1.
  * Freshness severity follows the CI environment (§10.2).
+ *
+ * @public
  */
 export function validate(targetPath: string, opts?: ValidateOptions): Promise<ValidationResult> {
   return runValidate(targetPath, { ...opts, ci: isCi() });
@@ -53,6 +57,8 @@ export function validate(targetPath: string, opts?: ValidateOptions): Promise<Va
 /**
  * Scaffold a new plugin under `<cwd>/plugins/<name>`. The plugins directory is derived from the
  * current working directory, matching how `aipm scaffold` is invoked from a template repo root.
+ *
+ * @public
  */
 export function scaffold(name: string, opts: ScaffoldOptions = {}): Promise<void> {
   const pluginsDir = path.join(process.cwd(), 'plugins');
@@ -63,6 +69,8 @@ export function scaffold(name: string, opts: ScaffoldOptions = {}): Promise<void
  * No-op in v0.1.0 per §8.1 of the spec. Always returns `status: 'no-migrations-needed'` because
  * §9.4 constrains every `schemaVersion` to a single value. When real migrations ship, this
  * must distinguish up-to-date from unknown-future-version.
+ *
+ * @public
  */
 export function migrate(_path: string, _opts?: MigrateOptions): Promise<MigrateResult> {
   return Promise.resolve({
@@ -72,17 +80,29 @@ export function migrate(_path: string, _opts?: MigrateOptions): Promise<MigrateR
   });
 }
 
-/** Diagnose a plugin's support envelope: declared targets, missing artifacts, addable targets (§6.4). */
+/**
+ * Diagnose a plugin's support envelope: declared targets, missing artifacts, addable targets (§6.4).
+ *
+ * @public
+ */
 export function checkSupport(pluginDir: string): Promise<SupportReport> {
   return runCheckSupport(pluginDir);
 }
 
-/** Scaffold skeleton files for a new target in an existing plugin (§6.4). */
+/**
+ * Scaffold skeleton files for a new target in an existing plugin (§6.4).
+ *
+ * @public
+ */
 export function addTarget(pluginDir: string, target: TargetId): Promise<void> {
   return runAddTarget(pluginDir, target);
 }
 
-/** List the target IDs this toolkit version knows about (§6.4). */
+/**
+ * List the target IDs this toolkit version knows about (§6.4).
+ *
+ * @public
+ */
 export function listTargets(): readonly TargetId[] {
   return TARGET_IDS;
 }

@@ -59,7 +59,7 @@ function corePackageEntrypoint(): string {
 }
 
 /** Absolute path to a plugin's `aipm.config.ts`, given the plugin directory. */
-export function configPathFor(pluginDir: string): string {
+function configPathFor(pluginDir: string): string {
   return path.join(pluginDir, AIPM_CONFIG_FILENAME);
 }
 

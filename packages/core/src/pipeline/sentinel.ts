@@ -46,7 +46,7 @@ export type SentinelMode = 'inline' | 'json-field' | 'sidecar';
  * Shape of the top-level `_generated` field used by the JSON carrier (§4.3). Serialized with
  * the `_generated` key FIRST so the sentinel is visible at the head of the file.
  */
-export interface JsonSentinelField {
+interface JsonSentinelField {
   /** The {@link GENERATOR_ID} that produced the file. */
   by: string;
   /** Author-authored source path this file was generated from, relative to the plugin dir. */

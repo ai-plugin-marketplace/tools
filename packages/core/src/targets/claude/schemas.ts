@@ -24,15 +24,13 @@ import { z } from 'zod';
  * Author object in the plugin manifest. Strict per JSON Schema
  * (`additionalProperties: false`).
  */
-export const claudePluginAuthorSchema = z
+const claudePluginAuthorSchema = z
   .object({
     name: z.string(),
     email: z.string().optional(),
     url: z.string().optional(),
   })
   .strict();
-
-export type ClaudePluginAuthor = z.infer<typeof claudePluginAuthorSchema>;
 
 // ---------------------------------------------------------------------------
 // claudePluginManifestSchema
@@ -131,8 +129,6 @@ export const claudePluginManifestSchema = z
   })
   .strict();
 
-export type ClaudePluginManifest = z.infer<typeof claudePluginManifestSchema>;
-
 // ---------------------------------------------------------------------------
 // claudeMcpConfigSchema
 // ---------------------------------------------------------------------------
@@ -141,15 +137,13 @@ export type ClaudePluginManifest = z.infer<typeof claudePluginManifestSchema>;
  * Schema for a single MCP server entry. Strict: only `command`, `args`, and `env` are
  * accepted — matching the Claude `.mcp.json` format.
  */
-export const claudeMcpServerSchema = z
+const claudeMcpServerSchema = z
   .object({
     command: z.string(),
     args: z.array(z.string()).optional(),
     env: z.record(z.string(), z.string()).optional(),
   })
   .strict();
-
-export type ClaudeMcpServer = z.infer<typeof claudeMcpServerSchema>;
 
 /**
  * Schema for `.mcp.json` (Claude MCP configuration).
@@ -166,8 +160,6 @@ export const claudeMcpConfigSchema = z
   })
   .strict();
 
-export type ClaudeMcpConfig = z.infer<typeof claudeMcpConfigSchema>;
-
 // ---------------------------------------------------------------------------
 // claudeHooksFileSchema
 // ---------------------------------------------------------------------------
@@ -175,14 +167,7 @@ export type ClaudeMcpConfig = z.infer<typeof claudeMcpConfigSchema>;
 /**
  * Known Claude Code hook event types. Unknown events are rejected at the schema level.
  */
-export const claudeHookEventSchema = z.enum([
-  'PreToolUse',
-  'PostToolUse',
-  'Stop',
-  'UserPromptSubmit',
-]);
-
-export type ClaudeHookEvent = z.infer<typeof claudeHookEventSchema>;
+const claudeHookEventSchema = z.enum(['PreToolUse', 'PostToolUse', 'Stop', 'UserPromptSubmit']);
 
 /**
  * A single hook entry: a command to run.
@@ -194,8 +179,6 @@ export const claudeHookEntrySchema = z
   })
   .strict();
 
-export type ClaudeHookEntry = z.infer<typeof claudeHookEntrySchema>;
-
 /**
  * A hook matcher: optional regex filter + description + list of hook entries to run.
  */
@@ -206,8 +189,6 @@ export const claudeHookMatcherSchema = z
     hooks: z.array(claudeHookEntrySchema),
   })
   .strict();
-
-export type ClaudeHookMatcher = z.infer<typeof claudeHookMatcherSchema>;
 
 /**
  * Schema for `hooks/claude.json`.
@@ -263,5 +244,3 @@ export const claudeAgentFrontmatterSchema = z
     color: z.string().optional(),
   })
   .loose();
-
-export type ClaudeAgentFrontmatter = z.infer<typeof claudeAgentFrontmatterSchema>;

@@ -1,0 +1,4 @@
+# Generated API documentation and reports are committed but should be collapsed
+# in GitHub diffs and excluded from language statistics.
+packages/*/docs/** linguist-generated=true
+packages/*/api-report/** linguist-generated=true

@@ -67,8 +67,6 @@ export const kiroPowerMdFrontmatterSchema = z
   })
   .loose();
 
-export type KiroPowerMdFrontmatter = z.infer<typeof kiroPowerMdFrontmatterSchema>;
-
 // ---------------------------------------------------------------------------
 // kiroMcpConfigSchema
 // ---------------------------------------------------------------------------
@@ -79,15 +77,13 @@ export type KiroPowerMdFrontmatter = z.infer<typeof kiroPowerMdFrontmatterSchema
  * Same shape as the Claude `.mcp.json` server entry but modelled independently per the spec —
  * Kiro's `mcp.json` is a separate file from Claude's `.mcp.json`.
  */
-export const kiroMcpServerSchema = z
+const kiroMcpServerSchema = z
   .object({
     command: z.string(),
     args: z.array(z.string()).optional(),
     env: z.record(z.string(), z.string()).optional(),
   })
   .strict();
-
-export type KiroMcpServer = z.infer<typeof kiroMcpServerSchema>;
 
 /**
  * Schema for Kiro's `mcp.json`.
@@ -103,8 +99,6 @@ export const kiroMcpConfigSchema = z
     mcpServers: z.record(z.string(), kiroMcpServerSchema),
   })
   .strict();
-
-export type KiroMcpConfig = z.infer<typeof kiroMcpConfigSchema>;
 
 // ---------------------------------------------------------------------------
 // kiroAgentConfigSchema

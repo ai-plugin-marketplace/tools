@@ -4,10 +4,10 @@
   "description": "Core build pipeline, validation, and scaffolding for the AI plugin marketplace toolkit.",
   "type": "module",
   "main": "./dist/index.js",
-  "types": "./dist/index.d.ts",
+  "types": "./dist/core.d.ts",
   "exports": {
     ".": {
-      "types": "./dist/index.d.ts",
+      "types": "./dist/core.d.ts",
       "import": "./dist/index.js"
     },
     "./package.json": "./package.json"
@@ -19,7 +19,10 @@
   ],
   "scripts": {
     "build": "tsc --build",
-    "clean": "rimraf dist *.tsbuildinfo"
+    "build:api": "api-extractor run --local",
+    "check:api": "api-extractor run",
+    "docs": "api-documenter markdown -i temp -o docs",
+    "clean": "rimraf dist *.tsbuildinfo temp"
   },
   "dependencies": {
     "jiti": "^2.7.0",

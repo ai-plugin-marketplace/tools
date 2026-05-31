@@ -2,3 +2,8 @@ pnpm-lock.yaml
 node_modules
 dist
 *.tsbuildinfo
+
+# Generated API surface (API Extractor / API Documenter)
+packages/*/docs
+packages/*/api-report
+packages/*/temp

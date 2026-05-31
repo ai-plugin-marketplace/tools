@@ -58,9 +58,6 @@ export const geminiExtensionManifestSchema = z
   })
   .loose();
 
-/** Inferred TypeScript type for `gemini-extension.json`. */
-export type GeminiExtensionManifest = z.infer<typeof geminiExtensionManifestSchema>;
-
 // ---------------------------------------------------------------------------
 // agents/*.md YAML frontmatter (as emitted for Gemini)
 // ---------------------------------------------------------------------------
@@ -82,6 +79,3 @@ export const geminiAgentFrontmatterSchema = z
     schemaVersion: z.string().optional(),
   })
   .loose();
-
-/** Inferred TypeScript type for Gemini agent frontmatter. */
-export type GeminiAgentFrontmatter = z.infer<typeof geminiAgentFrontmatterSchema>;

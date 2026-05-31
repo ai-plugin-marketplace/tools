@@ -3,6 +3,7 @@ name: Release
 on:
   push:
     branches: [main]
+  workflow_dispatch: # allow a maintainer to trigger a release manually once NPM_TOKEN is set
 
 concurrency: ${{ github.workflow }}-${{ github.ref }}
 

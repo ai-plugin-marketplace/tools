@@ -11,11 +11,14 @@ Bootstrap release of the `@ai-plugin-marketplace` toolkit (v0.1.0).
 - Support envelope validation — plugins declare supported targets; the validator enforces adherence.
 - Per-target Zod schemas for Claude Code, Cursor, Gemini CLI, Kiro, and Vercel Skills CLI.
 - Build pipeline with a named `transform` step — mechanical transformations (YAML→JSON, tool-name mapping, bundle assembly) live inside each target's step and never cross target boundaries.
-- `aipm validate` — envelope, schema, adherence, cross-target consistency, and freshness checks.
-- `aipm scaffold` / `aipm add-target` — scaffolds new plugins and adds targets to existing ones.
+- `validate` — envelope, schema, adherence, cross-target consistency, and freshness checks.
+- `build` — generates per-target artifacts and standalone bundles with generated-file sentinels.
+- `scaffold` / `addTarget` — scaffolds new plugins and adds targets to existing ones.
+- `init` — generates a light, toolkit-consuming plugin repo (the basis for the template).
+- `checkSupport` / `listTargets` — compatibility-assist diagnostics.
+- `migrate` — no-op in this release; groundwork for future migrex schema migrations.
 
 **`@ai-plugin-marketplace/cli`**
 
-- `aipm` binary wrapping all `core` capabilities.
-- `aipm build`, `aipm validate`, `aipm scaffold`, `aipm add-target`, `aipm check-support`.
-- Schema-migration stub (`aipm migrate` — no-op in this release; groundwork for future migrex adoption).
+- `aipm` binary wrapping all `core` capabilities: `init`, `build`, `validate`, `scaffold`,
+  `add-target`, `check-support`, `list-targets`, `migrate`.

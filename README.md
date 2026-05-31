@@ -31,12 +31,20 @@ The definitive architecture specification lives at [`docs/specs/architecture.md`
 
 ```bash
 pnpm install
-pnpm run check    # typecheck + lint + format:check + test
+pnpm run check    # typecheck + lint + knip + syncpack + format + api-report + test (per-package, Nx-cached)
+pnpm run build    # tsc + API Extractor rollup
 ```
+
+## Releasing
+
+Versioned and published with Changesets. The packages are ready for the `0.1.0` release; the only
+missing piece is npm credentials. See [`RELEASING.md`](./RELEASING.md).
 
 ## Status
 
-v0.1.0-alpha — bootstrap in progress. See [`docs/specs/architecture.md`](./docs/specs/architecture.md) §13 for the phased plan.
+`0.1.0` ready to publish (pending npm credentials). See
+[`docs/specs/architecture.md`](./docs/specs/architecture.md) for the architecture and §13 for the
+phased plan.
 
 ## License
 

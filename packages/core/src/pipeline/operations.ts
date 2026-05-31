@@ -1,12 +1,21 @@
 /**
  * Public operation implementations.
  *
- * These are stubs for the skeleton commit. Stages 2–6 of the bootstrap plan fill them in.
- * Every function here has a pinned signature per §8.1 of the spec; the implementations evolve
- * without changing the contract.
+ * Each function here is a thin adapter over a pipeline orchestrator, with the pinned public
+ * signature from §8.1 of the spec. Business logic lives in the orchestrators
+ * (`build.ts`, `validate.ts`, `scaffold.ts`); this module only adapts arguments (e.g. deriving
+ * the plugins directory from the cwd for `scaffold`, and reading the CI environment for the
+ * freshness severity) so the public contract stays stable as implementations evolve.
+ *
+ * @see docs/specs/architecture.md §8.1
  */
 
+import * as path from 'node:path';
+
+import { runBuild } from './build.js';
+import { runScaffold, runAddTarget, runCheckSupport } from './scaffold.js';
 import { TARGET_IDS } from './types.js';
+import { runValidate } from './validate.js';
 import type {
   BuildOptions,
   BuildResult,
@@ -19,23 +28,35 @@ import type {
   ValidationResult,
 } from './types.js';
 
-class NotImplementedError extends Error {
-  constructor(operation: string) {
-    super(`${operation} is not implemented in this skeleton build. See bootstrap plan §13.`);
-    this.name = 'NotImplementedError';
-  }
+/** True when running in a CI environment. Freshness findings are hard in CI, soft locally (§10.2). */
+function isCi(): boolean {
+  return Boolean(process.env.CI);
 }
 
-export function build(_path: string, _opts?: BuildOptions): Promise<BuildResult[]> {
-  return Promise.reject(new NotImplementedError('build'));
+/**
+ * Build a single plugin or every plugin under a repo root. `path` may be a plugin directory
+ * (contains `aipm.config.ts`) or a repo root (contains `plugins/`); the orchestrator detects
+ * which and returns a length-1 array for single-plugin input. See §5.2, §8.1.
+ */
+export function build(targetPath: string, opts?: BuildOptions): Promise<BuildResult[]> {
+  return runBuild(targetPath, opts);
 }
 
-export function validate(_path: string, _opts?: ValidateOptions): Promise<ValidationResult> {
-  return Promise.reject(new NotImplementedError('validate'));
+/**
+ * Validate a single plugin or every plugin under a repo root, in the order defined by §10.1.
+ * Freshness severity follows the CI environment (§10.2).
+ */
+export function validate(targetPath: string, opts?: ValidateOptions): Promise<ValidationResult> {
+  return runValidate(targetPath, { ...opts, ci: isCi() });
 }
 
-export function scaffold(_name: string, _opts: ScaffoldOptions): Promise<void> {
-  return Promise.reject(new NotImplementedError('scaffold'));
+/**
+ * Scaffold a new plugin under `<cwd>/plugins/<name>`. The plugins directory is derived from the
+ * current working directory, matching how `aipm scaffold` is invoked from a template repo root.
+ */
+export function scaffold(name: string, opts: ScaffoldOptions = {}): Promise<void> {
+  const pluginsDir = path.join(process.cwd(), 'plugins');
+  return runScaffold(name, pluginsDir, opts);
 }
 
 /**
@@ -51,14 +72,17 @@ export function migrate(_path: string, _opts?: MigrateOptions): Promise<MigrateR
   });
 }
 
-export function checkSupport(_pluginDir: string): Promise<SupportReport> {
-  return Promise.reject(new NotImplementedError('checkSupport'));
+/** Diagnose a plugin's support envelope: declared targets, missing artifacts, addable targets (§6.4). */
+export function checkSupport(pluginDir: string): Promise<SupportReport> {
+  return runCheckSupport(pluginDir);
 }
 
-export function addTarget(_pluginDir: string, _target: TargetId): Promise<void> {
-  return Promise.reject(new NotImplementedError('addTarget'));
+/** Scaffold skeleton files for a new target in an existing plugin (§6.4). */
+export function addTarget(pluginDir: string, target: TargetId): Promise<void> {
+  return runAddTarget(pluginDir, target);
 }
 
+/** List the target IDs this toolkit version knows about (§6.4). */
 export function listTargets(): readonly TargetId[] {
   return TARGET_IDS;
 }

@@ -1,0 +1,32 @@
+{
+  "$schema": "./node_modules/nx/schemas/nx-schema.json",
+  "namedInputs": {
+    "default": ["{projectRoot}/**/*", "sharedGlobals"],
+    "production": [
+      "default",
+      "!{projectRoot}/**/*.test.ts",
+      "!{projectRoot}/src/test-support/**/*",
+      "!{projectRoot}/api-report/**/*",
+      "!{projectRoot}/docs/**/*"
+    ],
+    "sharedGlobals": [
+      "{workspaceRoot}/tsconfig.base.json",
+      "{workspaceRoot}/eslint.config.mjs",
+      "{workspaceRoot}/.prettierrc.json"
+    ]
+  },
+  "targetDefaults": {
+    "build": {
+      "dependsOn": ["^build"],
+      "inputs": ["production", "^production"],
+      "outputs": ["{projectRoot}/dist", "{projectRoot}/api-report", "{projectRoot}/temp"],
+      "cache": true
+    },
+    "typecheck": {
+      "dependsOn": ["^typecheck"],
+      "inputs": ["production", "^production"],
+      "outputs": ["{projectRoot}/dist"],
+      "cache": true
+    }
+  }
+}

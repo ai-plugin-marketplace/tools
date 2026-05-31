@@ -12,5 +12,10 @@ packages/*/temp/
 .turbo/
 scratch/
 
+# Nx local cache and workspace data (local-only; not committed)
+.nx/
+.nx/cache/
+.nx/workspace-data/
+
 # Claude Code local configuration (auto-added)
 .claude/*.local.*

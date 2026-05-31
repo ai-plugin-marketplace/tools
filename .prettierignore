@@ -3,6 +3,9 @@ node_modules
 dist
 *.tsbuildinfo
 
+# Nx local cache (local-only, never formatted)
+.nx
+
 # Generated API surface (API Extractor / API Documenter)
 packages/*/docs
 packages/*/api-report

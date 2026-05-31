@@ -19,7 +19,8 @@
     "LICENSE"
   ],
   "scripts": {
-    "build": "tsc --build",
+    "build": "tsc --build && api-extractor run --local",
+    "typecheck": "tsc --build",
     "build:api": "api-extractor run --local",
     "check:api": "api-extractor run",
     "docs": "api-documenter markdown -i temp -o docs",

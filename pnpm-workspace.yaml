@@ -1,2 +1,9 @@
 packages:
   - 'packages/*'
+
+# Allow Nx (and its esbuild dependency) to run their postinstall scripts so the
+# native task-runner / daemon binaries are available. Nx is a build/cache tool;
+# its scripts are required for it to function.
+onlyBuiltDependencies:
+  - nx
+  - esbuild

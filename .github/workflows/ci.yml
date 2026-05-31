@@ -27,6 +27,22 @@ jobs:
 
       - run: pnpm install --frozen-lockfile
 
+      # Reuse the Nx local computation cache across runs, keyed on the lockfile +
+      # every input that can invalidate a cached task. A stale-but-valid cache is
+      # restored via restore-keys; Nx re-runs any task whose inputs changed and
+      # restores unchanged tasks' outputs (e.g. dist) straight from the cache.
+      - name: Restore Nx cache
+        uses: actions/cache@v4
+        with:
+          path: .nx/cache
+          key: nx-${{ runner.os }}-${{ hashFiles('pnpm-lock.yaml', 'nx.json', 'tsconfig.base.json', 'eslint.config.mjs', '.prettierrc.json', 'packages/*/tsconfig.json', 'packages/*/src/**') }}
+          restore-keys: |
+            nx-${{ runner.os }}-
+
+      # Typecheck via Nx (cached, dependency-aware). run-many builds or restores
+      # every project's dist, which the unconditional api:check and test steps
+      # below depend on. (affected is intentionally not used: those downstream
+      # gates need dist for all projects regardless of which package a PR touched.)
       - name: Typecheck
         run: pnpm run typecheck
 
@@ -65,6 +81,17 @@ jobs:
           cache: pnpm
 
       - run: pnpm install --frozen-lockfile
+
+      # Restore the same Nx cache so `build` (Nx run-many) replays cached outputs
+      # when nothing relevant changed; falls back to a fresh build otherwise.
+      - name: Restore Nx cache
+        uses: actions/cache@v4
+        with:
+          path: .nx/cache
+          key: nx-${{ runner.os }}-${{ hashFiles('pnpm-lock.yaml', 'nx.json', 'tsconfig.base.json', 'eslint.config.mjs', '.prettierrc.json', 'packages/*/tsconfig.json', 'packages/*/src/**') }}
+          restore-keys: |
+            nx-${{ runner.os }}-
+
       - run: pnpm run build
 
       - name: Pack core

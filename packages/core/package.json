@@ -22,6 +22,7 @@
     "clean": "rimraf dist *.tsbuildinfo"
   },
   "dependencies": {
+    "jiti": "^2.7.0",
     "yaml": "^2.7.0",
     "zod": "^4.0.0"
   },

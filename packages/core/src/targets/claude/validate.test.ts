@@ -459,6 +459,51 @@ describe('validateClaudePlugin', () => {
 
       expect(findings).toHaveLength(0);
     });
+
+    // Regression: the build writes a top-level `_generated` JSON sentinel onto the generated
+    // hooks/claude.json (§4.3, json-field carrier). The hooks schema is `.strict()`, so before
+    // this fix the validator rejected the sentinel as an unrecognized key, breaking the §5.4
+    // post-build validate. The validator must drop the toolkit-owned `_generated` key first.
+    it('tolerates the toolkit _generated sentinel on hooks/claude.json (§4.3 regression)', () => {
+      writeFile(tmpDir, '.claude-plugin/plugin.json', MINIMAL_MANIFEST);
+      writeFile(
+        tmpDir,
+        'hooks/claude.json',
+        JSON.stringify({
+          _generated: { by: '@ai-plugin-marketplace/cli', source: 'hooks/claude.yaml' },
+          hooks: {
+            PostToolUse: [
+              {
+                matcher: 'Write',
+                hooks: [{ type: 'command', command: 'echo wrote' }],
+              },
+            ],
+          },
+        }),
+      );
+
+      const findings = validateClaudePlugin(tmpDir);
+
+      expect(findings).toHaveLength(0);
+    });
+
+    it('still rejects an otherwise-invalid hooks/claude.json that also carries _generated', () => {
+      writeFile(tmpDir, '.claude-plugin/plugin.json', MINIMAL_MANIFEST);
+      writeFile(
+        tmpDir,
+        'hooks/claude.json',
+        JSON.stringify({
+          _generated: { by: '@ai-plugin-marketplace/cli', source: 'hooks/claude.yaml' },
+          hooks: { BadEvent: [{ hooks: [{ type: 'command', command: 'echo bad' }] }] },
+        }),
+      );
+
+      const findings = validateClaudePlugin(tmpDir);
+
+      expect(findings).toHaveLength(1);
+      const [finding] = findings as [Finding];
+      expect(finding.code).toBe('schema-invalid');
+    });
   });
 
   // -------------------------------------------------------------------------

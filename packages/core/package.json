@@ -20,9 +20,13 @@
   ],
   "scripts": {
     "build": "tsc --build && api-extractor run --local",
-    "typecheck": "tsc --build",
-    "build:api": "api-extractor run --local",
-    "check:api": "api-extractor run",
+    "check": "nx run-many --targets=check:typecheck,check:lint-ts,check:api-report,test --projects=@ai-plugin-marketplace/core",
+    "check:typecheck": "tsc --build",
+    "check:lint-ts": "eslint src",
+    "check:api-report": "api-extractor run",
+    "fix:api-report": "api-extractor run --local",
+    "fix:lint-ts": "eslint src --fix",
+    "test": "vitest run",
     "docs": "api-documenter markdown -i temp -o docs",
     "clean": "rimraf dist *.tsbuildinfo temp"
   },

@@ -22,10 +22,33 @@
       "outputs": ["{projectRoot}/dist", "{projectRoot}/api-report", "{projectRoot}/temp"],
       "cache": true
     },
-    "typecheck": {
-      "dependsOn": ["^typecheck"],
+    "check:typecheck": {
+      "dependsOn": ["^check:typecheck"],
       "inputs": ["production", "^production"],
       "outputs": ["{projectRoot}/dist"],
+      "cache": true
+    },
+    "check:lint-ts": {
+      "dependsOn": ["^check:typecheck"],
+      "inputs": [
+        "default",
+        "^production",
+        "{workspaceRoot}/eslint.config.mjs",
+        "{workspaceRoot}/tsconfig.eslint.json"
+      ],
+      "cache": true
+    },
+    "check:api-report": {
+      "dependsOn": ["check:typecheck"],
+      "inputs": ["production", "^production"],
+      "cache": true
+    },
+    "test": {
+      "dependsOn": ["^build"],
+      "inputs": ["default", "^production", "{workspaceRoot}/vitest.config.ts"],
+      "cache": true
+    },
+    "check": {
       "cache": true
     }
   }

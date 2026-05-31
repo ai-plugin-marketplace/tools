@@ -23,7 +23,11 @@
   ],
   "scripts": {
     "build": "tsc --build",
-    "typecheck": "tsc --build",
+    "check": "nx run-many --targets=check:typecheck,check:lint-ts,test --projects=@ai-plugin-marketplace/cli",
+    "check:typecheck": "tsc --build",
+    "check:lint-ts": "eslint src",
+    "fix:lint-ts": "eslint src --fix",
+    "test": "vitest run",
     "clean": "rimraf dist *.tsbuildinfo"
   },
   "dependencies": {

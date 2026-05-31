@@ -35,34 +35,22 @@ jobs:
         uses: actions/cache@v4
         with:
           path: .nx/cache
-          key: nx-${{ runner.os }}-${{ hashFiles('pnpm-lock.yaml', 'nx.json', 'tsconfig.base.json', 'eslint.config.mjs', '.prettierrc.json', 'packages/*/tsconfig.json', 'packages/*/src/**') }}
+          key: nx-${{ runner.os }}-${{ hashFiles('pnpm-lock.yaml', 'nx.json', 'tsconfig.base.json', 'eslint.config.mjs', '.prettierrc.json', 'vitest.config.ts', 'packages/*/tsconfig.json', 'packages/*/vitest.config.ts', 'packages/*/src/**') }}
           restore-keys: |
             nx-${{ runner.os }}-
 
-      # Typecheck via Nx (cached, dependency-aware). run-many builds or restores
-      # every project's dist, which the unconditional api:check and test steps
-      # below depend on. (affected is intentionally not used: those downstream
-      # gates need dist for all projects regardless of which package a PR touched.)
-      - name: Typecheck
-        run: pnpm run typecheck
-
-      - name: Dependency version consistency (syncpack)
-        run: pnpm run syncpack
-
-      - name: Lint (includes cross-target-import isolation check per spec §3.4, §12.4, §13)
-        run: pnpm run lint
-
-      - name: Dead code & unused dependencies (knip)
-        run: pnpm run knip
-
-      - name: Format check
-        run: pnpm run format:check
-
-      - name: API report up to date (API Extractor)
-        run: pnpm run api:check
-
-      - name: Test
-        run: pnpm run test
+      # Single validation gate. `check` fans out to:
+      #   - check:packages → `nx run-many --target=check` (dependency-aware, cached):
+      #       per package: check:typecheck (tsc --build, outputs dist), check:lint-ts
+      #       (incl. cross-target-import isolation per spec §3.4, §12.4, §13; depends on
+      #       ^check:typecheck so cross-package types resolve), core's check:api-report
+      #       (api-extractor run — validate-only; depends on check:typecheck, NOT build,
+      #       so the committed report is never silently regenerated), and test (depends
+      #       on ^build so cli resolves core from dist).
+      #   - check:workspace → knip, syncpack, prettier --check (run concurrently).
+      # Nx restores unchanged tasks' outputs (e.g. dist) straight from the cache.
+      - name: Check (typecheck, lint, api-report, test, knip, syncpack, format)
+        run: pnpm run check
 
   pack:
     name: Package shape (pnpm pack)
@@ -88,7 +76,7 @@ jobs:
         uses: actions/cache@v4
         with:
           path: .nx/cache
-          key: nx-${{ runner.os }}-${{ hashFiles('pnpm-lock.yaml', 'nx.json', 'tsconfig.base.json', 'eslint.config.mjs', '.prettierrc.json', 'packages/*/tsconfig.json', 'packages/*/src/**') }}
+          key: nx-${{ runner.os }}-${{ hashFiles('pnpm-lock.yaml', 'nx.json', 'tsconfig.base.json', 'eslint.config.mjs', '.prettierrc.json', 'vitest.config.ts', 'packages/*/tsconfig.json', 'packages/*/vitest.config.ts', 'packages/*/src/**') }}
           restore-keys: |
             nx-${{ runner.os }}-
 

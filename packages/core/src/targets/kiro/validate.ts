@@ -219,12 +219,12 @@ function extractAgentTools(content: string): string[] {
     typeof parsed !== 'object' ||
     parsed === null ||
     !('tools' in parsed) ||
-    !Array.isArray((parsed as Record<string, unknown>).tools)
+    !Array.isArray((parsed as Record<string, unknown>)['tools'])
   ) {
     return [];
   }
 
-  const tools = (parsed as Record<string, unknown>).tools as unknown[];
+  const tools = (parsed as Record<string, unknown>)['tools'] as unknown[];
   return tools.filter((t): t is string => typeof t === 'string');
 }
 

@@ -49,6 +49,10 @@ export default tseslint.config(
     },
     rules: {
       'no-plusplus': 'off',
+      // Allow bracket notation for index-signature properties, which noPropertyAccessFromIndexSignature
+      // in tsconfig.base.json requires. Without this override the stylistic-type-checked preset's
+      // dot-notation rule would conflict with the TS compiler flag.
+      '@typescript-eslint/dot-notation': ['error', { allowIndexSignaturePropertyAccess: true }],
       '@typescript-eslint/no-unused-vars': [
         'error',
         {

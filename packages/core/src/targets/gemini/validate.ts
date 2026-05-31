@@ -70,7 +70,7 @@ function checkAgentToolTranslations(pluginDir: string, pluginName: string): Find
 
     if (!frontmatter) continue;
 
-    const tools = frontmatter.tools;
+    const tools = frontmatter['tools'];
     if (!Array.isArray(tools)) continue;
 
     const agentLabel = path.basename(entry.name, '.md');

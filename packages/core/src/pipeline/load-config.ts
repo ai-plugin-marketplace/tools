@@ -104,7 +104,7 @@ export async function loadPluginConfig(pluginDir: string): Promise<AipmConfig> {
     });
   }
 
-  const defaultExport = mod.default;
+  const defaultExport = mod['default'];
   if (defaultExport === undefined || defaultExport === null) {
     throw new ConfigLoadError(
       `${AIPM_CONFIG_FILENAME} in ${pluginDir} has no default export. Export the result of \`defineConfig({...})\` as default.`,

@@ -198,11 +198,11 @@ function parseJsonObject(content: string): Record<string, unknown> | undefined {
 function readJsonSentinelSource(content: string): string | undefined {
   const obj = parseJsonObject(content);
   if (!obj) return undefined;
-  const generated = obj._generated;
+  const generated = obj['_generated'];
   if (typeof generated !== 'object' || generated === null || Array.isArray(generated)) {
     return undefined;
   }
-  const source = (generated as Record<string, unknown>).source;
+  const source = (generated as Record<string, unknown>)['source'];
   return typeof source === 'string' ? source : undefined;
 }
 

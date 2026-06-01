@@ -22,12 +22,12 @@ import {
   ALL_SYNTH_TARGETS,
   SYNTH_PLUGIN_NAME,
   synthPluginRepo,
-  templateAvailable,
 } from '../test-support/synth-plugin.js';
 import type { SynthRepo } from '../test-support/synth-plugin.js';
 import type { Finding, FindingCode } from './types.js';
+import { TEMPLATE_REPO_AVAILABLE } from '../test-support/template-repo.js';
 
-const describeMaybe = templateAvailable() ? describe : describe.skip;
+const describeMaybe = TEMPLATE_REPO_AVAILABLE ? describe : describe.skip;
 
 /** Codes present in a finding list. */
 function codes(findings: Finding[]): FindingCode[] {

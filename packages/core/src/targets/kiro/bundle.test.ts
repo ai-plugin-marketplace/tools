@@ -14,7 +14,7 @@ import * as os from 'node:os';
 import * as path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
-import { TEMPLATE_REPO } from '../../test-support/template-repo.js';
+import { TEMPLATE_REPO, TEMPLATE_REPO_AVAILABLE } from '../../test-support/template-repo.js';
 import { bundleKiroPlugin } from './bundle.js';
 
 // ---------------------------------------------------------------------------
@@ -67,7 +67,7 @@ afterEach(() => {
 // Parity tests
 // ---------------------------------------------------------------------------
 
-describe('bundleKiroPlugin — skill-evaluator parity', () => {
+describe.skipIf(!TEMPLATE_REPO_AVAILABLE)('bundleKiroPlugin — skill-evaluator parity', () => {
   it('produces the same file tree as the oracle dist/kiro/skill-evaluator/', () => {
     const destDir = path.join(tmpDir, 'output');
     bundleKiroPlugin(PLUGIN_SRC, destDir);
@@ -145,7 +145,7 @@ describe('bundleKiroPlugin — skill-evaluator parity', () => {
 // Return value tests
 // ---------------------------------------------------------------------------
 
-describe('bundleKiroPlugin — return values', () => {
+describe.skipIf(!TEMPLATE_REPO_AVAILABLE)('bundleKiroPlugin — return values', () => {
   it('includes expected emitted paths', () => {
     const destDir = path.join(tmpDir, 'output');
     const { emitted } = bundleKiroPlugin(PLUGIN_SRC, destDir);
@@ -173,7 +173,7 @@ describe('bundleKiroPlugin — return values', () => {
 // Idempotence / clean-first tests
 // ---------------------------------------------------------------------------
 
-describe('bundleKiroPlugin — clean-first behaviour', () => {
+describe.skipIf(!TEMPLATE_REPO_AVAILABLE)('bundleKiroPlugin — clean-first behaviour', () => {
   it('clears destDir content before writing when destDir already has files', () => {
     const destDir = path.join(tmpDir, 'output');
 

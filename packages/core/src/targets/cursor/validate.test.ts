@@ -17,7 +17,7 @@ import * as path from 'node:path';
 
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
-import { TEMPLATE_REPO } from '../../test-support/template-repo.js';
+import { TEMPLATE_REPO, TEMPLATE_REPO_AVAILABLE } from '../../test-support/template-repo.js';
 import { validateCursorPlugin } from './validate.js';
 
 // ---------------------------------------------------------------------------
@@ -241,7 +241,7 @@ describe('validateCursorPlugin — .mdc frontmatter failures', () => {
 // Positive: parity test — real skill-evaluator plugin → zero findings
 // ---------------------------------------------------------------------------
 
-describe('validateCursorPlugin — skill-evaluator parity', () => {
+describe.skipIf(!TEMPLATE_REPO_AVAILABLE)('validateCursorPlugin — skill-evaluator parity', () => {
   it('produces zero findings for the real skill-evaluator plugin', () => {
     const pluginDir = path.join(TEMPLATE_REPO, 'plugins', 'skill-evaluator');
 

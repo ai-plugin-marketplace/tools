@@ -30,11 +30,11 @@ import {
   ORACLE_KIRO_DIR,
   SYNTH_PLUGIN_NAME,
   synthPluginRepo,
-  templateAvailable,
 } from '../test-support/synth-plugin.js';
 import type { SynthRepo } from '../test-support/synth-plugin.js';
+import { TEMPLATE_REPO_AVAILABLE } from '../test-support/template-repo.js';
 
-const describeMaybe = templateAvailable() ? describe : describe.skip;
+const describeMaybe = TEMPLATE_REPO_AVAILABLE ? describe : describe.skip;
 
 // ---------------------------------------------------------------------------
 // Helpers

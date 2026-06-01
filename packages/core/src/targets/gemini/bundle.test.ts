@@ -18,7 +18,7 @@ import * as path from 'node:path';
 
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
-import { TEMPLATE_REPO } from '../../test-support/template-repo.js';
+import { TEMPLATE_REPO, TEMPLATE_REPO_AVAILABLE } from '../../test-support/template-repo.js';
 import { bundleGeminiPlugin } from './bundle.js';
 
 // ---------------------------------------------------------------------------
@@ -67,7 +67,7 @@ function collectRelativePaths(dir: string): string[] {
 // Parity test: bundleGeminiPlugin must reproduce the committed oracle
 // ---------------------------------------------------------------------------
 
-describe('bundleGeminiPlugin — parity with dist/gemini/skill-evaluator', () => {
+describe.skipIf(!TEMPLATE_REPO_AVAILABLE)('bundleGeminiPlugin — parity with dist/gemini/skill-evaluator', () => {
   it('produces the exact same set of file paths as the oracle', () => {
     const destDir = path.join(tmpDir, 'out');
     bundleGeminiPlugin(PLUGIN_SRC, destDir);
@@ -112,7 +112,7 @@ describe('bundleGeminiPlugin — parity with dist/gemini/skill-evaluator', () =>
 // destDir clearing behaviour
 // ---------------------------------------------------------------------------
 
-describe('bundleGeminiPlugin — destDir handling', () => {
+describe.skipIf(!TEMPLATE_REPO_AVAILABLE)('bundleGeminiPlugin — destDir handling', () => {
   it('clears existing content in destDir before writing', () => {
     const destDir = path.join(tmpDir, 'out');
 
@@ -141,7 +141,7 @@ describe('bundleGeminiPlugin — destDir handling', () => {
 // emitted list
 // ---------------------------------------------------------------------------
 
-describe('bundleGeminiPlugin — emitted paths', () => {
+describe.skipIf(!TEMPLATE_REPO_AVAILABLE)('bundleGeminiPlugin — emitted paths', () => {
   it('includes the expected canonical file paths for skill-evaluator', () => {
     const destDir = path.join(tmpDir, 'out');
     const { emitted } = bundleGeminiPlugin(PLUGIN_SRC, destDir);

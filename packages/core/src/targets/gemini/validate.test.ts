@@ -11,7 +11,7 @@ import * as path from 'node:path';
 
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
-import { TEMPLATE_REPO } from '../../test-support/template-repo.js';
+import { TEMPLATE_REPO, TEMPLATE_REPO_AVAILABLE } from '../../test-support/template-repo.js';
 import { validateGeminiPlugin } from './validate.js';
 
 // ---------------------------------------------------------------------------
@@ -79,7 +79,7 @@ function writeGeminiExtensionJson(pluginDir: string, data: unknown): void {
 // ---------------------------------------------------------------------------
 
 describe('validateGeminiPlugin', () => {
-  describe('skill-evaluator parity', () => {
+  describe.skipIf(!TEMPLATE_REPO_AVAILABLE)('skill-evaluator parity', () => {
     it('produces zero findings for the real skill-evaluator plugin', () => {
       const findings = validateGeminiPlugin(SKILL_EVALUATOR_DIR);
       expect(findings).toEqual([]);

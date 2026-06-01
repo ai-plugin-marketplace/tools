@@ -17,7 +17,7 @@ import * as path from 'node:path';
 
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
-import { TEMPLATE_REPO } from '../../test-support/template-repo.js';
+import { TEMPLATE_REPO, TEMPLATE_REPO_AVAILABLE } from '../../test-support/template-repo.js';
 import { validateVercelPlugin } from './validate.js';
 
 // ---------------------------------------------------------------------------
@@ -283,7 +283,7 @@ describe('validateVercelPlugin', () => {
   // Parity: zero findings on the real skill-evaluator plugin
   // -------------------------------------------------------------------------
 
-  describe('parity with skill-evaluator', () => {
+  describe.skipIf(!TEMPLATE_REPO_AVAILABLE)('parity with skill-evaluator', () => {
     it('returns zero findings when run against a copy of the skill-evaluator plugin', () => {
       const pluginCopy = path.join(tmpDir, 'skill-evaluator');
       copyDirRecursive(SKILL_EVALUATOR_DIR, pluginCopy);

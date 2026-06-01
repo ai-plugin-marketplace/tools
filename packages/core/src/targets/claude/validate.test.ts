@@ -17,7 +17,7 @@ import * as path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
 import type { Finding } from '../../pipeline/types.js';
-import { TEMPLATE_REPO } from '../../test-support/template-repo.js';
+import { TEMPLATE_REPO, TEMPLATE_REPO_AVAILABLE } from '../../test-support/template-repo.js';
 import { validateClaudePlugin } from './validate.js';
 
 // ---------------------------------------------------------------------------
@@ -558,7 +558,7 @@ describe('validateClaudePlugin', () => {
   // Parity: zero findings on the real skill-evaluator plugin
   // -------------------------------------------------------------------------
 
-  describe('parity with skill-evaluator', () => {
+  describe.skipIf(!TEMPLATE_REPO_AVAILABLE)('parity with skill-evaluator', () => {
     it('returns zero findings when run against a copy of the skill-evaluator plugin with generated artifacts', () => {
       // Copy the real plugin into a temp directory so we can add the generated
       // hooks/claude.json artifact without modifying the template repo.

@@ -17,7 +17,7 @@ import * as path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
 import type { Finding } from '../../pipeline/types.js';
-import { TEMPLATE_REPO } from '../../test-support/template-repo.js';
+import { TEMPLATE_REPO, TEMPLATE_REPO_AVAILABLE } from '../../test-support/template-repo.js';
 import { validateKiroPlugin } from './validate.js';
 
 // ---------------------------------------------------------------------------
@@ -578,7 +578,7 @@ tools:
   // Parity: zero findings on the real skill-evaluator plugin
   // -------------------------------------------------------------------------
 
-  describe('parity with skill-evaluator', () => {
+  describe.skipIf(!TEMPLATE_REPO_AVAILABLE)('parity with skill-evaluator', () => {
     it('returns zero findings when run against a copy of the skill-evaluator plugin', () => {
       // Copy the real skill-evaluator into a temp directory so we can use its
       // real Kiro files (POWER.md, mcp.json, agents/) without modifying the template repo.

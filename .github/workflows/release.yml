@@ -7,6 +7,9 @@ on:
 
 concurrency: ${{ github.workflow }}-${{ github.ref }}
 
+env:
+  HUSKY: 0 # changesets may commit during versioning; skip hooks in CI
+
 permissions:
   contents: write
   pull-requests: write

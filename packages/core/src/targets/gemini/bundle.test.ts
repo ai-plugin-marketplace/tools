@@ -67,46 +67,49 @@ function collectRelativePaths(dir: string): string[] {
 // Parity test: bundleGeminiPlugin must reproduce the committed oracle
 // ---------------------------------------------------------------------------
 
-describe.skipIf(!TEMPLATE_REPO_AVAILABLE)('bundleGeminiPlugin — parity with dist/gemini/skill-evaluator', () => {
-  it('produces the exact same set of file paths as the oracle', () => {
-    const destDir = path.join(tmpDir, 'out');
-    bundleGeminiPlugin(PLUGIN_SRC, destDir);
+describe.skipIf(!TEMPLATE_REPO_AVAILABLE)(
+  'bundleGeminiPlugin — parity with dist/gemini/skill-evaluator',
+  () => {
+    it('produces the exact same set of file paths as the oracle', () => {
+      const destDir = path.join(tmpDir, 'out');
+      bundleGeminiPlugin(PLUGIN_SRC, destDir);
 
-    const actual = collectRelativePaths(destDir);
-    const expected = collectRelativePaths(ORACLE_DIR);
+      const actual = collectRelativePaths(destDir);
+      const expected = collectRelativePaths(ORACLE_DIR);
 
-    expect(actual).toStrictEqual(expected);
-  });
+      expect(actual).toStrictEqual(expected);
+    });
 
-  it('produces byte-identical content for every file compared to the oracle', () => {
-    const destDir = path.join(tmpDir, 'out');
-    bundleGeminiPlugin(PLUGIN_SRC, destDir);
+    it('produces byte-identical content for every file compared to the oracle', () => {
+      const destDir = path.join(tmpDir, 'out');
+      bundleGeminiPlugin(PLUGIN_SRC, destDir);
 
-    const filePaths = collectRelativePaths(destDir);
-    for (const rel of filePaths) {
-      const actualContent = fs.readFileSync(path.join(destDir, rel), 'utf-8');
-      const expectedContent = fs.readFileSync(path.join(ORACLE_DIR, rel), 'utf-8');
-      expect(actualContent, `content mismatch for ${rel}`).toBe(expectedContent);
-    }
-  });
+      const filePaths = collectRelativePaths(destDir);
+      for (const rel of filePaths) {
+        const actualContent = fs.readFileSync(path.join(destDir, rel), 'utf-8');
+        const expectedContent = fs.readFileSync(path.join(ORACLE_DIR, rel), 'utf-8');
+        expect(actualContent, `content mismatch for ${rel}`).toBe(expectedContent);
+      }
+    });
 
-  it('returns an emitted list that matches all file paths under destDir', () => {
-    const destDir = path.join(tmpDir, 'out');
-    const { emitted } = bundleGeminiPlugin(PLUGIN_SRC, destDir);
+    it('returns an emitted list that matches all file paths under destDir', () => {
+      const destDir = path.join(tmpDir, 'out');
+      const { emitted } = bundleGeminiPlugin(PLUGIN_SRC, destDir);
 
-    const actual = [...emitted].sort();
-    const expected = collectRelativePaths(destDir);
+      const actual = [...emitted].sort();
+      const expected = collectRelativePaths(destDir);
 
-    expect(actual).toStrictEqual(expected);
-  });
+      expect(actual).toStrictEqual(expected);
+    });
 
-  it('returns droppedToolsByAgent as empty (all skill-evaluator Claude tools map)', () => {
-    const destDir = path.join(tmpDir, 'out');
-    const { droppedToolsByAgent } = bundleGeminiPlugin(PLUGIN_SRC, destDir);
+    it('returns droppedToolsByAgent as empty (all skill-evaluator Claude tools map)', () => {
+      const destDir = path.join(tmpDir, 'out');
+      const { droppedToolsByAgent } = bundleGeminiPlugin(PLUGIN_SRC, destDir);
 
-    expect(droppedToolsByAgent).toStrictEqual({});
-  });
-});
+      expect(droppedToolsByAgent).toStrictEqual({});
+    });
+  },
+);
 
 // ---------------------------------------------------------------------------
 // destDir clearing behaviour

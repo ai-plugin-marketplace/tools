@@ -25,6 +25,4 @@ export const TEMPLATE_REPO: string =
  * True when the template checkout exists on disk. Use as a `describe.skipIf` guard.
  * Parity tests are skipped in CI where the template repo is not checked out.
  */
-export const TEMPLATE_REPO_AVAILABLE: boolean = fs.existsSync(
-  path.join(TEMPLATE_REPO, 'plugins'),
-);
+export const TEMPLATE_REPO_AVAILABLE: boolean = fs.existsSync(path.join(TEMPLATE_REPO, 'plugins'));

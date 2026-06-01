@@ -117,8 +117,3 @@ export function synthPluginRepo(
     },
   };
 }
-
-/** True iff the developer-machine template checkout is available. */
-export function templateAvailable(): boolean {
-  return fs.existsSync(TEMPLATE_PLUGIN_DIR);
-}

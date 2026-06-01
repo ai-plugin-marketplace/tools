@@ -1,5 +1,7 @@
 {
   "$schema": "https://unpkg.com/knip@6/schema.json",
+  "ignoreBinaries": ["husky", "lint-staged"],
+  "ignoreDependencies": ["husky", "lint-staged"],
   "workspaces": {
     "packages/core": {
       "entry": ["src/**/*.test.ts"],

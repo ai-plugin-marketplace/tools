@@ -39,11 +39,12 @@ jobs:
         run: pnpm run build
 
       - name: Configure npm auth
-        # Write the token directly into the user .npmrc so pnpm publish can authenticate.
-        # The scope ensures the @ai-plugin-marketplace org on npmjs.com is covered.
+        # setup-node sets NPM_CONFIG_USERCONFIG to a temp file, overriding ~/.npmrc.
+        # Write the token into that file (and fall back to ~/.npmrc if unset).
         run: |
-          echo "//registry.npmjs.org/:_authToken=${NPM_TOKEN}" >> ~/.npmrc
-          echo "@ai-plugin-marketplace:registry=https://registry.npmjs.org" >> ~/.npmrc
+          NPMRC="${NPM_CONFIG_USERCONFIG:-$HOME/.npmrc}"
+          echo "//registry.npmjs.org/:_authToken=${NPM_TOKEN}" >> "$NPMRC"
+          echo "@ai-plugin-marketplace:registry=https://registry.npmjs.org" >> "$NPMRC"
         env:
           NPM_TOKEN: ${{ secrets.NPM_TOKEN }}
 

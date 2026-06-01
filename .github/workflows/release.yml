@@ -29,11 +29,23 @@ jobs:
         with:
           node-version: 24
           cache: pnpm
+          # registry-url causes setup-node to write `//registry.npmjs.org/:_authToken=${NODE_AUTH_TOKEN}`
+          # into the project .npmrc, which npm reads when publishing.
+          registry-url: "https://registry.npmjs.org"
 
       - run: pnpm install --frozen-lockfile
 
       - name: Build
         run: pnpm run build
+
+      - name: Configure npm auth
+        # Write the token directly into the user .npmrc so pnpm publish can authenticate.
+        # The scope ensures the @ai-plugin-marketplace org on npmjs.com is covered.
+        run: |
+          echo "//registry.npmjs.org/:_authToken=${NPM_TOKEN}" >> ~/.npmrc
+          echo "@ai-plugin-marketplace:registry=https://registry.npmjs.org" >> ~/.npmrc
+        env:
+          NPM_TOKEN: ${{ secrets.NPM_TOKEN }}
 
       - name: Create Release Pull Request or Publish
         uses: changesets/action@v1
@@ -42,3 +54,4 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           NPM_TOKEN: ${{ secrets.NPM_TOKEN }}
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}

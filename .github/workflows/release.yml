@@ -39,14 +39,13 @@ jobs:
         run: pnpm run build
 
       - name: Configure npm auth
-        # setup-node sets NPM_CONFIG_USERCONFIG to a temp file, overriding ~/.npmrc.
-        # Write the token into that file (and fall back to ~/.npmrc if unset).
+        # setup-node sets NPM_CONFIG_USERCONFIG to a temp .npmrc and NODE_AUTH_TOKEN to the
+        # token value (from registry-url + NODE_AUTH_TOKEN env). Write auth into that file so
+        # pnpm publish (called by changeset publish) can authenticate with the registry.
         run: |
           NPMRC="${NPM_CONFIG_USERCONFIG:-$HOME/.npmrc}"
-          echo "//registry.npmjs.org/:_authToken=${NPM_TOKEN}" >> "$NPMRC"
+          echo "//registry.npmjs.org/:_authToken=${NODE_AUTH_TOKEN}" >> "$NPMRC"
           echo "@ai-plugin-marketplace:registry=https://registry.npmjs.org" >> "$NPMRC"
-        env:
-          NPM_TOKEN: ${{ secrets.NPM_TOKEN }}
 
       - name: Create Release Pull Request or Publish
         uses: changesets/action@v1

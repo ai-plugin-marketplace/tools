@@ -32,7 +32,7 @@ jobs:
           cache: pnpm
           # registry-url causes setup-node to write `//registry.npmjs.org/:_authToken=${NODE_AUTH_TOKEN}`
           # into the project .npmrc, which npm reads when publishing.
-          registry-url: "https://registry.npmjs.org"
+          registry-url: 'https://registry.npmjs.org'
 
       - run: pnpm install --frozen-lockfile
 

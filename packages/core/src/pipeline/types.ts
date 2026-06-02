@@ -128,6 +128,7 @@ export interface ValidationResult {
  */
 export type FindingCode =
   | 'envelope-invalid'
+  | 'repo-config-invalid'
   | 'envelope-adherence'
   | 'schema-invalid'
   | 'name-consistency'

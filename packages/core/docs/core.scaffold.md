@@ -4,7 +4,7 @@
 
 ## scaffold() function
 
-Scaffold a new plugin under `<cwd>/plugins/<name>`<!-- -->. The plugins directory is derived from the current working directory, matching how `aipm scaffold` is invoked from a template repo root.
+Scaffold a new plugin under the cwd's configured plugins root (`<cwd>/plugins/<name>` by default, or the relocated `pluginsRoot` from an `aipm.repo.ts`<!-- -->). The plugins directory is derived from the current working directory, matching how `aipm scaffold` is invoked from a repo root.
 
 **Signature:**
 

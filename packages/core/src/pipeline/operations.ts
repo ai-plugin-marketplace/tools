@@ -14,6 +14,7 @@ import * as path from 'node:path';
 
 import { runBuild } from './build.js';
 import { runInit } from './init.js';
+import { loadRepoConfig } from './load-config.js';
 import { runScaffold, runAddTarget, runCheckSupport } from './scaffold.js';
 import { TARGET_IDS } from './types.js';
 import { runValidate } from './validate.js';
@@ -69,13 +70,17 @@ export function init(targetDir: string, opts?: InitOptions): Promise<void> {
 }
 
 /**
- * Scaffold a new plugin under `<cwd>/plugins/<name>`. The plugins directory is derived from the
- * current working directory, matching how `aipm scaffold` is invoked from a template repo root.
+ * Scaffold a new plugin under the cwd's configured plugins root (`<cwd>/plugins/<name>` by
+ * default, or the relocated `pluginsRoot` from an `aipm.repo.ts`). The plugins directory is
+ * derived from the current working directory, matching how `aipm scaffold` is invoked from a repo
+ * root.
  *
  * @public
  */
-export function scaffold(name: string, opts: ScaffoldOptions = {}): Promise<void> {
-  const pluginsDir = path.join(process.cwd(), 'plugins');
+export async function scaffold(name: string, opts: ScaffoldOptions = {}): Promise<void> {
+  const cwd = process.cwd();
+  const repoConfig = await loadRepoConfig(cwd);
+  const pluginsDir = path.join(cwd, repoConfig.pluginsRoot);
   return runScaffold(name, pluginsDir, opts);
 }
 

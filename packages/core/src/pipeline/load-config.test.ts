@@ -14,7 +14,13 @@ import * as path from 'node:path';
 
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
-import { ConfigLoadError, loadPluginConfig } from './load-config.js';
+import {
+  ConfigLoadError,
+  DEFAULT_REPO_CONFIG,
+  hasRepoConfig,
+  loadPluginConfig,
+  loadRepoConfig,
+} from './load-config.js';
 
 let pluginDir: string;
 
@@ -29,6 +35,11 @@ afterEach(() => {
 /** Write an `aipm.config.ts` with the given source body. */
 function writeConfig(source: string): void {
   fs.writeFileSync(path.join(pluginDir, 'aipm.config.ts'), source, 'utf-8');
+}
+
+/** Write an `aipm.repo.ts` with the given source body (reusing pluginDir as a repo root). */
+function writeRepoConfig(source: string): void {
+  fs.writeFileSync(path.join(pluginDir, 'aipm.repo.ts'), source, 'utf-8');
 }
 
 describe('loadPluginConfig — success', () => {
@@ -84,5 +95,48 @@ describe('loadPluginConfig — failure modes', () => {
   it('throws ConfigLoadError when the module fails to import (syntax error)', async () => {
     writeConfig(`export default { this is not valid typescript`);
     await expect(loadPluginConfig(pluginDir)).rejects.toBeInstanceOf(ConfigLoadError);
+  });
+});
+
+describe('loadRepoConfig', () => {
+  it('returns the historical defaults when no aipm.repo.ts is present', async () => {
+    expect(hasRepoConfig(pluginDir)).toBe(false);
+    await expect(loadRepoConfig(pluginDir)).resolves.toStrictEqual(DEFAULT_REPO_CONFIG);
+  });
+
+  it('applies defaults for omitted fields', async () => {
+    writeRepoConfig(`export default { pluginsRoot: 'agent-plugins' };\n`);
+    expect(hasRepoConfig(pluginDir)).toBe(true);
+    await expect(loadRepoConfig(pluginDir)).resolves.toStrictEqual({
+      pluginsRoot: 'agent-plugins',
+      distDir: 'dist',
+    });
+  });
+
+  it('loads a config that imports defineRepoConfig from the core package', async () => {
+    writeRepoConfig(
+      `import { defineRepoConfig } from '@ai-plugin-marketplace/core';\n` +
+        `export default defineRepoConfig({ pluginsRoot: 'a/plugins', distDir: 'a/dist' });\n`,
+    );
+    await expect(loadRepoConfig(pluginDir)).resolves.toStrictEqual({
+      pluginsRoot: 'a/plugins',
+      distDir: 'a/dist',
+    });
+  });
+
+  it('throws ConfigLoadError for an absolute pluginsRoot', async () => {
+    writeRepoConfig(`export default { pluginsRoot: '/abs' };\n`);
+    await expect(loadRepoConfig(pluginDir)).rejects.toBeInstanceOf(ConfigLoadError);
+    await expect(loadRepoConfig(pluginDir)).rejects.toThrow(/Invalid aipm\.repo/);
+  });
+
+  it('throws ConfigLoadError for a pluginsRoot with a .. escape', async () => {
+    writeRepoConfig(`export default { pluginsRoot: '../escape' };\n`);
+    await expect(loadRepoConfig(pluginDir)).rejects.toBeInstanceOf(ConfigLoadError);
+  });
+
+  it('throws ConfigLoadError for an unknown key (strict schema)', async () => {
+    writeRepoConfig(`export default { plugins: 'agent-plugins' };\n`);
+    await expect(loadRepoConfig(pluginDir)).rejects.toBeInstanceOf(ConfigLoadError);
   });
 });

@@ -225,3 +225,24 @@ describeMaybe('runValidate — repo root with multiple plugins', () => {
     expect(result.passed).toBe(true);
   });
 });
+
+describeMaybe('runValidate — repo config (aipm.repo.ts)', () => {
+  let repo: SynthRepo;
+  afterEach(() => {
+    repo.cleanup();
+  });
+
+  it('surfaces an invalid aipm.repo.ts as a single repo-config-invalid finding', async () => {
+    repo = synthPluginRepo(ALL_SYNTH_TARGETS);
+    // An absolute pluginsRoot is rejected by defineRepoConfig.
+    fs.writeFileSync(
+      path.join(repo.repoRoot, 'aipm.repo.ts'),
+      `export default { pluginsRoot: '/absolute' };\n`,
+      'utf-8',
+    );
+
+    const result = await runValidate(repo.repoRoot, { ci: true });
+    expect(codes(result.findings)).toStrictEqual(['repo-config-invalid']);
+    expect(result.passed).toBe(false);
+  });
+});

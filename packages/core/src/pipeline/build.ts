@@ -262,7 +262,7 @@ async function buildOnePlugin(pluginDir: string, distDir: string): Promise<Build
  *   a transform fails, or (when `failFast`) post-build validation reports hard findings.
  */
 export async function runBuild(targetPath: string, opts?: BuildOptions): Promise<BuildResult[]> {
-  const { pluginDirs, distDir } = discoverPlugins(targetPath);
+  const { pluginDirs, distDir } = await discoverPlugins(targetPath);
 
   const results: BuildResult[] = [];
   for (const pluginDir of pluginDirs) {

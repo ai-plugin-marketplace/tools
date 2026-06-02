@@ -25,11 +25,18 @@ import { fileURLToPath } from 'node:url';
 
 import { createJiti } from 'jiti';
 
-import { defineConfig } from '../config.js';
-import type { AipmConfig, AipmConfigInput } from '../config.js';
+import { defineConfig, defineRepoConfig } from '../config.js';
+import type { AipmConfig, AipmConfigInput, AipmRepoConfigInput } from '../config.js';
 
 /** The canonical config filename every plugin must provide (§6.1). */
 export const AIPM_CONFIG_FILENAME = 'aipm.config.ts';
+
+/**
+ * Optional repo-level config filename. When present at a repo root it relocates the plugins/dist
+ * roots (embedded-marketplace support); when absent the toolkit uses the historical defaults.
+ * Module-private — callers use {@link hasRepoConfig}/{@link loadRepoConfig} rather than the name.
+ */
+const AIPM_REPO_CONFIG_FILENAME = 'aipm.repo.ts';
 
 /** The npm specifier a plugin's `aipm.config.ts` imports `defineConfig` from. */
 const CORE_PACKAGE_SPECIFIER = '@ai-plugin-marketplace/core';
@@ -64,6 +71,42 @@ function configPathFor(pluginDir: string): string {
 }
 
 /**
+ * Transpile-import a config module's `default` export via jiti, with the core package specifier
+ * aliased to this package's entrypoint (so a bare `import '@ai-plugin-marketplace/core'` resolves
+ * regardless of where the config file lives). Shared by {@link loadPluginConfig} and
+ * {@link loadRepoConfig}.
+ *
+ * @throws {ConfigLoadError} If the module fails to import or has no usable default export.
+ */
+async function importDefaultExport(configPath: string, filename: string): Promise<unknown> {
+  const jiti = createJiti(import.meta.url, {
+    alias: { [CORE_PACKAGE_SPECIFIER]: corePackageEntrypoint() },
+    // Disable the default↔namespace interop so a config with no `default` export reads as a
+    // genuinely-absent default rather than jiti synthesizing one from the namespace.
+    interopDefault: false,
+    // Disable caches so repeated loads (e.g. freshness re-reads) see current disk state.
+    moduleCache: false,
+    fsCache: false,
+  });
+
+  let mod: Record<string, unknown>;
+  try {
+    mod = await jiti.import<Record<string, unknown>>(configPath);
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    throw new ConfigLoadError(`Failed to import ${filename}: ${message}`, { cause: err });
+  }
+
+  const defaultExport = mod['default'];
+  if (defaultExport === undefined || defaultExport === null) {
+    throw new ConfigLoadError(
+      `${filename} at ${configPath} has no default export. Export the result of the matching \`define*({...})\` call as default.`,
+    );
+  }
+  return defaultExport;
+}
+
+/**
  * Load and validate a plugin's `aipm.config.ts`, returning the branded {@link AipmConfig}.
  *
  * The on-disk module's `default` export is re-validated through {@link defineConfig} so callers
@@ -84,32 +127,7 @@ export async function loadPluginConfig(pluginDir: string): Promise<AipmConfig> {
     );
   }
 
-  const jiti = createJiti(import.meta.url, {
-    alias: { [CORE_PACKAGE_SPECIFIER]: corePackageEntrypoint() },
-    // Disable the default↔namespace interop so a config with no `default` export reads as a
-    // genuinely-absent default rather than jiti synthesizing one from the namespace.
-    interopDefault: false,
-    // Disable caches so repeated loads (e.g. freshness re-reads) see current disk state.
-    moduleCache: false,
-    fsCache: false,
-  });
-
-  let mod: Record<string, unknown>;
-  try {
-    mod = await jiti.import<Record<string, unknown>>(configPath);
-  } catch (err) {
-    const message = err instanceof Error ? err.message : String(err);
-    throw new ConfigLoadError(`Failed to import ${AIPM_CONFIG_FILENAME}: ${message}`, {
-      cause: err,
-    });
-  }
-
-  const defaultExport = mod['default'];
-  if (defaultExport === undefined || defaultExport === null) {
-    throw new ConfigLoadError(
-      `${AIPM_CONFIG_FILENAME} in ${pluginDir} has no default export. Export the result of \`defineConfig({...})\` as default.`,
-    );
-  }
+  const defaultExport = await importDefaultExport(configPath, AIPM_CONFIG_FILENAME);
 
   // Re-validate through defineConfig so the result is a branded AipmConfig. defineConfig throws
   // a ZodError on malformed input; wrap it so callers get a single ConfigLoadError type.
@@ -118,5 +136,53 @@ export async function loadPluginConfig(pluginDir: string): Promise<AipmConfig> {
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
     throw new ConfigLoadError(`Invalid ${AIPM_CONFIG_FILENAME}: ${message}`, { cause: err });
+  }
+}
+
+/**
+ * Resolved repo-level configuration: the plugins/dist roots after defaults are applied. These are
+ * repo-root-relative directory names that {@link discoverPlugins} joins onto the repo root.
+ */
+export interface ResolvedRepoConfig {
+  /** Directory (relative to the repo root) holding plugin folders. Default: `'plugins'`. */
+  pluginsRoot: string;
+  /** Directory (relative to the repo root) for generated dist bundles. Default: `'dist'`. */
+  distDir: string;
+}
+
+/** The resolved config used when no `aipm.repo.ts` is present — i.e. the historical topology. */
+export const DEFAULT_REPO_CONFIG: ResolvedRepoConfig = { pluginsRoot: 'plugins', distDir: 'dist' };
+
+/** True iff `repoRoot` contains an `aipm.repo.ts`. */
+export function hasRepoConfig(repoRoot: string): boolean {
+  return fs.existsSync(path.join(repoRoot, AIPM_REPO_CONFIG_FILENAME));
+}
+
+/**
+ * Load the optional `aipm.repo.ts` at `repoRoot`, returning the resolved plugins/dist roots.
+ *
+ * When the file is **absent**, returns {@link DEFAULT_REPO_CONFIG} — so a repo with no repo
+ * config is byte-identical to the historical behavior. When **present**, the module's `default`
+ * export is re-validated through `defineRepoConfig` (applying defaults, rejecting absolute/`..`
+ * paths and unknown keys).
+ *
+ * @param repoRoot - Absolute path to the repo root.
+ * @returns The resolved repo config.
+ * @throws {ConfigLoadError} If the file exists but cannot be imported or fails validation.
+ */
+export async function loadRepoConfig(repoRoot: string): Promise<ResolvedRepoConfig> {
+  const configPath = path.join(repoRoot, AIPM_REPO_CONFIG_FILENAME);
+  if (!fs.existsSync(configPath)) {
+    return { ...DEFAULT_REPO_CONFIG };
+  }
+
+  const defaultExport = await importDefaultExport(configPath, AIPM_REPO_CONFIG_FILENAME);
+
+  try {
+    const config = defineRepoConfig(defaultExport as AipmRepoConfigInput);
+    return { pluginsRoot: config.pluginsRoot, distDir: config.distDir };
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    throw new ConfigLoadError(`Invalid ${AIPM_REPO_CONFIG_FILENAME}: ${message}`, { cause: err });
   }
 }

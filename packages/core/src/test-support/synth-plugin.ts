@@ -3,20 +3,30 @@
  * `aipm.config.ts` and marketplace files, so the build/validate orchestrators have a complete
  * plugin to operate on.
  *
- * The real template plugin `plugins/skill-evaluator/` does not yet ship an `aipm.config.ts`
- * (Phase B adds it), so orchestrator tests must construct one. This helper recursively copies
- * `${TEMPLATE_REPO}/plugins/skill-evaluator`, writes a config with the requested targets, and
- * copies both marketplace.json files to the temp repo root so marketplace-registration passes.
+ * The synthesized repo must represent author-authored **source** state, not a post-build state:
+ * this helper recursively copies `${TEMPLATE_REPO}/plugins/skill-evaluator`, then strips every
+ * toolkit-GENERATED artifact from the copy (see {@link stripGeneratedArtifacts}) so the build
+ * under test is the only thing that (re)creates them. It writes an `aipm.config.ts` declaring the
+ * requested targets — overwriting the one the template plugin happens to ship, to control the
+ * support envelope per test — and copies both marketplace.json files to the temp repo root so
+ * marketplace-registration passes.
+ *
+ * Without the strip, the committed generated hook JSONs (`hooks/claude.json`, `hooks/hooks.json`)
+ * would be copied in verbatim, and "no mechanical output" assertions (e.g. building only
+ * `cursor`/`vercel`) would see files the fixture itself supplied rather than ones the build
+ * emitted — a false pass-or-fail unrelated to build behavior.
  *
  * Developer-machine-only: depends on a local template checkout (see {@link TEMPLATE_REPO}).
  *
  * @see docs/specs/architecture.md §6.1 (aipm.config.ts), §4.4 (marketplace registry)
+ * @see docs/specs/architecture.md §4.3 (author-authored vs toolkit-generated — sentinel carriers)
  */
 
 import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
 
+import { hasSentinel } from '../pipeline/sentinel.js';
 import type { TargetId } from '../pipeline/types.js';
 import { TEMPLATE_REPO } from './template-repo.js';
 
@@ -63,6 +73,48 @@ function copyDir(src: string, dest: string): void {
   }
 }
 
+/** Suffix of a sidecar sentinel file (`<artifact>.generated`, §4.3). */
+const SIDECAR_SUFFIX = '.generated';
+
+/**
+ * Whether a copied file is a toolkit-GENERATED artifact (§4.3) — identified by its sentinel,
+ * the same mechanism the freshness check uses to tell generated files from hand-authored ones:
+ *
+ * - a `<artifact>.generated` sidecar sentinel file; or
+ * - a `_generated` JSON-field sentinel (the hook JSON carrier); or
+ * - an inline-comment sentinel (plain-text generated files).
+ *
+ * Binary or non-text files simply fail the string-based sentinel checks and are kept.
+ */
+function isGeneratedArtifact(absPath: string): boolean {
+  if (absPath.endsWith(SIDECAR_SUFFIX)) return true;
+  const content = fs.readFileSync(absPath, 'utf-8');
+  return hasSentinel(content, 'json-field') || hasSentinel(content, 'inline');
+}
+
+/**
+ * Remove every toolkit-generated artifact under `pluginDir`, restoring the tree to author-authored
+ * source state. Called after {@link copyDir} so the build under test is the sole producer of
+ * generated files; see the module doc for why this matters. Returns the plugin-relative paths
+ * removed (sorted) — handy for assertions and debugging.
+ */
+export function stripGeneratedArtifacts(pluginDir: string): string[] {
+  const removed: string[] = [];
+  const walk = (dir: string): void => {
+    for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
+      const abs = path.join(dir, entry.name);
+      if (entry.isDirectory()) {
+        walk(abs);
+      } else if (isGeneratedArtifact(abs)) {
+        fs.rmSync(abs);
+        removed.push(path.relative(pluginDir, abs));
+      }
+    }
+  };
+  walk(pluginDir);
+  return removed.sort();
+}
+
 /** Render an `aipm.config.ts` source string for the given targets. */
 function renderAipmConfig(targets: readonly TargetId[], version = '0.1.0'): string {
   const targetList = targets.map((t) => `'${t}'`).join(', ');
@@ -91,7 +143,13 @@ export function synthPluginRepo(
 
   copyDir(TEMPLATE_PLUGIN_DIR, pluginDir);
 
-  // Write the config that the source plugin lacks.
+  // Strip build-generated artifacts so the copy is author-source state; the build under test is
+  // the sole producer of generated files (§4.3). Otherwise the committed hook JSONs would be
+  // copied in and "no mechanical output" assertions would observe the fixture, not the build.
+  stripGeneratedArtifacts(pluginDir);
+
+  // Write the config declaring the requested target envelope, overwriting whatever the template
+  // plugin ships so each test controls its own envelope.
   fs.writeFileSync(path.join(pluginDir, 'aipm.config.ts'), renderAipmConfig(targets), 'utf-8');
 
   // Copy marketplace files so marketplace-registration passes.

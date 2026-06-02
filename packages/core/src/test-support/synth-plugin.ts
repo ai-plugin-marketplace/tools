@@ -30,9 +30,10 @@ const TEMPLATE_PLUGIN_DIR = path.join(TEMPLATE_REPO, 'plugins', SYNTH_PLUGIN_NAM
 export const ORACLE_GEMINI_DIR = path.join(TEMPLATE_REPO, 'dist', 'gemini', SYNTH_PLUGIN_NAME);
 export const ORACLE_KIRO_DIR = path.join(TEMPLATE_REPO, 'dist', 'kiro', SYNTH_PLUGIN_NAME);
 
-/** Every target the real skill-evaluator plugin provides artifacts for. */
+/** Every target the synthesized skill-evaluator plugin provides artifacts for. */
 export const ALL_SYNTH_TARGETS: readonly TargetId[] = [
   'claude',
+  'codex',
   'cursor',
   'gemini',
   'kiro',
@@ -94,7 +95,20 @@ export function synthPluginRepo(
   // Write the config that the source plugin lacks.
   fs.writeFileSync(path.join(pluginDir, 'aipm.config.ts'), renderAipmConfig(targets), 'utf-8');
 
-  // Copy marketplace files so marketplace-registration passes.
+  // The template plugin does not ship a Codex manifest. Synthesize one (matching the directory
+  // basename so name-consistency passes) when codex is in the envelope.
+  if (targets.includes('codex')) {
+    const codexManifest = {
+      schemaVersion: '0.1.0',
+      name: SYNTH_PLUGIN_NAME,
+      version: '0.0.1',
+    };
+    const dest = path.join(pluginDir, '.codex-plugin', 'plugin.json');
+    fs.mkdirSync(path.dirname(dest), { recursive: true });
+    fs.writeFileSync(dest, `${JSON.stringify(codexManifest, null, 2)}\n`, 'utf-8');
+  }
+
+  // Copy the string-source marketplace files so marketplace-registration passes for claude/cursor.
   for (const marketplaceRel of [
     '.claude-plugin/marketplace.json',
     '.cursor-plugin/marketplace.json',
@@ -105,6 +119,27 @@ export function synthPluginRepo(
       fs.mkdirSync(path.dirname(dest), { recursive: true });
       fs.copyFileSync(src, dest);
     }
+  }
+
+  // The template repo has no Codex marketplace yet, so synthesize the object-source registry at
+  // `.agents/plugins/marketplace.json` (the Codex repo-marketplace location) when codex is in the
+  // envelope, so marketplace-registration passes for codex too.
+  if (targets.includes('codex')) {
+    const codexMarketplace = {
+      name: 'test-marketplace',
+      interface: { displayName: 'Test Marketplace' },
+      plugins: [
+        {
+          name: SYNTH_PLUGIN_NAME,
+          source: { source: 'local', path: `./plugins/${SYNTH_PLUGIN_NAME}` },
+          policy: { installation: 'AVAILABLE', authentication: 'ON_INSTALL' },
+          category: 'Productivity',
+        },
+      ],
+    };
+    const dest = path.join(repoRoot, '.agents', 'plugins', 'marketplace.json');
+    fs.mkdirSync(path.dirname(dest), { recursive: true });
+    fs.writeFileSync(dest, `${JSON.stringify(codexMarketplace, null, 2)}\n`, 'utf-8');
   }
 
   mutate?.(pluginDir, repoRoot);

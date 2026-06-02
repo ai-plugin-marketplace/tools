@@ -112,7 +112,7 @@ export interface SupportReport {
 }
 
 // @public
-export type TargetId = 'claude' | 'cursor' | 'gemini' | 'kiro' | 'vercel';
+export type TargetId = 'claude' | 'codex' | 'cursor' | 'gemini' | 'kiro' | 'vercel';
 
 // @public
 export function validate(targetPath: string, opts?: ValidateOptions): Promise<ValidationResult>;

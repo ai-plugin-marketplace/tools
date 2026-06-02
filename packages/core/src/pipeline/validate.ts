@@ -15,6 +15,7 @@ import { z } from 'zod';
 import { defineConfig } from '../config.js';
 import type { AipmConfigInput } from '../config.js';
 import { validateClaudePlugin } from '../targets/claude/validate.js';
+import { validateCodexPlugin } from '../targets/codex/validate.js';
 import { validateCursorPlugin } from '../targets/cursor/validate.js';
 import { validateGeminiPlugin } from '../targets/gemini/validate.js';
 import { validateKiroPlugin } from '../targets/kiro/validate.js';
@@ -45,6 +46,7 @@ const TARGET_OWNED_ARTIFACTS: Record<TargetId, string[]> = {
     'hooks/claude.yaml',
     'hooks/claude.json',
   ],
+  codex: ['.codex-plugin/plugin.json', '.codex-plugin'],
   cursor: ['.cursor-plugin/plugin.json', '.cursor-plugin'],
   gemini: ['gemini-extension.json', 'GEMINI.md'],
   kiro: ['POWER.md', 'mcp.json'],
@@ -53,10 +55,10 @@ const TARGET_OWNED_ARTIFACTS: Record<TargetId, string[]> = {
 
 /**
  * Shared artifacts that require at least one of the listed targets in the envelope.
- * `.mcp.json` is the Claude/Cursor MCP config format, shared between those two targets.
+ * `.mcp.json` is the Claude/Cursor/Codex MCP config format, shared between those targets.
  */
 const SHARED_ARTIFACTS: { file: string; anyOf: TargetId[] }[] = [
-  { file: '.mcp.json', anyOf: ['claude', 'cursor'] },
+  { file: '.mcp.json', anyOf: ['claude', 'codex', 'cursor'] },
 ];
 
 /**
@@ -66,6 +68,7 @@ const SHARED_ARTIFACTS: { file: string; anyOf: TargetId[] }[] = [
  */
 export const TARGET_MIN_REQUIRED: Record<TargetId, string[]> = {
   claude: ['.claude-plugin/plugin.json'],
+  codex: ['.codex-plugin/plugin.json'],
   cursor: ['.cursor-plugin/plugin.json'],
   gemini: ['gemini-extension.json'],
   kiro: ['POWER.md'],
@@ -76,8 +79,11 @@ export const TARGET_MIN_REQUIRED: Record<TargetId, string[]> = {
 // Internal helpers
 // ---------------------------------------------------------------------------
 
-/** Minimal Zod schema for marketplace.json. Loose to tolerate extra metadata fields. */
-const marketplaceSchema = z
+/**
+ * Minimal Zod schema for a string-source marketplace.json (Claude/Cursor). Loose to tolerate
+ * extra metadata fields. Each plugin entry's `source` is the canonical `./plugins/<name>` string.
+ */
+const stringSourceMarketplaceSchema = z
   .object({
     plugins: z.array(
       z
@@ -89,6 +95,59 @@ const marketplaceSchema = z
     ),
   })
   .loose();
+
+/**
+ * Minimal Zod schema for the Codex repo marketplace at `.agents/plugins/marketplace.json`. Its
+ * entries differ from Claude/Cursor: `source` is an object `{ source, path }` (the comparable
+ * path lives at `source.path`), plus `policy`/`category` metadata that is tolerated but not
+ * checked here. Loose to tolerate extra fields.
+ *
+ * @see https://developers.openai.com/codex/plugins/build
+ */
+const objectSourceMarketplaceSchema = z
+  .object({
+    plugins: z.array(
+      z
+        .object({
+          name: z.string(),
+          source: z
+            .object({
+              source: z.string(),
+              path: z.string(),
+            })
+            .loose(),
+        })
+        .loose(),
+    ),
+  })
+  .loose();
+
+/**
+ * A per-registry descriptor for {@link validateMarketplaceRegistration}. Each target's repo
+ * marketplace differs in file location and entry shape, so the descriptor captures both the path
+ * (relative to repo root) and a function that extracts the comparable source string from a parsed
+ * plugins array. The validator loop is otherwise identical across registries.
+ */
+/**
+ * Outcome of extracting a plugin's marketplace source. A discriminated union (rather than a
+ * `string | 'sentinel'` union, which a redundant-constituent lint rule would reject) so the
+ * `'found'` case can carry the comparable source string while the sentinels stay distinct:
+ *   - `parse-error`: the file did not match this registry's schema.
+ *   - `not-listed`: the file parsed but contains no entry named the queried plugin.
+ *   - `found`: an entry exists; `source` is the value to normalise and compare to `./plugins/<name>`.
+ */
+type SourceExtraction =
+  | { status: 'parse-error' }
+  | { status: 'not-listed' }
+  | { status: 'found'; source: string };
+
+interface MarketplaceRegistryDescriptor {
+  target: TargetId;
+  /** Path segments under the repo root locating this registry's marketplace.json. */
+  marketplaceRel: string[];
+  /** Parse the marketplace file and report whether the queried plugin is present, and its source. */
+  extractSource: (raw: unknown, pluginName: string) => SourceExtraction;
+}
 
 /** Minimal schema for MCP config files (.mcp.json / mcp.json). */
 const mcpConfigSchema = z
@@ -305,6 +364,23 @@ export function validateNameConsistency(
         }
         break;
       }
+      case 'codex': {
+        const manifestPath = path.join(pluginDir, '.codex-plugin/plugin.json');
+        if (!fs.existsSync(manifestPath)) break;
+        const manifest = tryReadJson(manifestPath);
+        const parsed = z.object({ name: z.string().optional() }).loose().safeParse(manifest);
+        if (!parsed.success || parsed.data.name === undefined) break;
+        if (parsed.data.name !== expectedName) {
+          findings.push(
+            hard(
+              'name-consistency',
+              expectedName,
+              `'.codex-plugin/plugin.json' has name '${parsed.data.name}' but plugin directory is '${expectedName}'.`,
+            ),
+          );
+        }
+        break;
+      }
       case 'cursor': {
         const manifestPath = path.join(pluginDir, '.cursor-plugin/plugin.json');
         if (!fs.existsSync(manifestPath)) break;
@@ -432,12 +508,67 @@ export function validateMcpKeySync(pluginDir: string, envelope: readonly TargetI
 // ---------------------------------------------------------------------------
 
 /**
+ * The marketplace registries this validator knows about, one descriptor per registry-backed
+ * target. Claude/Cursor use string-source entries at `.<target>-plugin/marketplace.json`; Codex
+ * uses an object-source entry (`source: { source, path }`) at `.agents/plugins/marketplace.json`.
+ *
+ * Keeping the per-registry differences (path + source extraction) in data lets the validation
+ * loop below stay a single, shape-agnostic pass rather than duplicating it per registry.
+ *
+ * @see https://developers.openai.com/codex/plugins/build
+ */
+const MARKETPLACE_REGISTRY_CHECKS: MarketplaceRegistryDescriptor[] = [
+  {
+    target: 'claude',
+    marketplaceRel: ['.claude-plugin', 'marketplace.json'],
+    extractSource: extractStringSource,
+  },
+  {
+    target: 'cursor',
+    marketplaceRel: ['.cursor-plugin', 'marketplace.json'],
+    extractSource: extractStringSource,
+  },
+  {
+    target: 'codex',
+    marketplaceRel: ['.agents', 'plugins', 'marketplace.json'],
+    extractSource: extractCodexSource,
+  },
+];
+
+/** Extract the string `source` of the matching entry from a string-source marketplace file. */
+function extractStringSource(raw: unknown, pluginName: string): SourceExtraction {
+  const parsed = stringSourceMarketplaceSchema.safeParse(raw);
+  if (!parsed.success) return { status: 'parse-error' };
+  const entry = parsed.data.plugins.find((p) => p.name === pluginName);
+  if (!entry) return { status: 'not-listed' };
+  return { status: 'found', source: entry.source };
+}
+
+/** Extract the matching entry's `source.path` from the Codex object-source marketplace file. */
+function extractCodexSource(raw: unknown, pluginName: string): SourceExtraction {
+  const parsed = objectSourceMarketplaceSchema.safeParse(raw);
+  if (!parsed.success) return { status: 'parse-error' };
+  const entry = parsed.data.plugins.find((p) => p.name === pluginName);
+  if (!entry) return { status: 'not-listed' };
+  return { status: 'found', source: entry.source.path };
+}
+
+/**
  * Verify the plugin is listed in the appropriate template-level marketplace.json files.
  *
- * - If `claude` is in the envelope, the plugin MUST appear in `<repoRoot>/.claude-plugin/marketplace.json`'s
- *   plugins array with name matching directory basename and source pointing at `./plugins/<name>`.
+ * - If `claude` is in the envelope, the plugin MUST appear in
+ *   `<repoRoot>/.claude-plugin/marketplace.json`'s plugins array with a string `source` pointing
+ *   at `./plugins/<name>`.
  * - If `cursor` is in the envelope, same check against `<repoRoot>/.cursor-plugin/marketplace.json`.
+ * - If `codex` is in the envelope, the plugin MUST appear in
+ *   `<repoRoot>/.agents/plugins/marketplace.json` with an object `source` whose `path` is
+ *   `./plugins/<name>`.
  * - If a target is NOT in the envelope, the plugin MUST NOT be listed in that marketplace.
+ *
+ * The per-registry path and source extraction are data-driven (see
+ * {@link MARKETPLACE_REGISTRY_CHECKS}); the loop body is identical across registries so the same
+ * `not-listed` / wrong-path / present-but-not-in-envelope findings are emitted regardless of
+ * source shape.
  *
  * Emits `marketplace-registration` findings.
  */
@@ -450,18 +581,13 @@ export function validateMarketplaceRegistration(
   const pluginName = path.basename(pluginDir);
   const envelopeSet = new Set(envelope);
 
-  const checks = [
-    {
-      target: 'claude' as TargetId,
-      marketplacePath: path.join(repoRoot, '.claude-plugin', 'marketplace.json'),
-    },
-    {
-      target: 'cursor' as TargetId,
-      marketplacePath: path.join(repoRoot, '.cursor-plugin', 'marketplace.json'),
-    },
-  ];
+  // Canonical expected form is `./plugins/<name>` per §4.4. Both `./plugins/<name>` and
+  // `plugins/<name>` are accepted (normalised by stripping a leading `./`).
+  const expectedSource = `./plugins/${pluginName}`;
+  const normalizedExpected = `plugins/${pluginName}`;
 
-  for (const { target, marketplacePath } of checks) {
+  for (const { target, marketplaceRel, extractSource } of MARKETPLACE_REGISTRY_CHECKS) {
+    const marketplacePath = path.join(repoRoot, ...marketplaceRel);
     const inEnvelope = envelopeSet.has(target);
 
     if (!fs.existsSync(marketplacePath)) {
@@ -480,9 +606,9 @@ export function validateMarketplaceRegistration(
     }
 
     const raw = tryReadJson(marketplacePath);
-    const parsed = marketplaceSchema.safeParse(raw);
+    const extraction = extractSource(raw, pluginName);
 
-    if (!parsed.success) {
+    if (extraction.status === 'parse-error') {
       if (inEnvelope) {
         findings.push(
           hard(
@@ -495,17 +621,8 @@ export function validateMarketplaceRegistration(
       continue;
     }
 
-    const { plugins } = parsed.data;
-
-    // Normalize: both `./plugins/<name>` and `plugins/<name>` are accepted
-    // The canonical expected form is `./plugins/<name>` per §4.4
-    const expectedSource = `./plugins/${pluginName}`;
-    const normalizedExpected = `plugins/${pluginName}`;
-
-    const matchingEntry = plugins.find((p) => p.name === pluginName);
-
     if (inEnvelope) {
-      if (!matchingEntry) {
+      if (extraction.status === 'not-listed') {
         findings.push(
           hard(
             'marketplace-registration',
@@ -515,16 +632,15 @@ export function validateMarketplaceRegistration(
           ),
         );
       } else {
-        // Entry exists — verify source
-        const normalizedActual = matchingEntry.source.startsWith('./')
-          ? matchingEntry.source.slice(2)
-          : matchingEntry.source;
+        // Entry exists — verify source (normalise a leading `./`).
+        const { source } = extraction;
+        const normalizedActual = source.startsWith('./') ? source.slice(2) : source;
         if (normalizedActual !== normalizedExpected) {
           findings.push(
             hard(
               'marketplace-registration',
               pluginName,
-              `Plugin '${pluginName}' in '${marketplacePath}' has source '${matchingEntry.source}' but expected '${expectedSource}'.`,
+              `Plugin '${pluginName}' in '${marketplacePath}' has source '${source}' but expected '${expectedSource}'.`,
               `Update the source to '${expectedSource}'.`,
             ),
           );
@@ -532,7 +648,7 @@ export function validateMarketplaceRegistration(
       }
     } else {
       // NOT in envelope — must not appear in marketplace
-      if (matchingEntry) {
+      if (extraction.status === 'found') {
         findings.push(
           hard(
             'marketplace-registration',
@@ -584,6 +700,7 @@ export function validateCrossTarget(
  */
 const TARGET_VALIDATORS: Record<TargetId, (pluginDir: string) => Finding[]> = {
   claude: validateClaudePlugin,
+  codex: validateCodexPlugin,
   cursor: validateCursorPlugin,
   gemini: validateGeminiPlugin,
   kiro: validateKiroPlugin,

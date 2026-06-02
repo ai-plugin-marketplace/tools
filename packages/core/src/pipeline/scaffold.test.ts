@@ -148,6 +148,7 @@ describe('runScaffold', () => {
       'README.md',
       'LICENSE',
       '.claude-plugin/plugin.json',
+      '.codex-plugin/plugin.json',
       '.cursor-plugin/plugin.json',
       'gemini-extension.json',
       'GEMINI.md',
@@ -287,6 +288,7 @@ describe('runCheckSupport', () => {
     const report = await runCheckSupport(pluginDir);
 
     const byTarget = new Map(report.suggestions.map((s) => [s.target, s.wouldNeed]));
+    expect(byTarget.get('codex')).toStrictEqual(['.codex-plugin/plugin.json']);
     expect(byTarget.get('cursor')).toStrictEqual(['.cursor-plugin/plugin.json']);
     expect(byTarget.get('gemini')).toStrictEqual(['gemini-extension.json']);
     expect(byTarget.get('kiro')).toStrictEqual(['POWER.md']);
@@ -404,6 +406,38 @@ describe('runScaffold — marketplace registration', () => {
     const raw = fs.readFileSync(path.join(tmpDir, '.claude-plugin', 'marketplace.json'), 'utf-8');
     expect(raw.endsWith('\n')).toBe(true);
     expect(raw).toContain('\n  "plugins"');
+  });
+
+  it('registers codex in .agents/plugins/marketplace.json with the object-source entry', async () => {
+    await runScaffold('my-plugin', pluginsRoot(), { targets: ['codex'] });
+
+    const codexRegPath = path.join(tmpDir, '.agents', 'plugins', 'marketplace.json');
+    expect(fs.existsSync(codexRegPath)).toBe(true);
+    const reg = JSON.parse(fs.readFileSync(codexRegPath, 'utf-8')) as {
+      plugins?: { name: string; source: { source: string; path: string }; category: string }[];
+    };
+    // Object source per developers.openai.com/codex/plugins/build, path normalised to ./plugins/<name>.
+    expect(reg.plugins).toStrictEqual([
+      {
+        name: 'my-plugin',
+        source: { source: 'local', path: './plugins/my-plugin' },
+        policy: { installation: 'AVAILABLE', authentication: 'ON_INSTALL' },
+        category: 'Productivity',
+      },
+    ]);
+    // Claude/Cursor string-source registries are NOT created for a codex-only envelope.
+    expect(registryExists(tmpDir, '.claude-plugin')).toBe(false);
+    expect(registryExists(tmpDir, '.cursor-plugin')).toBe(false);
+  });
+
+  it('makes the codex scaffold→validate happy path clean (zero marketplace-registration findings)', async () => {
+    await runScaffold('my-plugin', pluginsRoot(), { targets: ['claude', 'codex'] });
+
+    const result = await runValidate(tmpDir, { skipFreshness: true });
+    const registrationFindings = result.findings.filter(
+      (f) => f.code === 'marketplace-registration',
+    );
+    expect(registrationFindings).toStrictEqual([]);
   });
 });
 

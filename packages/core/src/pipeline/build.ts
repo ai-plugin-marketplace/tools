@@ -233,7 +233,7 @@ async function buildOnePlugin(pluginDir: string, distDir: string): Promise<Build
     }
   }
 
-  // cursor / vercel emit no mechanical build output — nothing to do.
+  // codex / cursor / vercel emit no mechanical build output — nothing to do.
 
   return {
     plugin: pluginName,

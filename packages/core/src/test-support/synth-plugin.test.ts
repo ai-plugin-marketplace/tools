@@ -64,9 +64,24 @@ describe('stripGeneratedArtifacts', () => {
     expect(fs.existsSync(path.join(dir, 'GENERATED.md'))).toBe(false);
   });
 
-  it('removes a `<artifact>.generated` sidecar sentinel file', () => {
-    const artifactRel = path.join('gemini-extension.json');
+  it('removes a sidecar-marked artifact AND its `.generated` marker (both are generated, §4.3)', () => {
+    // In the sidecar carrier the strict-schema artifact carries no in-band sentinel; the companion
+    // `.generated` file marks it. Both must go so the fixture is pure author-source state.
+    const artifactRel = 'gemini-extension.json';
     const sidecarRel = path.relative(dir, sidecarPath(path.join(dir, artifactRel)));
+    write(artifactRel, JSON.stringify({ name: 'skill-evaluator' }, null, 2) + '\n');
+    write(sidecarRel, sidecarContent(artifactRel));
+
+    const removed = stripGeneratedArtifacts(dir);
+
+    expect(removed).toEqual([artifactRel, sidecarRel].sort());
+    expect(fs.existsSync(path.join(dir, artifactRel))).toBe(false);
+    expect(fs.existsSync(path.join(dir, sidecarRel))).toBe(false);
+  });
+
+  it('removes a dangling `.generated` marker even when its companion artifact is absent', () => {
+    // Defensive: a sidecar with no companion must not throw, and only the marker is reported.
+    const sidecarRel = path.relative(dir, sidecarPath(path.join(dir, 'gemini-extension.json')));
     write(sidecarRel, sidecarContent('gemini-extension.json'));
 
     const removed = stripGeneratedArtifacts(dir);

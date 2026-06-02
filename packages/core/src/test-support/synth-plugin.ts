@@ -76,18 +76,27 @@ function copyDir(src: string, dest: string): void {
 /** Suffix of a sidecar sentinel file (`<artifact>.generated`, §4.3). */
 const SIDECAR_SUFFIX = '.generated';
 
+/** Recursively collect every file (absolute path) under `dir`. */
+function collectFiles(dir: string): string[] {
+  const out: string[] = [];
+  for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
+    const abs = path.join(dir, entry.name);
+    if (entry.isDirectory()) {
+      out.push(...collectFiles(abs));
+    } else {
+      out.push(abs);
+    }
+  }
+  return out;
+}
+
 /**
- * Whether a copied file is a toolkit-GENERATED artifact (§4.3) — identified by its sentinel,
- * the same mechanism the freshness check uses to tell generated files from hand-authored ones:
- *
- * - a `<artifact>.generated` sidecar sentinel file; or
- * - a `_generated` JSON-field sentinel (the hook JSON carrier); or
- * - an inline-comment sentinel (plain-text generated files).
- *
- * Binary or non-text files simply fail the string-based sentinel checks and are kept.
+ * Whether a file embeds a sentinel in its own bytes — the json-field carrier (the hook JSON
+ * `_generated` field) or the inline-comment carrier (plain-text generated files), §4.3. The
+ * sidecar carrier is handled separately because a sidecar-marked artifact carries no in-band
+ * sentinel by design. Binary/non-text files fail the string checks and are kept.
  */
-function isGeneratedArtifact(absPath: string): boolean {
-  if (absPath.endsWith(SIDECAR_SUFFIX)) return true;
+function hasEmbeddedSentinel(absPath: string): boolean {
   const content = fs.readFileSync(absPath, 'utf-8');
   return hasSentinel(content, 'json-field') || hasSentinel(content, 'inline');
 }
@@ -95,23 +104,37 @@ function isGeneratedArtifact(absPath: string): boolean {
 /**
  * Remove every toolkit-generated artifact under `pluginDir`, restoring the tree to author-authored
  * source state. Called after {@link copyDir} so the build under test is the sole producer of
- * generated files; see the module doc for why this matters. Returns the plugin-relative paths
- * removed (sorted) — handy for assertions and debugging.
+ * generated files; see the module doc for why this matters.
+ *
+ * Recognizes all three §4.3 sentinel carriers:
+ * - **json-field / inline** — the file embeds the sentinel in its own bytes; the file is removed.
+ * - **sidecar** — a `<artifact>.generated` marker sits beside a strict-schema artifact that is
+ *   itself left untouched (the host rejects unknown fields, so the sentinel can't live inline).
+ *   BOTH the marker and the companion artifact it marks are removed, since the artifact is just
+ *   as generated as an in-band carrier — removing only the marker would leave generated output
+ *   in the fixture.
+ *
+ * Returns the plugin-relative paths removed (sorted) — handy for assertions and debugging.
  */
 export function stripGeneratedArtifacts(pluginDir: string): string[] {
-  const removed: string[] = [];
-  const walk = (dir: string): void => {
-    for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
-      const abs = path.join(dir, entry.name);
-      if (entry.isDirectory()) {
-        walk(abs);
-      } else if (isGeneratedArtifact(abs)) {
-        fs.rmSync(abs);
-        removed.push(path.relative(pluginDir, abs));
-      }
+  const toRemove = new Set<string>();
+  for (const abs of collectFiles(pluginDir)) {
+    if (abs.endsWith(SIDECAR_SUFFIX)) {
+      toRemove.add(abs); // the sidecar marker itself
+      toRemove.add(abs.slice(0, -SIDECAR_SUFFIX.length)); // the companion artifact it marks
+    } else if (hasEmbeddedSentinel(abs)) {
+      toRemove.add(abs);
     }
-  };
-  walk(pluginDir);
+  }
+
+  const removed: string[] = [];
+  for (const abs of toRemove) {
+    // A companion artifact named by a dangling sidecar may not exist — only remove real files.
+    if (fs.existsSync(abs)) {
+      fs.rmSync(abs);
+      removed.push(path.relative(pluginDir, abs));
+    }
+  }
   return removed.sort();
 }
 

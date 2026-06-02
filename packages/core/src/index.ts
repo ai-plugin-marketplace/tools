@@ -9,8 +9,8 @@
  * @packageDocumentation
  */
 
-export { defineConfig } from './config.js';
-export type { AipmConfig, AipmConfigInput } from './config.js';
+export { defineConfig, defineRepoConfig } from './config.js';
+export type { AipmConfig, AipmConfigInput, AipmRepoConfig, AipmRepoConfigInput } from './config.js';
 
 export {
   build,

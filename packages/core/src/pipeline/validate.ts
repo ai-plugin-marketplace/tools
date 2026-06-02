@@ -558,7 +558,8 @@ function extractCodexSource(raw: unknown, pluginName: string): SourceExtraction 
  *
  * - If `claude` is in the envelope, the plugin MUST appear in
  *   `<repoRoot>/.claude-plugin/marketplace.json`'s plugins array with a string `source` pointing
- *   at `./plugins/<name>`.
+ *   at the plugin directory relative to the repo root (`./plugins/<name>` by default, or the
+ *   relocated `pluginsRoot` for an embedded marketplace).
  * - If `cursor` is in the envelope, same check against `<repoRoot>/.cursor-plugin/marketplace.json`.
  * - If `codex` is in the envelope, the plugin MUST appear in
  *   `<repoRoot>/.agents/plugins/marketplace.json` with an object `source` whose `path` is
@@ -581,10 +582,14 @@ export function validateMarketplaceRegistration(
   const pluginName = path.basename(pluginDir);
   const envelopeSet = new Set(envelope);
 
-  // Canonical expected form is `./plugins/<name>` per §4.4. Both `./plugins/<name>` and
-  // `plugins/<name>` are accepted (normalised by stripping a leading `./`).
-  const expectedSource = `./plugins/${pluginName}`;
-  const normalizedExpected = `plugins/${pluginName}`;
+  // The expected source is the plugin directory's path relative to the repo root (the location
+  // hosts resolve `source` against). Default topology → `plugins/<name>`; an embedded marketplace
+  // with a relocated `pluginsRoot` → e.g. `agent-plugins/<name>`. POSIX separators are forced so
+  // the comparison is stable on Windows. Both `./<rel>` and `<rel>` are accepted; the canonical
+  // form carries the `./` prefix (§4.4).
+  const relFromRepo = path.relative(repoRoot, pluginDir).split(path.sep).join('/');
+  const expectedSource = `./${relFromRepo}`;
+  const normalizedExpected = relFromRepo;
 
   for (const { target, marketplaceRel, extractSource } of MARKETPLACE_REGISTRY_CHECKS) {
     const marketplacePath = path.join(repoRoot, ...marketplaceRel);
@@ -889,7 +894,23 @@ export async function runValidate(
   const ci = opts?.ci ?? false;
   const skipFreshness = opts?.skipFreshness ?? false;
 
-  const { repoRoot, distDir, pluginDirs } = discoverPlugins(targetPath);
+  // Discovery loads the optional `aipm.repo.ts`. An invalid repo config makes the whole repo's
+  // topology unresolvable, so surface it as a single repo-scoped `repo-config-invalid` finding
+  // (parallel to how an unloadable plugin envelope becomes `envelope-invalid`) rather than letting
+  // the thrown error escape the validator.
+  let discovery;
+  try {
+    discovery = await discoverPlugins(targetPath);
+  } catch (err) {
+    if (err instanceof ConfigLoadError) {
+      return {
+        findings: [{ severity: 'hard', code: 'repo-config-invalid', message: err.message }],
+        passed: false,
+      };
+    }
+    throw err;
+  }
+  const { repoRoot, distDir, pluginDirs } = discovery;
   const findings: Finding[] = [];
 
   for (const pluginDir of pluginDirs) {

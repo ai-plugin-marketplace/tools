@@ -9,5 +9,5 @@ Enumerated finding codes. Additive — new codes arrive in toolkit MINOR release
 **Signature:**
 
 ```typescript
-export type FindingCode = 'envelope-invalid' | 'envelope-adherence' | 'schema-invalid' | 'name-consistency' | 'mcp-key-sync' | 'marketplace-registration' | 'freshness';
+export type FindingCode = 'envelope-invalid' | 'repo-config-invalid' | 'envelope-adherence' | 'schema-invalid' | 'name-consistency' | 'mcp-key-sync' | 'marketplace-registration' | 'freshness';
 ```

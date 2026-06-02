@@ -67,6 +67,17 @@ Validate and brand a plugin configuration. Throws a `ZodError` on invalid input.
 </td></tr>
 <tr><td>
 
+[defineRepoConfig(config)](./core.definerepoconfig.md)
+
+
+</td><td>
+
+Validate and brand a repo configuration, applying defaults for any omitted field. Throws a `ZodError` on invalid input (unknown keys, absolute paths, `..` escapes).
+
+
+</td></tr>
+<tr><td>
+
 [init(targetDir, opts)](./core.init.md)
 
 
@@ -105,7 +116,7 @@ No-op in v0.1.0 per §8.1 of the spec. Always returns `status: 'no-migrations-ne
 
 </td><td>
 
-Scaffold a new plugin under `<cwd>/plugins/<name>`<!-- -->. The plugins directory is derived from the current working directory, matching how `aipm scaffold` is invoked from a template repo root.
+Scaffold a new plugin under the cwd's configured plugins root (`<cwd>/plugins/<name>` by default, or the relocated `pluginsRoot` from an `aipm.repo.ts`<!-- -->). The plugins directory is derived from the current working directory, matching how `aipm scaffold` is invoked from a repo root.
 
 
 </td></tr>
@@ -143,6 +154,19 @@ Description
 </td><td>
 
 Raw input shape accepted by `defineConfig`<!-- -->. Plugin authors type their config literal against `AipmConfigInput` implicitly via `defineConfig`<!-- -->'s parameter.
+
+
+</td></tr>
+<tr><td>
+
+[AipmRepoConfigInput](./core.aipmrepoconfiginput.md)
+
+
+</td><td>
+
+Raw input shape accepted by `defineRepoConfig`<!-- -->. Authored as `aipm.repo.ts` at the \*\*repo root\*\* of a project that hosts a marketplace inside a larger software repo. The file is optional: when absent, the toolkit behaves as if `defineRepoConfig({})` was used, reproducing the historical "repo root == marketplace root, fixed `plugins/`<!-- -->" topology.
+
+Both paths are repo-root-relative and must stay within the repo (no absolute paths, no `..` segments), because host platforms resolve a plugin's `source` relative to the repo root.
 
 
 </td></tr>
@@ -290,6 +314,17 @@ Description
 </td><td>
 
 Validated plugin configuration. Structurally identical to `AipmConfigInput` but carries a module-private brand indicating `defineConfig` validated it at runtime.
+
+
+</td></tr>
+<tr><td>
+
+[AipmRepoConfig](./core.aipmrepoconfig.md)
+
+
+</td><td>
+
+Validated repo configuration. Carries a module-private brand indicating `defineRepoConfig` validated it; unlike the input, both fields are always present (defaults applied).
 
 
 </td></tr>

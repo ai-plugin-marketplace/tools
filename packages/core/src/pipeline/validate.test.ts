@@ -398,18 +398,18 @@ describe('validateMcpKeySync()', () => {
 
 describe('validateMarketplaceRegistration()', () => {
   it('returns no findings when plugin is registered in both marketplaces and both targets in envelope', () => {
-    const pluginDir = path.join(tmpDir, 'skill-evaluator');
-    fs.mkdirSync(pluginDir, { recursive: true });
     const repoRoot = createRepoRoot(tmpDir, ['skill-evaluator']);
+    const pluginDir = path.join(repoRoot, 'plugins', 'skill-evaluator');
+    fs.mkdirSync(pluginDir, { recursive: true });
 
     const findings = validateMarketplaceRegistration(pluginDir, repoRoot, ['claude', 'cursor']);
     expect(findings).toHaveLength(0);
   });
 
   it('emits marketplace-registration when plugin is registered but claude is not in envelope', () => {
-    const pluginDir = path.join(tmpDir, 'skill-evaluator');
-    fs.mkdirSync(pluginDir, { recursive: true });
     const repoRoot = createRepoRoot(tmpDir, ['skill-evaluator']);
+    const pluginDir = path.join(repoRoot, 'plugins', 'skill-evaluator');
+    fs.mkdirSync(pluginDir, { recursive: true });
 
     const findings = validateMarketplaceRegistration(pluginDir, repoRoot, ['cursor']); // no claude
     expect(
@@ -418,9 +418,9 @@ describe('validateMarketplaceRegistration()', () => {
   });
 
   it('emits marketplace-registration when plugin is not registered but claude is in envelope', () => {
-    const pluginDir = path.join(tmpDir, 'unknown-plugin');
-    fs.mkdirSync(pluginDir, { recursive: true });
     const repoRoot = createRepoRoot(tmpDir, []); // no plugins registered
+    const pluginDir = path.join(repoRoot, 'plugins', 'unknown-plugin');
+    fs.mkdirSync(pluginDir, { recursive: true });
 
     const findings = validateMarketplaceRegistration(pluginDir, repoRoot, ['claude']);
     expect(
@@ -478,9 +478,9 @@ describe('validateMarketplaceRegistration()', () => {
   });
 
   it('accepts source without leading "./" (normalised equivalent)', () => {
-    const pluginDir = path.join(tmpDir, 'my-plugin');
-    fs.mkdirSync(pluginDir, { recursive: true });
     const repoRoot = path.join(tmpDir, 'repo');
+    const pluginDir = path.join(repoRoot, 'plugins', 'my-plugin');
+    fs.mkdirSync(pluginDir, { recursive: true });
     // Source without leading "./"
     write(repoRoot, '.claude-plugin/marketplace.json', {
       name: 'test',
@@ -491,6 +491,40 @@ describe('validateMarketplaceRegistration()', () => {
     const findings = validateMarketplaceRegistration(pluginDir, repoRoot, ['claude']);
     // Should not emit a finding — normalised paths match
     expect(findings.filter((f) => f.code === 'marketplace-registration')).toHaveLength(0);
+  });
+
+  it('expects the source to match a relocated pluginsRoot (embedded marketplace)', () => {
+    const repoRoot = path.join(tmpDir, 'repo');
+    // Embedded layout: the plugin lives under a relocated `agent-plugins/` root.
+    const pluginDir = path.join(repoRoot, 'agent-plugins', 'my-plugin');
+    fs.mkdirSync(pluginDir, { recursive: true });
+    write(repoRoot, '.claude-plugin/marketplace.json', {
+      name: 'test',
+      owner: { name: 'Test' },
+      plugins: [{ name: 'my-plugin', source: './agent-plugins/my-plugin' }],
+    });
+
+    const findings = validateMarketplaceRegistration(pluginDir, repoRoot, ['claude']);
+    expect(findings.filter((f) => f.code === 'marketplace-registration')).toHaveLength(0);
+  });
+
+  it('emits marketplace-registration when a relocated plugin still registers the old ./plugins/ source', () => {
+    const repoRoot = path.join(tmpDir, 'repo');
+    const pluginDir = path.join(repoRoot, 'agent-plugins', 'my-plugin');
+    fs.mkdirSync(pluginDir, { recursive: true });
+    write(repoRoot, '.claude-plugin/marketplace.json', {
+      name: 'test',
+      owner: { name: 'Test' },
+      plugins: [{ name: 'my-plugin', source: './plugins/my-plugin' }],
+    });
+
+    const findings = validateMarketplaceRegistration(pluginDir, repoRoot, ['claude']);
+    expect(
+      findings.some(
+        (f) =>
+          f.code === 'marketplace-registration' && f.message.includes('./agent-plugins/my-plugin'),
+      ),
+    ).toBe(true);
   });
 });
 
@@ -525,9 +559,9 @@ describe('validateMarketplaceRegistration() — codex object source', () => {
   }
 
   it('returns no findings when a correctly-registered codex plugin is in the envelope', () => {
-    const pluginDir = path.join(tmpDir, 'my-plugin');
-    fs.mkdirSync(pluginDir, { recursive: true });
     const repoRoot = path.join(tmpDir, 'repo');
+    const pluginDir = path.join(repoRoot, 'plugins', 'my-plugin');
+    fs.mkdirSync(pluginDir, { recursive: true });
     writeCodexMarketplace(repoRoot, [{ name: 'my-plugin', path: './plugins/my-plugin' }]);
 
     const findings = validateMarketplaceRegistration(pluginDir, repoRoot, ['codex']);
@@ -535,9 +569,9 @@ describe('validateMarketplaceRegistration() — codex object source', () => {
   });
 
   it('accepts source.path without leading "./" (normalised equivalent)', () => {
-    const pluginDir = path.join(tmpDir, 'my-plugin');
-    fs.mkdirSync(pluginDir, { recursive: true });
     const repoRoot = path.join(tmpDir, 'repo');
+    const pluginDir = path.join(repoRoot, 'plugins', 'my-plugin');
+    fs.mkdirSync(pluginDir, { recursive: true });
     writeCodexMarketplace(repoRoot, [{ name: 'my-plugin', path: 'plugins/my-plugin' }]);
 
     const findings = validateMarketplaceRegistration(pluginDir, repoRoot, ['codex']);
@@ -641,10 +675,11 @@ describe('validateCrossTarget()', () => {
   });
 
   it('returns empty array for a fully correct plugin', () => {
-    const pluginDir = path.join(tmpDir, 'my-plugin');
+    const repoRoot = createRepoRoot(tmpDir, ['my-plugin']);
+    // The plugin lives under the repo's plugins/ root, matching the registered source.
+    const pluginDir = path.join(repoRoot, 'plugins', 'my-plugin');
     // Include cursor so both marketplace files match the envelope
     createMinimalPlugin(pluginDir, 'my-plugin', ['claude', 'cursor', 'kiro']);
-    const repoRoot = createRepoRoot(tmpDir, ['my-plugin']);
 
     const findings = validateCrossTarget(pluginDir, repoRoot, ['claude', 'cursor', 'kiro']);
     expect(findings).toHaveLength(0);

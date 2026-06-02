@@ -19,6 +19,20 @@ export interface AipmConfigInput {
 }
 
 // @public
+export type AipmRepoConfig = {
+    readonly pluginsRoot: string;
+    readonly distDir: string;
+} & {
+    readonly [aipmRepoConfigBrand]: 'AipmRepoConfig';
+};
+
+// @public
+export interface AipmRepoConfigInput {
+    distDir?: string;
+    pluginsRoot?: string;
+}
+
+// @public
 export function build(targetPath: string, opts?: BuildOptions): Promise<BuildResult[]>;
 
 // @public
@@ -41,6 +55,9 @@ export function checkSupport(pluginDir: string): Promise<SupportReport>;
 export function defineConfig(config: AipmConfigInput): AipmConfig;
 
 // @public
+export function defineRepoConfig(config?: AipmRepoConfigInput): AipmRepoConfig;
+
+// @public
 export interface Finding {
     // (undocumented)
     code: FindingCode;
@@ -52,7 +69,7 @@ export interface Finding {
 }
 
 // @public
-export type FindingCode = 'envelope-invalid' | 'envelope-adherence' | 'schema-invalid' | 'name-consistency' | 'mcp-key-sync' | 'marketplace-registration' | 'freshness';
+export type FindingCode = 'envelope-invalid' | 'repo-config-invalid' | 'envelope-adherence' | 'schema-invalid' | 'name-consistency' | 'mcp-key-sync' | 'marketplace-registration' | 'freshness';
 
 // @public
 export interface GeneratedFile {

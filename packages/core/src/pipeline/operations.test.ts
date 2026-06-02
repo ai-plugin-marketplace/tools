@@ -9,7 +9,7 @@ import { defineConfig, listTargets, migrate } from '../index.js';
 
 describe('listTargets()', () => {
   it('returns the canonical set of known targets', () => {
-    expect(listTargets()).toEqual(['claude', 'cursor', 'gemini', 'kiro', 'vercel']);
+    expect(listTargets()).toEqual(['claude', 'codex', 'cursor', 'gemini', 'kiro', 'vercel']);
   });
 });
 

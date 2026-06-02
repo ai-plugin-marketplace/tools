@@ -70,10 +70,17 @@ describe('aipm help/version', () => {
 });
 
 describe('aipm list-targets', () => {
-  it('lists the five known targets, one per line, and exits 0', async () => {
+  it('lists the known targets, one per line, and exits 0', async () => {
     const { code, out } = await invoke(['list-targets']);
     expect(code).toBe(0);
-    expect(out.trim().split('\n')).toEqual(['claude', 'cursor', 'gemini', 'kiro', 'vercel']);
+    expect(out.trim().split('\n')).toEqual([
+      'claude',
+      'codex',
+      'cursor',
+      'gemini',
+      'kiro',
+      'vercel',
+    ]);
   });
 });
 

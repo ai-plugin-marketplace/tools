@@ -29,6 +29,7 @@ import * as fs from 'node:fs';
 import * as path from 'node:path';
 
 import { scaffoldClaudeFiles } from '../targets/claude/scaffold.js';
+import { scaffoldCodexFiles } from '../targets/codex/scaffold.js';
 import { scaffoldCursorFiles } from '../targets/cursor/scaffold.js';
 import { scaffoldGeminiFiles } from '../targets/gemini/scaffold.js';
 import { scaffoldKiroFiles } from '../targets/kiro/scaffold.js';
@@ -49,6 +50,7 @@ const TARGET_SCAFFOLDERS: Record<
   (pluginName: string, opts?: TargetScaffoldOptions) => ScaffoldedFile[]
 > = {
   claude: scaffoldClaudeFiles,
+  codex: scaffoldCodexFiles,
   cursor: scaffoldCursorFiles,
   gemini: scaffoldGeminiFiles,
   kiro: scaffoldKiroFiles,
@@ -143,29 +145,31 @@ function orderTargets(targets: readonly TargetId[]): TargetId[] {
 // Marketplace registration (§4.4, §10.1.4)
 // ---------------------------------------------------------------------------
 
-/**
- * The template-level marketplace registries that a plugin must be registered in, keyed by the
- * target whose presence in the envelope requires registration (§4.4). Both registries live at the
- * **repo root**, not inside any plugin: `<repoRoot>/.claude-plugin/marketplace.json` (Claude) and
- * `<repoRoot>/.cursor-plugin/marketplace.json` (Cursor).
- *
- * Mirrors `validateMarketplaceRegistration` in `validate.ts`: those two targets, those two paths.
- */
-const MARKETPLACE_REGISTRIES: { target: TargetId; dir: string }[] = [
-  { target: 'claude', dir: '.claude-plugin' },
-  { target: 'cursor', dir: '.cursor-plugin' },
-];
-
-/** A single plugin entry in a marketplace registry. */
-interface MarketplaceEntry {
+/** A plugin entry in a string-source registry (Claude/Cursor): `{ name, source: string }`. */
+interface StringSourceEntry {
   name: string;
   source: string;
 }
 
-/** Minimal shape of a marketplace registry file. Extra keys are preserved on rewrite. */
-interface MarketplaceRegistry {
-  plugins?: MarketplaceEntry[];
-  [key: string]: unknown;
+/**
+ * A plugin entry in the Codex object-source registry: `{ name, source: { source, path }, … }`
+ * with `policy`/`category` defaults. Matches the shape at
+ * developers.openai.com/codex/plugins/build.
+ */
+interface CodexEntry {
+  name: string;
+  source: { source: string; path: string };
+  policy: { installation: string; authentication: string };
+  category: string;
+}
+
+/** A descriptor for a registry-backed target: where its marketplace lives and how to build an entry. */
+interface MarketplaceRegistryDescriptor {
+  target: TargetId;
+  /** Path segments under the repo root locating this registry's marketplace.json. */
+  marketplaceRel: string[];
+  /** Build the plugin entry to append (shape varies per registry). */
+  makeEntry: (pluginName: string) => StringSourceEntry | CodexEntry;
 }
 
 /** The canonical `source` value for a plugin's registry entry (§4.4 — `./plugins/<name>`). */
@@ -174,7 +178,48 @@ function expectedSource(pluginName: string): string {
 }
 
 /**
- * Register `pluginName` in the registry file at `registryPath`, creating it if absent.
+ * The template-level marketplace registries a plugin must be registered in, keyed by the target
+ * whose presence in the envelope requires registration (§4.4). All registries live at the **repo
+ * root**, not inside any plugin. Claude/Cursor use a string `source`; Codex uses an object
+ * `source` plus `policy`/`category` defaults at `.agents/plugins/marketplace.json`.
+ *
+ * Mirrors `validateMarketplaceRegistration` in `validate.ts`: same targets, same paths, same
+ * entry shapes.
+ *
+ * @see https://developers.openai.com/codex/plugins/build
+ */
+const MARKETPLACE_REGISTRIES: MarketplaceRegistryDescriptor[] = [
+  {
+    target: 'claude',
+    marketplaceRel: ['.claude-plugin', 'marketplace.json'],
+    makeEntry: (name) => ({ name, source: expectedSource(name) }),
+  },
+  {
+    target: 'cursor',
+    marketplaceRel: ['.cursor-plugin', 'marketplace.json'],
+    makeEntry: (name) => ({ name, source: expectedSource(name) }),
+  },
+  {
+    target: 'codex',
+    marketplaceRel: ['.agents', 'plugins', 'marketplace.json'],
+    makeEntry: (name) => ({
+      name,
+      source: { source: 'local', path: expectedSource(name) },
+      policy: { installation: 'AVAILABLE', authentication: 'ON_INSTALL' },
+      category: 'Productivity',
+    }),
+  },
+];
+
+/** Minimal shape of a marketplace registry file. Extra keys are preserved on rewrite. */
+interface MarketplaceRegistry {
+  plugins?: { name: string }[];
+  [key: string]: unknown;
+}
+
+/**
+ * Register `pluginName` in the registry file at `registryPath`, creating it if absent. The entry
+ * shape is supplied by the caller (string-source for Claude/Cursor, object-source for Codex).
  *
  * Idempotent: if an entry whose `name` already matches `pluginName` exists, the file is left
  * untouched (no duplicate, no source rewrite — repairing a wrong source is the validator's job to
@@ -182,9 +227,11 @@ function expectedSource(pluginName: string): string {
  *
  * Existing entries and any extra top-level keys are preserved.
  */
-function registerInMarketplace(registryPath: string, pluginName: string): void {
-  const entry: MarketplaceEntry = { name: pluginName, source: expectedSource(pluginName) };
-
+function registerInMarketplace(
+  registryPath: string,
+  pluginName: string,
+  entry: StringSourceEntry | CodexEntry,
+): void {
   let registry: MarketplaceRegistry;
   if (fs.existsSync(registryPath)) {
     const raw: unknown = JSON.parse(fs.readFileSync(registryPath, 'utf-8'));
@@ -208,8 +255,8 @@ function registerInMarketplace(registryPath: string, pluginName: string): void {
 /**
  * Register a plugin in every marketplace registry implied by its envelope (§4.4).
  *
- * For each of Claude/Cursor present in `targets`, create-or-append the plugin's entry in the
- * corresponding `<repoRoot>/<dir>/marketplace.json`. Targets not in the envelope get no entry, so
+ * For each registry-backed target present in `targets`, create-or-append the plugin's entry in
+ * the corresponding `<repoRoot>/<marketplaceRel>`. Targets not in the envelope get no entry, so
  * the scaffold→validate happy path stays clean (the validator forbids registration for
  * undeclared targets).
  */
@@ -219,9 +266,13 @@ function registerPluginInMarketplaces(
   targets: readonly TargetId[],
 ): void {
   const envelope = new Set(targets);
-  for (const { target, dir } of MARKETPLACE_REGISTRIES) {
+  for (const { target, marketplaceRel, makeEntry } of MARKETPLACE_REGISTRIES) {
     if (!envelope.has(target)) continue;
-    registerInMarketplace(path.join(repoRoot, dir, 'marketplace.json'), pluginName);
+    registerInMarketplace(
+      path.join(repoRoot, ...marketplaceRel),
+      pluginName,
+      makeEntry(pluginName),
+    );
   }
 }
 

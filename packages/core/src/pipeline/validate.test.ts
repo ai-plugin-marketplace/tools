@@ -495,6 +495,126 @@ describe('validateMarketplaceRegistration()', () => {
 });
 
 // ---------------------------------------------------------------------------
+// validateMarketplaceRegistration — Codex object-source registry
+//
+// Codex's repo marketplace lives at `.agents/plugins/marketplace.json` and its plugin entries
+// use an OBJECT source (`source: { source, path }`) rather than the string source Claude/Cursor
+// use. The comparable path lives at `source.path`. These tests mirror the string-source ones.
+//
+// @see https://developers.openai.com/codex/plugins/build
+// ---------------------------------------------------------------------------
+
+describe('validateMarketplaceRegistration() — codex object source', () => {
+  const CODEX_MARKETPLACE_REL = '.agents/plugins/marketplace.json';
+
+  /** Write a Codex object-source marketplace listing the given plugin entries. */
+  function writeCodexMarketplace(
+    repoRoot: string,
+    entries: { name: string; path: string }[],
+  ): void {
+    write(repoRoot, CODEX_MARKETPLACE_REL, {
+      name: 'test-marketplace',
+      interface: { displayName: 'Test Marketplace' },
+      plugins: entries.map((e) => ({
+        name: e.name,
+        source: { source: 'local', path: e.path },
+        policy: { installation: 'AVAILABLE', authentication: 'ON_INSTALL' },
+        category: 'Productivity',
+      })),
+    });
+  }
+
+  it('returns no findings when a correctly-registered codex plugin is in the envelope', () => {
+    const pluginDir = path.join(tmpDir, 'my-plugin');
+    fs.mkdirSync(pluginDir, { recursive: true });
+    const repoRoot = path.join(tmpDir, 'repo');
+    writeCodexMarketplace(repoRoot, [{ name: 'my-plugin', path: './plugins/my-plugin' }]);
+
+    const findings = validateMarketplaceRegistration(pluginDir, repoRoot, ['codex']);
+    expect(findings.filter((f) => f.code === 'marketplace-registration')).toHaveLength(0);
+  });
+
+  it('accepts source.path without leading "./" (normalised equivalent)', () => {
+    const pluginDir = path.join(tmpDir, 'my-plugin');
+    fs.mkdirSync(pluginDir, { recursive: true });
+    const repoRoot = path.join(tmpDir, 'repo');
+    writeCodexMarketplace(repoRoot, [{ name: 'my-plugin', path: 'plugins/my-plugin' }]);
+
+    const findings = validateMarketplaceRegistration(pluginDir, repoRoot, ['codex']);
+    expect(findings.filter((f) => f.code === 'marketplace-registration')).toHaveLength(0);
+  });
+
+  it('emits marketplace-registration when the codex marketplace file is missing', () => {
+    const pluginDir = path.join(tmpDir, 'my-plugin');
+    fs.mkdirSync(pluginDir, { recursive: true });
+    const repoRoot = path.join(tmpDir, 'repo-empty');
+    fs.mkdirSync(repoRoot, { recursive: true });
+
+    const findings = validateMarketplaceRegistration(pluginDir, repoRoot, ['codex']);
+    expect(
+      findings.some((f) => f.code === 'marketplace-registration' && f.message.includes('codex')),
+    ).toBe(true);
+  });
+
+  it('emits marketplace-registration when the plugin is not listed but codex is in the envelope', () => {
+    const pluginDir = path.join(tmpDir, 'my-plugin');
+    fs.mkdirSync(pluginDir, { recursive: true });
+    const repoRoot = path.join(tmpDir, 'repo');
+    writeCodexMarketplace(repoRoot, []); // no entries
+
+    const findings = validateMarketplaceRegistration(pluginDir, repoRoot, ['codex']);
+    expect(
+      findings.some(
+        (f) => f.code === 'marketplace-registration' && f.message.includes('not listed'),
+      ),
+    ).toBe(true);
+  });
+
+  it('emits marketplace-registration when source.path is wrong', () => {
+    const pluginDir = path.join(tmpDir, 'my-plugin');
+    fs.mkdirSync(pluginDir, { recursive: true });
+    const repoRoot = path.join(tmpDir, 'repo');
+    writeCodexMarketplace(repoRoot, [{ name: 'my-plugin', path: './plugins/wrong-dir' }]);
+
+    const findings = validateMarketplaceRegistration(pluginDir, repoRoot, ['codex']);
+    expect(
+      findings.some(
+        (f) => f.code === 'marketplace-registration' && f.message.includes('wrong-dir'),
+      ),
+    ).toBe(true);
+  });
+
+  it('emits marketplace-registration when source is a STRING instead of the expected object', () => {
+    const pluginDir = path.join(tmpDir, 'my-plugin');
+    fs.mkdirSync(pluginDir, { recursive: true });
+    const repoRoot = path.join(tmpDir, 'repo');
+    // String source does not match the Codex object-source schema → parse-error → not-listed-style
+    // failure is surfaced as a parse failure finding while codex is in the envelope.
+    write(repoRoot, CODEX_MARKETPLACE_REL, {
+      name: 'test-marketplace',
+      plugins: [{ name: 'my-plugin', source: './plugins/my-plugin' }],
+    });
+
+    const findings = validateMarketplaceRegistration(pluginDir, repoRoot, ['codex']);
+    expect(findings.some((f) => f.code === 'marketplace-registration')).toBe(true);
+  });
+
+  it('emits marketplace-registration when the plugin is listed but codex is NOT in the envelope', () => {
+    const pluginDir = path.join(tmpDir, 'my-plugin');
+    fs.mkdirSync(pluginDir, { recursive: true });
+    const repoRoot = path.join(tmpDir, 'repo');
+    writeCodexMarketplace(repoRoot, [{ name: 'my-plugin', path: './plugins/my-plugin' }]);
+
+    const findings = validateMarketplaceRegistration(pluginDir, repoRoot, ['gemini']);
+    expect(
+      findings.some(
+        (f) => f.code === 'marketplace-registration' && f.message.includes('not in the support'),
+      ),
+    ).toBe(true);
+  });
+});
+
+// ---------------------------------------------------------------------------
 // validateCrossTarget
 // ---------------------------------------------------------------------------
 

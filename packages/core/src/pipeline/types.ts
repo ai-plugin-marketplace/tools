@@ -13,7 +13,7 @@
  *
  * @public
  */
-export type TargetId = 'claude' | 'cursor' | 'gemini' | 'kiro' | 'vercel';
+export type TargetId = 'claude' | 'codex' | 'cursor' | 'gemini' | 'kiro' | 'vercel';
 
 /**
  * Canonical list of target IDs known to this toolkit version. Runtime-exposed so
@@ -32,6 +32,7 @@ export type TargetId = 'claude' | 'cursor' | 'gemini' | 'kiro' | 'vercel';
  */
 export const TARGET_IDS = [
   'claude',
+  'codex',
   'cursor',
   'gemini',
   'kiro',

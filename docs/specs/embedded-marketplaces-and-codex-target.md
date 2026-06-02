@@ -2,13 +2,13 @@
 
 > **Status:** design exploration (no implementation). Scoping decisions captured with the maintainer: skills remain **hand-authored** (no CLI introspection), a repo may expose **multiple plugins**, the layout uses **conventional locations by default** with a **path-remapping / conflict-resolution affordance** for collisions with the host software, and **Codex is added as a new target**.
 >
-> **Two workstreams, mostly orthogonal:** (A) **Embedded marketplaces** — let a software repo host a marketplace without colliding with its own layout. (B) **Codex target** — add OpenAI Codex as a 6th host platform. They compose: Codex is a third *in-place marketplace* target, so it participates in the embedded design exactly like Claude/Cursor.
+> **Two workstreams, mostly orthogonal:** (A) **Embedded marketplaces** — let a software repo host a marketplace without colliding with its own layout. (B) **Codex target** — add OpenAI Codex as a 6th host platform. They compose: Codex is a third _in-place marketplace_ target, so it participates in the embedded design exactly like Claude/Cursor.
 
 ## Context
 
-Today the `@ai-plugin-marketplace` toolkit (the `aipm` CLI in this repo) and the companion `template` repo embody a **dedicated-marketplace** model: the repo *root is* the marketplace. `.claude-plugin/marketplace.json` and `.cursor-plugin/marketplace.json` sit at the repo root and register plugins via `source: ./plugins/<name>`; each plugin folder carries its own per-target manifests and content dirs (`skills/`, `agents/`, `commands/`, `hooks/`, `rules/`, `steering/`, `GEMINI.md`, `POWER.md`). You fork `template`, drop plugins under `plugins/`, and `aipm build`/`validate` operate on the repo root.
+Today the `@ai-plugin-marketplace` toolkit (the `aipm` CLI in this repo) and the companion `template` repo embody a **dedicated-marketplace** model: the repo _root is_ the marketplace. `.claude-plugin/marketplace.json` and `.cursor-plugin/marketplace.json` sit at the repo root and register plugins via `source: ./plugins/<name>`; each plugin folder carries its own per-target manifests and content dirs (`skills/`, `agents/`, `commands/`, `hooks/`, `rules/`, `steering/`, `GEMINI.md`, `POWER.md`). You fork `template`, drop plugins under `plugins/`, and `aipm build`/`validate` operate on the repo root.
 
-The new goal flips that assumption. A repo whose **primary purpose is shipping software** — e.g. [`mike-north/unraid-cli`](https://github.com/mike-north/unraid-cli) — should *also* act as a marketplace for the agent skills that operate that software, so the CLI and the agent skills that make it easy to drive ship and version together. The blocker is that the toolkit hard-codes "repo root == marketplace root" and a fixed `plugins/` directory, which collides with a real software repo's own layout (a CLI may literally already own `plugins/`, `commands/`, `docs/`, `dist/`).
+The new goal flips that assumption. A repo whose **primary purpose is shipping software** — e.g. [`mike-north/unraid-cli`](https://github.com/mike-north/unraid-cli) — should _also_ act as a marketplace for the agent skills that operate that software, so the CLI and the agent skills that make it easy to drive ship and version together. The blocker is that the toolkit hard-codes "repo root == marketplace root" and a fixed `plugins/` directory, which collides with a real software repo's own layout (a CLI may literally already own `plugins/`, `commands/`, `docs/`, `dist/`).
 
 The intended outcome: a software repo can host one or more hand-authored agent plugins in **conventional locations by default** (so agents author them well), while offering an escape hatch to **relocate** the plugin/marketplace source when it would collide with the host software — without changing the **canonical names the host platforms consume**.
 
@@ -39,19 +39,19 @@ Verified: there is **no Codex support**. `TargetId = 'claude' | 'cursor' | 'gemi
 
 **Good news: Codex's plugin model is a near-clone of Claude Code's** (it even ships `CLAUDE_PLUGIN_ROOT`/`CLAUDE_PLUGIN_DATA` back-compat env vars). So the Codex target is largely a **copy of the `claude` target with renamed paths**, not a from-scratch design. Codex conventions (mid-2026, from developers.openai.com/codex):
 
-| Concept | Codex location/format | Claude analog | Mapping |
-|---|---|---|---|
-| Plugin manifest | `.codex-plugin/plugin.json` (name, version, description, author, `skills`/`mcpServers`/`apps`/`hooks` path fields, `interface{}`) | `.claude-plugin/plugin.json` | New `codex` Zod schema, ~clone of claude's |
-| Skills | `skills/<name>/SKILL.md` (`name`/`description` frontmatter) | identical | Reuse as-is |
-| Hooks | `hooks/hooks.json` (PreToolUse/PostToolUse/SessionStart/… + `matcher`/`command`; `${PLUGIN_ROOT}`) | `hooks/claude.json` (same shape); template already emits `hooks/hooks.json` for "Cursor/others" | Reuse existing `hooks/hooks.json` generation |
-| MCP servers | `.mcp.json` (`{name:{command,args,env}}` or `url`/`bearer_token_env_var`) | `.mcp.json` | Reuse |
-| Subagents | standalone TOML in `.codex/agents/*.toml` (`name`/`description`/`developer_instructions` + optional model/mcp_servers) | `agents/*.md` frontmatter | New transform: agent `.md` → `.codex/agents/*.toml` |
-| Commands/prompts | custom slash-command prompts | `commands/*.md` | Map commands → Codex prompts (format TBD via `/codex/cli/slash-commands`) |
-| Context file | `AGENTS.md` (hierarchical, override/fallback chain) | `GEMINI.md` / CLAUDE.md | New context file `AGENTS.md` |
-| **Repo marketplace** | `.agents/plugins/marketplace.json` — `{name, interface{displayName}, plugins:[{name, source:{source:"local",path:"./plugins/<n>"}, policy:{installation,authentication}, category}]}` | `.claude-plugin/marketplace.json` | **Third in-place registry** the toolkit emits/validates |
-| Install | `codex plugin marketplace add owner/repo` (in-place GitHub) | `/plugin marketplace add owner/repo` | Same in-place model |
+| Concept              | Codex location/format                                                                                                                                                                 | Claude analog                                                                                   | Mapping                                                                   |
+| -------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------- |
+| Plugin manifest      | `.codex-plugin/plugin.json` (name, version, description, author, `skills`/`mcpServers`/`apps`/`hooks` path fields, `interface{}`)                                                     | `.claude-plugin/plugin.json`                                                                    | New `codex` Zod schema, ~clone of claude's                                |
+| Skills               | `skills/<name>/SKILL.md` (`name`/`description` frontmatter)                                                                                                                           | identical                                                                                       | Reuse as-is                                                               |
+| Hooks                | `hooks/hooks.json` (PreToolUse/PostToolUse/SessionStart/… + `matcher`/`command`; `${PLUGIN_ROOT}`)                                                                                    | `hooks/claude.json` (same shape); template already emits `hooks/hooks.json` for "Cursor/others" | Reuse existing `hooks/hooks.json` generation                              |
+| MCP servers          | `.mcp.json` (`{name:{command,args,env}}` or `url`/`bearer_token_env_var`)                                                                                                             | `.mcp.json`                                                                                     | Reuse                                                                     |
+| Subagents            | standalone TOML in `.codex/agents/*.toml` (`name`/`description`/`developer_instructions` + optional model/mcp_servers)                                                                | `agents/*.md` frontmatter                                                                       | New transform: agent `.md` → `.codex/agents/*.toml`                       |
+| Commands/prompts     | custom slash-command prompts                                                                                                                                                          | `commands/*.md`                                                                                 | Map commands → Codex prompts (format TBD via `/codex/cli/slash-commands`) |
+| Context file         | `AGENTS.md` (hierarchical, override/fallback chain)                                                                                                                                   | `GEMINI.md` / CLAUDE.md                                                                         | New context file `AGENTS.md`                                              |
+| **Repo marketplace** | `.agents/plugins/marketplace.json` — `{name, interface{displayName}, plugins:[{name, source:{source:"local",path:"./plugins/<n>"}, policy:{installation,authentication}, category}]}` | `.claude-plugin/marketplace.json`                                                               | **Third in-place registry** the toolkit emits/validates                   |
+| Install              | `codex plugin marketplace add owner/repo` (in-place GitHub)                                                                                                                           | `/plugin marketplace add owner/repo`                                                            | Same in-place model                                                       |
 
-**Consumption class: Codex is an *in-place marketplace* target like Claude/Cursor — NOT a `dist/` bundle target like Gemini/Kiro.** So it mirrors the `claude`/`cursor` target modules (no `bundle.ts`).
+**Consumption class: Codex is an _in-place marketplace_ target like Claude/Cursor — NOT a `dist/` bundle target like Gemini/Kiro.** So it mirrors the `claude`/`cursor` target modules (no `bundle.ts`).
 
 **Touch points to register the 6th target** (grounded in the code): add `'codex'` to the `TargetId` union, the `TARGET_IDS` tuple, and the `_targetIdsAreExhaustive` guard (`packages/core/src/pipeline/types.ts:16-42`); create `packages/core/src/targets/codex/{schemas,scaffold,validate,transform}.ts` (clone of `claude/`, no `bundle.ts`); wire it into the per-target dispatch in `build.ts`, `validate.ts`, `operations.ts`/`scaffold.ts`, and `cli/src/run.ts`; add the third marketplace registry to `validateMarketplaceRegistration` and to `init-template.ts`; add scaffold templates (`.codex-plugin/plugin.json`, `AGENTS.md`); update fixtures/tests that enumerate all targets (`scaffold.test.ts` already iterates `TARGET_IDS`, and `test-support/` fixtures) and the `dist/**` freshness oracle.
 
@@ -61,17 +61,17 @@ Verified: there is **no Codex support**. `TargetId = 'claude' | 'cursor' | 'gemi
 
 The conflict-resolution affordance rests on classifying every path:
 
-| Class | Examples | Remappable? | Why |
-|---|---|---|---|
-| **Authoring roots** | plugins root, dist root | Freely remappable | Only the toolkit reads these. |
-| **Consumption-pinned** | Claude/Cursor/Codex registry locations (`.claude-plugin/marketplace.json`, `.cursor-plugin/marketplace.json`, `.agents/plugins/marketplace.json`); per-target manifest *filenames* (`.claude-plugin/plugin.json`, `.codex-plugin/plugin.json`, `gemini-extension.json`, `POWER.md`) | Hard-pinned | Host reads them at a fixed name/location. Toolkit must emit canonical names here regardless of authoring layout. |
-| **Generated bundles** | `dist/gemini/<plugin>`, `dist/kiro/<plugin>` | Root remappable, internal shape fixed | Consumed from a toolkit-owned bundle. |
+| Class                  | Examples                                                                                                                                                                                                                                                                            | Remappable?                           | Why                                                                                                              |
+| ---------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------- | ---------------------------------------------------------------------------------------------------------------- |
+| **Authoring roots**    | plugins root, dist root                                                                                                                                                                                                                                                             | Freely remappable                     | Only the toolkit reads these.                                                                                    |
+| **Consumption-pinned** | Claude/Cursor/Codex registry locations (`.claude-plugin/marketplace.json`, `.cursor-plugin/marketplace.json`, `.agents/plugins/marketplace.json`); per-target manifest _filenames_ (`.claude-plugin/plugin.json`, `.codex-plugin/plugin.json`, `gemini-extension.json`, `POWER.md`) | Hard-pinned                           | Host reads them at a fixed name/location. Toolkit must emit canonical names here regardless of authoring layout. |
+| **Generated bundles**  | `dist/gemini/<plugin>`, `dist/kiro/<plugin>`                                                                                                                                                                                                                                        | Root remappable, internal shape fixed | Consumed from a toolkit-owned bundle.                                                                            |
 
-**Invariant:** remapping moves *where source lives on disk*; it never changes a plugin's `name`, its manifest filenames, or the plugin-name segment of `source`. Only the **root prefix** of `source` changes.
+**Invariant:** remapping moves _where source lives on disk_; it never changes a plugin's `name`, its manifest filenames, or the plugin-name segment of `source`. Only the **root prefix** of `source` changes.
 
 ## Recommended approach: phased, conventions-as-defaults
 
-The two explored approaches sit on a spectrum. The recommendation is to ship the **minimal core first** (it unblocks `unraid-cli` immediately and is fully backward compatible), then grow into the **typed workspace + validated conflict-resolution** end-state, because the requirement explicitly asks for a *real, validated* collision affordance and multi-plugin support.
+The two explored approaches sit on a spectrum. The recommendation is to ship the **minimal core first** (it unblocks `unraid-cli` immediately and is fully backward compatible), then grow into the **typed workspace + validated conflict-resolution** end-state, because the requirement explicitly asks for a _real, validated_ collision affordance and multi-plugin support.
 
 ### Phase 1 — Relocatable roots (minimal, unblocks the use case)
 
@@ -80,17 +80,17 @@ Add an **optional repo-level config** read by `discover.ts`. Smallest viable sur
 ```ts
 // aipm.repo.ts at the software-repo root (optional; absent == today's behavior)
 export interface AipmRepoConfigInput {
-  pluginsRoot?: string;   // repo-relative; default 'plugins'
-  distDir?: string;       // repo-relative; default 'dist'
+  pluginsRoot?: string; // repo-relative; default 'plugins'
+  distDir?: string; // repo-relative; default 'dist'
 }
 ```
 
-- Load it in `discover.ts` (reuse the jiti machinery already in `load-config.ts`); treat the file's *presence* as the repo-root signal so an empty/not-yet-created plugins dir still resolves correctly; replace the two hard-coded joins with config values.
+- Load it in `discover.ts` (reuse the jiti machinery already in `load-config.ts`); treat the file's _presence_ as the repo-root signal so an empty/not-yet-created plugins dir still resolves correctly; replace the two hard-coded joins with config values.
 - In `validateMarketplaceRegistration`, compute the expected `source` as `./` + `path.relative(repoRoot, pluginDir)` instead of the literal `./plugins/<name>` (a no-op for the existing template), and fix the `./plugins/<name>` hint strings.
 - Point `operations.ts#scaffold` and `run.ts#resolvePluginDir` at the configured plugins root.
 - Add one additive `FindingCode`: `repo-config-invalid` (parallels `envelope-invalid`).
 
-This solves the **most likely collision** — the host repo already owns top-level `plugins/`/`dist/` — by relocating the whole aipm subtree in one declaration (e.g. `pluginsRoot: 'agent-plugins'`), while preserving the conventional layout *inside* each plugin folder. It is backward compatible by construction: no `aipm.repo.ts` → byte-identical to today, so `template` keeps building.
+This solves the **most likely collision** — the host repo already owns top-level `plugins/`/`dist/` — by relocating the whole aipm subtree in one declaration (e.g. `pluginsRoot: 'agent-plugins'`), while preserving the conventional layout _inside_ each plugin folder. It is backward compatible by construction: no `aipm.repo.ts` → byte-identical to today, so `template` keeps building.
 
 **What Phase 1 does NOT solve:** per-plugin / per-subdir remapping; relocating the registry file itself; typed marketplace metadata; validated refusal of illegal remaps; an additive `init` for existing repos.
 
@@ -101,25 +101,29 @@ Promote the repo config to a first-class **`aipm.workspace.ts` / `defineWorkspac
 ```ts
 // aipm.workspace.ts at repo root
 export default defineWorkspace({
-  marketplace: { name: 'unraid-cli', owner: { name: 'mike-north' },
-                 description: 'Agent plugins for the unraid-cli tool' },
-  mode: 'embedded',              // 'dedicated' | 'embedded'; default 'dedicated'
-  pluginsRoot: 'agent-plugins',  // remapped — repo already owns plugins/
+  marketplace: {
+    name: 'unraid-cli',
+    owner: { name: 'mike-north' },
+    description: 'Agent plugins for the unraid-cli tool',
+  },
+  mode: 'embedded', // 'dedicated' | 'embedded'; default 'dedicated'
+  pluginsRoot: 'agent-plugins', // remapped — repo already owns plugins/
   distRoot: 'agent-plugins/dist',
-  paths: {                       // sparse overrides; only collisions
+  paths: {
+    // sparse overrides; only collisions
     claude: { marketplace: '.claude-plugin/marketplace.json' }, // pinned (see constraint)
     cursor: { marketplace: '.cursor-plugin/marketplace.json' },
-    codex:  { marketplace: '.agents/plugins/marketplace.json' }, // pinned
+    codex: { marketplace: '.agents/plugins/marketplace.json' }, // pinned
   },
 });
 ```
 
 - Introduce a resolved **`Layout`** object (`{ repoRoot, mode, pluginsRoot, distRoot, marketplace, marketplacePaths: { target: { abs, pinned } } }`) produced once by `resolveLayout()` and threaded through `Discovery` to build/validate — collapsing topology from 5 call sites to one. Unspecified fields fall back to conventions; no workspace file at all → fully-defaulted layout == today.
-- Marketplace metadata gets a typed home; the toolkit can *generate* the registry header instead of hand-maintaining JSON.
+- Marketplace metadata gets a typed home; the toolkit can _generate_ the registry header instead of hand-maintaining JSON.
 - New findings encode pinned-vs-remappable as validated errors (additive, MINOR-compatible):
   - `workspace-invalid` — config fails to load/validate.
   - `path-collision` (hard) — in embedded mode, the plugins/dist root overlaps foreign host content; steers the author to remap. **This is the conflict-resolution affordance.**
-  - `mapping-invalid` (hard) — an override points outside the repo, tries to move a *pinned* path (e.g. Claude's registry off-root), or two plugins resolve to the same dir.
+  - `mapping-invalid` (hard) — an override points outside the repo, tries to move a _pinned_ path (e.g. Claude's registry off-root), or two plugins resolve to the same dir.
 - Add `aipm init --embedded`: additive (never clobbers), collision-probes for non-colliding `pluginsRoot`/`distRoot`, writes `aipm.workspace.ts` + empty root registries + `<pluginsRoot>/.gitkeep`, leaves the host `package.json` alone (prints guidance / additive `scripts` merge), and writes CI as a non-colliding `.github/workflows/aipm.yml`.
 
 `build.ts` needs **no structural change** — `computeDistBundles` already takes `distDir`, and in-plugin hook artifacts already write relative to the plugin dir, so both move with the layout for free.
@@ -151,13 +155,13 @@ Users install per host: `/plugin marketplace add mike-north/unraid-cli` (Claude/
 ## Trade-offs
 
 - **Phase 1 only:** tiny diff (~1 new loader, ~15 LOC in `discover.ts`, one validator tweak, one finding). Unblocks the headline use case. But cannot express pinned-path refusal, has no typed marketplace metadata, and no assisted `init` for existing repos — collisions inside a plugin folder and illegal remaps go undetected.
-- **Phase 2:** adds public API surface (`defineWorkspace` + types — each a versioned contract), a second jiti config loader to test, `Discovery`-threading churn across build/validate/tests, and fuzzy collision heuristics that need careful messaging. In return: single source of topology truth, typed metadata, *validated* conflict resolution (the actual safety property the embedded case needs), and dedicated/embedded unified as one code path (dedicated == all defaults).
+- **Phase 2:** adds public API surface (`defineWorkspace` + types — each a versioned contract), a second jiti config loader to test, `Discovery`-threading churn across build/validate/tests, and fuzzy collision heuristics that need careful messaging. In return: single source of topology truth, typed metadata, _validated_ conflict resolution (the actual safety property the embedded case needs), and dedicated/embedded unified as one code path (dedicated == all defaults).
 
 Phasing lets Phase 1 ship value immediately while Phase 2's contracts are designed deliberately; Phase 1's `aipm.repo.ts` is forward-compatible with being absorbed as a subset of `aipm.workspace.ts`.
 
 ## Out of scope (by decision)
 
-- Auto-generating or syncing skills from the CLI's command surface / `--help`. Skills stay hand-authored. (Worth revisiting later as a high-value follow-up: a *drift check* that flags skills referencing commands/flags the CLI no longer has.)
+- Auto-generating or syncing skills from the CLI's command surface / `--help`. Skills stay hand-authored. (Worth revisiting later as a high-value follow-up: a _drift check_ that flags skills referencing commands/flags the CLI no longer has.)
 
 ## Verification (of the design — concrete checks before/while implementing)
 

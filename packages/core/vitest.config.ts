@@ -23,6 +23,8 @@ export default defineConfig({
     // jiti compiles aipm.config.ts on first run; allow 30 s on cold CI runners.
     testTimeout: 30_000,
     pool: 'forks',
-    ...(isCi ? { poolOptions: { forks: { minForks: 1, maxForks: 1 } } } : {}),
+    // `singleFork` runs every test file in one reused fork (serial) — the idiomatic vitest way to
+    // say "no fork fan-out," leaving the main process a free core to service the reporter RPC.
+    ...(isCi ? { poolOptions: { forks: { singleFork: true } } } : {}),
   },
 });

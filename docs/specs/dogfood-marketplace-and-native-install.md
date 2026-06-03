@@ -10,7 +10,7 @@ An OSS author turns a single repo (often a monorepo) into **both** the source of
 
 1. **No universal installer of our own.** We rely on each host's conventional, native install of a git-repo. (The external `vercel-labs/plugins` CLI — `npx plugins add owner/repo` — is a convenience that already does native translation for the hosts it supports; we target it where it works but do not depend on or rebuild it.)
 2. **Native, never lowest-common-denominator.** Installing into a host must yield that host's _native_ plugin (hooks/agents/commands/MCP), not a reduced skills-only artifact. This is a tested invariant.
-3. **Gemini/Kiro: single-plugin (Choice 1).** Those hosts have no multi-plugin marketplace concept — they install one extension/power per repo from the **repo root**. So at most one plugin per repo may declare `gemini` (and at most one may declare `kiro`); the build emits that plugin's native artifact at the repo root. `>1` → a hard validation finding. (Merging N→1 is shelved as a future `aggregate` opt-in.)
+3. **Gemini/Kiro: one declarer per host (Choice 1).** Those hosts have no multi-plugin marketplace concept — they install one extension/power per repo from the **repo root**. The precise rule is **per-host, not whole-repo**: at most one plugin may declare `gemini`, and — independently — at most one may declare `kiro`. So a two-plugin repo where plugin A declares `gemini` and plugin B declares `kiro` is allowed: it emits two _distinct_ root artifacts (`gemini-extension.json` from A, `POWER.md` from B) that don't collide. The hard validation finding fires only when **more than one plugin declares the _same_ single-artifact host** (e.g. two plugins both declaring `gemini`), since that would need two `gemini-extension.json` at the root. (Merging N→1 into a single artifact is shelved as a future `aggregate` opt-in.)
 4. **Install source for Gemini/Kiro = repo root.**
 
 ## Native-install model (verified against vendor docs + the `plugins` bundle)
@@ -19,9 +19,11 @@ An OSS author turns a single repo (often a monorepo) into **both** the source of
 | ----------- | ----------------------------------------- | ---------------------------------------------------------- | -------------------------------------------------- |
 | Claude Code | ✅ `.claude-plugin/marketplace.json`      | per-plugin `.claude-plugin/plugin.json`                    | `/plugin marketplace add owner/repo`               |
 | Cursor      | ✅ `.cursor-plugin/marketplace.json`      | per-plugin `.cursor-plugin/plugin.json`                    | Dashboard → Settings → Plugins → Import (repo URL) |
-| Codex       | ✅ marketplace.json                       | per-plugin `.codex-plugin/plugin.json`                     | `codex plugin marketplace add owner/repo`          |
+| Codex       | ✅ `.agents/plugins/marketplace.json`†    | per-plugin `.codex-plugin/plugin.json`                     | `codex plugin marketplace add owner/repo`          |
 | Gemini      | ❌ one extension at repo root             | `gemini-extension.json` (+ `GEMINI.md`, `commands/*.toml`) | `gemini extensions install <git>`                  |
 | Kiro        | ❌ one power at repo root                 | `POWER.md` (+ `mcp.json`, `steering/`)                     | "Add power from GitHub" (repo URL)                 |
+
+† per OpenAI's published docs (what the toolchain generates); the unpublished `plugins` CLI currently looks at `.codex-plugin/marketplace.json` — see the divergence note below.
 
 The toolchain already generates the three native marketplaces (Claude/Cursor/Codex) via the Phase A registry codegen (opt-in `aipm.workspace.ts`). The `plugins` CLI discovers from `.claude-plugin/marketplace.json` (among others) and translates to native per target — so the same generated registries serve both each host's own installer **and** `plugins`.
 
@@ -31,7 +33,7 @@ The toolchain already generates the three native marketplaces (Claude/Cursor/Cod
 
 Most of the foundation already exists (embedded marketplaces, Codex target, Phase A registry codegen). This goal adds **one** capability:
 
-- **Gemini/Kiro repo-root native emission + N=1 gate.** Today the `gemini`/`kiro` targets emit per-plugin bundles under `dist/<target>/<plugin>/`. New: when exactly one plugin declares `gemini` (resp. `kiro`), `aipm build` also emits that plugin's `gemini-extension.json` + `GEMINI.md` + `commands/` (resp. `POWER.md` + `mcp.json` + `steering/`) at the **repo root**, committed and freshness-checked. A new hard validation finding (proposed code: `single-artifact-host`) fires if more than one plugin in the repo declares `gemini` or `kiro`. Root emission is gated on the host being declared by exactly one plugin.
+- **Gemini/Kiro repo-root native emission + N=1 gate.** Today the `gemini`/`kiro` targets emit per-plugin bundles under `dist/<target>/<plugin>/`. New: when exactly one plugin declares `gemini` (resp. `kiro`), `aipm build` also emits that plugin's `gemini-extension.json` + `GEMINI.md` + `commands/` (resp. `POWER.md` + `mcp.json` + `steering/`) at the **repo root**, committed and freshness-checked. A new hard validation finding (proposed code: `single-artifact-host`) fires when more than one plugin declares the **same** single-artifact host (e.g. two plugins both declaring `gemini`). Root emission for a host is gated on that host being declared by exactly one plugin; the two hosts are independent.
 
 (No new installer, no new target, no cross-plugin merge.)
 
@@ -39,8 +41,10 @@ Most of the foundation already exists (embedded marketplaces, Codex target, Phas
 
 For each host, prove the install yields a _native_ plugin, not an LCD skill:
 
-- **Claude / Cursor / Codex (via `plugins`, pinned version):** run `plugins add <local checkout> --target <id>` into a temp scope (or `plugins discover` dry-run) and assert the translated plugin carries **hooks + agents + commands**, not just `skills/`. Pin the `plugins` version (it is unpublished and changing) and treat its behavior as an external contract — a breaking change surfaces as a failing test rather than silent LCD drift.
-- **Gemini / Kiro (direct, since `plugins` can't install them yet):** assert the repo-root `gemini-extension.json` / `POWER.md` is valid and installable via the host's own command (`gemini extensions link .` / Kiro "Add from GitHub"), carrying the plugin's native commands/MCP/steering.
+The assertion is **host-native, not a fixed feature set**: each install must produce that host's native manifest **plus every native capability the plugin actually authored for that host** — never silently downgraded to skills-only when the plugin carries more. (It is _not_ "hooks + agents + commands always" — some targets are intentionally narrower; e.g. the `vercel` target is skills-only by design, and not every host supports every capability.)
+
+- **Claude / Cursor / Codex (via `plugins`, pinned version):** run `plugins add <local checkout> --target <id>` into a temp scope (or `plugins discover` dry-run) and assert the translated plugin carries the native manifest and the capabilities the source plugin authored (e.g. if it has `hooks/` and `agents/`, those survive — not just `skills/`). Pin the `plugins` version (it is unpublished and changing) and treat its behavior as an external contract — a breaking change surfaces as a failing test rather than silent LCD drift.
+- **Gemini / Kiro (direct, since `plugins` can't install them yet):** assert the repo-root `gemini-extension.json` / `POWER.md` is valid and installable via the host's own command (`gemini extensions link .` / Kiro "Add from GitHub"), carrying the plugin's authored commands/MCP/steering.
 - The invariant the suite protects: **the repo exposes native per-host content**, so any conformant installer translates to native. (If the repo only exposed the universal `SKILL.md`, a host install would be LCD — the test fails in that case.)
 
 CI caveat: `plugins` installs to `~/.cache` / `~/.cursor` / via the `claude` CLI, so tests use a dry-run/`--scope local` into a temp dir and inspect; verify which mode is inspectable before committing the harness.
@@ -51,7 +55,7 @@ CI caveat: `plugins` installs to `~/.cache` / `~/.cursor` / via the `claude` CLI
 
 - **`aipm.workspace.ts`** — marketplace metadata (`name: 'ai-plugin-marketplace'`, owner, description). Enables Phase A registry generation.
 - **`aipm.repo.ts`** — `pluginsRoot: 'agent-plugins'` (sits beside `packages/`; demonstrates the embedded relocation even though `tools` has no `plugins/` collision today), `distDir: 'agent-plugins/dist'`.
-- **One equipping plugin**, e.g. `marketplace-authoring`, declaring all five targets (`claude, codex, cursor, gemini, vercel`; `kiro` optional). Because it's the **only** plugin, the Gemini/Kiro N=1 gate is satisfied and the build emits root-level `gemini-extension.json` + `POWER.md` — so `tools` installs natively into **all five** hosts.
+- **One equipping plugin**, e.g. `marketplace-authoring`. To install natively into all **five hosts** (Claude Code, Cursor, Codex, Gemini, Kiro) it declares the five host targets `claude, codex, cursor, gemini, kiro` — plus `vercel`, the universal agentskills/open-plugin surface (a target, not a host, for the `plugins`-CLI fallback). Because it's the **only** plugin, the one-declarer-per-host rule is trivially satisfied for `gemini` and `kiro`, so the build emits root-level `gemini-extension.json` + `POWER.md` and `tools` installs natively into every host.
 
 ### The equipping plugin's content
 

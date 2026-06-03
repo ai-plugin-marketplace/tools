@@ -25,8 +25,14 @@ import { fileURLToPath } from 'node:url';
 
 import { createJiti } from 'jiti';
 
-import { defineConfig, defineRepoConfig } from '../config.js';
-import type { AipmConfig, AipmConfigInput, AipmRepoConfigInput } from '../config.js';
+import { defineConfig, defineRepoConfig, defineWorkspace } from '../config.js';
+import type {
+  AipmConfig,
+  AipmConfigInput,
+  AipmRepoConfigInput,
+  AipmWorkspace,
+  AipmWorkspaceInput,
+} from '../config.js';
 
 /** The canonical config filename every plugin must provide (§6.1). */
 export const AIPM_CONFIG_FILENAME = 'aipm.config.ts';
@@ -37,6 +43,14 @@ export const AIPM_CONFIG_FILENAME = 'aipm.config.ts';
  * Module-private — callers use {@link hasRepoConfig}/{@link loadRepoConfig} rather than the name.
  */
 const AIPM_REPO_CONFIG_FILENAME = 'aipm.repo.ts';
+
+/**
+ * Optional workspace-level config filename. Its presence at a repo root opts the repo into
+ * marketplace-registry generation; absence preserves the historical hand-authored-registry
+ * behavior. Module-private — callers use {@link hasWorkspaceConfig}/{@link loadWorkspaceConfig}
+ * rather than the name (mirrors {@link AIPM_REPO_CONFIG_FILENAME}).
+ */
+const AIPM_WORKSPACE_CONFIG_FILENAME = 'aipm.workspace.ts';
 
 /** The npm specifier a plugin's `aipm.config.ts` imports `defineConfig` from. */
 const CORE_PACKAGE_SPECIFIER = '@ai-plugin-marketplace/core';
@@ -184,5 +198,41 @@ export async function loadRepoConfig(repoRoot: string): Promise<ResolvedRepoConf
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
     throw new ConfigLoadError(`Invalid ${AIPM_REPO_CONFIG_FILENAME}: ${message}`, { cause: err });
+  }
+}
+
+/** True iff `repoRoot` contains an `aipm.workspace.ts` (i.e. registry generation is opted in). */
+export function hasWorkspaceConfig(repoRoot: string): boolean {
+  return fs.existsSync(path.join(repoRoot, AIPM_WORKSPACE_CONFIG_FILENAME));
+}
+
+/**
+ * Load the optional `aipm.workspace.ts` at `repoRoot`, returning the validated, branded
+ * {@link AipmWorkspace}.
+ *
+ * When the file is **absent**, returns `undefined` — the signal that this repo has NOT opted into
+ * registry generation (the toolkit then leaves the hand-authored registries alone). When
+ * **present**, the module's `default` export is re-validated through `defineWorkspace` so the
+ * result provably passed the canonical schema.
+ *
+ * @param repoRoot - Absolute path to the repo root.
+ * @returns The validated workspace config, or `undefined` when no `aipm.workspace.ts` exists.
+ * @throws {ConfigLoadError} If the file exists but cannot be imported or fails validation.
+ */
+export async function loadWorkspaceConfig(repoRoot: string): Promise<AipmWorkspace | undefined> {
+  const configPath = path.join(repoRoot, AIPM_WORKSPACE_CONFIG_FILENAME);
+  if (!fs.existsSync(configPath)) {
+    return undefined;
+  }
+
+  const defaultExport = await importDefaultExport(configPath, AIPM_WORKSPACE_CONFIG_FILENAME);
+
+  try {
+    return defineWorkspace(defaultExport as AipmWorkspaceInput);
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    throw new ConfigLoadError(`Invalid ${AIPM_WORKSPACE_CONFIG_FILENAME}: ${message}`, {
+      cause: err,
+    });
   }
 }

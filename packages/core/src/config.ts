@@ -24,6 +24,18 @@ export interface AipmConfigInput {
   version: string;
   /** Targets this plugin supports. See §6 of the spec. */
   targets: readonly TargetId[];
+  /**
+   * Optional one-line description of the plugin. When the repo opts into registry generation (an
+   * `aipm.workspace.ts` is present), this becomes the plugin entry's `description` (Claude/Cursor)
+   * in the generated `marketplace.json`. Optional so existing configs stay valid.
+   */
+  description?: string;
+  /**
+   * Optional discovery keywords for the plugin. When the repo opts into registry generation, these
+   * become the plugin entry's `tags` (Claude/Cursor) in the generated `marketplace.json`. Optional
+   * so existing configs stay valid.
+   */
+  keywords?: readonly string[];
 }
 
 /**
@@ -62,6 +74,8 @@ const aipmConfigSchema = z
       .array(z.enum(TARGET_IDS))
       .min(1, 'targets must contain at least one target')
       .refine((arr) => new Set(arr).size === arr.length, 'targets must not contain duplicates'),
+    description: z.string().optional(),
+    keywords: z.array(z.string()).optional(),
   })
   .strict();
 
@@ -153,4 +167,85 @@ const aipmRepoConfigSchema = z
 export function defineRepoConfig(config: AipmRepoConfigInput = {}): AipmRepoConfig {
   const parsed = aipmRepoConfigSchema.parse(config);
   return parsed as unknown as AipmRepoConfig;
+}
+
+// ---------------------------------------------------------------------------
+// Workspace-level configuration — `aipm.workspace.ts` (registry generation)
+// ---------------------------------------------------------------------------
+
+/**
+ * Raw input shape accepted by `defineWorkspace`. Authored as `aipm.workspace.ts` at the **repo
+ * root**. Its presence opts the repo into **marketplace-registry generation**: the toolkit
+ * generates the per-target `marketplace.json` registries from this workspace metadata plus the
+ * discovered plugins, commits them, and freshness-checks them. When the file is **absent**, the
+ * toolkit behaves exactly as before (registries are hand-authored and `validateMarketplaceRegistration`
+ * runs).
+ *
+ * @public
+ */
+export interface AipmWorkspaceInput {
+  /** Marketplace-level metadata shared across all generated registries. */
+  marketplace: {
+    /** Marketplace name — the registry's top-level `name`. */
+    name: string;
+    /**
+     * Optional owner block written to the Claude/Cursor registries' top-level `owner`. The Codex
+     * registry has no owner concept, so this is ignored there.
+     */
+    owner?: {
+      name: string;
+      email?: string;
+    };
+    /**
+     * Optional marketplace description. For Claude/Cursor it becomes `metadata.description`; for
+     * Codex it is currently unused (the Codex registry has no marketplace-level description field).
+     */
+    description?: string;
+  };
+}
+
+/**
+ * Module-private brand marker for {@link AipmWorkspace}. Never exported.
+ *
+ * @internal
+ */
+declare const aipmWorkspaceBrand: unique symbol;
+
+/**
+ * Validated workspace configuration. Structurally identical to {@link AipmWorkspaceInput} but
+ * carries a module-private brand indicating `defineWorkspace` validated it at runtime.
+ *
+ * @public
+ */
+export type AipmWorkspace = AipmWorkspaceInput & {
+  readonly [aipmWorkspaceBrand]: 'AipmWorkspace';
+};
+
+const aipmWorkspaceSchema = z
+  .object({
+    marketplace: z
+      .object({
+        name: z.string().min(1, 'marketplace.name must not be empty'),
+        owner: z
+          .object({
+            name: z.string().min(1, 'marketplace.owner.name must not be empty'),
+            email: z.string().optional(),
+          })
+          .strict()
+          .optional(),
+        description: z.string().optional(),
+      })
+      .strict(),
+  })
+  .strict();
+
+/**
+ * Validate and brand a workspace configuration. Throws a `ZodError` on invalid input (unknown
+ * keys, missing `marketplace.name`).
+ *
+ * @public
+ */
+export function defineWorkspace(config: AipmWorkspaceInput): AipmWorkspace {
+  const parsed = aipmWorkspaceSchema.parse(config);
+  return parsed as unknown as AipmWorkspace;
 }

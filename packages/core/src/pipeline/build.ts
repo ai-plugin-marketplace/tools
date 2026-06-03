@@ -25,8 +25,10 @@ import { convertClaudeHooksYamlToGeminiJson } from '../targets/gemini/transform.
 import { bundleGeminiPlugin } from '../targets/gemini/bundle.js';
 import { bundleKiroPlugin } from '../targets/kiro/bundle.js';
 
+import type { AipmWorkspace } from '../config.js';
+
 import { discoverPlugins } from './discover.js';
-import { loadPluginConfig } from './load-config.js';
+import { loadPluginConfig, loadWorkspaceConfig } from './load-config.js';
 import { applyJsonSentinel } from './sentinel.js';
 import type { SentinelMode } from './sentinel.js';
 import { runValidate } from './validate.js';
@@ -172,6 +174,182 @@ export function computeDistBundles(
 // `gemini-extension.json`, Kiro `.kiro/agents/*.json`) are deferred to preserve dist byte-parity
 // with the committed oracle. Adding them requires regenerating the oracle in the template repo.
 
+// ---------------------------------------------------------------------------
+// Marketplace registry generation (§4.4, design spec "Marketplace registries")
+// ---------------------------------------------------------------------------
+
+/**
+ * One discovered plugin's contribution to registry generation. The repo-level
+ * {@link computeRegistryArtifacts} step assembles these (loading each plugin's `aipm.config.ts`
+ * for `description`/`keywords` and its envelope) so the registry generator never re-reads disk.
+ */
+export interface RegistryPluginInfo {
+  /** Plugin directory basename (the registry entry `name`). */
+  name: string;
+  /**
+   * The plugin directory relative to the repo root, `./`-prefixed and POSIX-separated (e.g.
+   * `./plugins/<name>`). This is the registry entry's `source` (string for Claude/Cursor, the
+   * `source.path` for Codex). Honors a relocated `pluginsRoot`.
+   */
+  source: string;
+  /** The plugin's declared support envelope (`config.targets`). */
+  envelope: readonly TargetId[];
+  /** Optional one-line description from `aipm.config.ts`; maps to the entry `description`/`tags` host. */
+  description?: string;
+  /** Optional keywords from `aipm.config.ts`; maps to the entry `tags` (Claude/Cursor). */
+  keywords?: readonly string[];
+}
+
+/**
+ * A generated marketplace registry file. Like `dist/` bundles, registries are **sentinel-less**:
+ * the host schemas are strict and there is no companion sidecar, so freshness is a whole-file
+ * regenerate-and-byte-compare against `expectedContent`. Both `runBuild` (which writes the bytes)
+ * and the freshness check (which compares disk to the bytes) derive these from one place.
+ */
+export interface RegistryArtifact {
+  /** The registry-backed target this file serves. */
+  target: TargetId;
+  /** Absolute path of the registry file (always at the repo root). */
+  absPath: string;
+  /** Exact bytes the build writes (2-space JSON + trailing newline). */
+  expectedContent: string;
+}
+
+/** Where each registry-backed target's `marketplace.json` lives, relative to the repo root. */
+const REGISTRY_REL_PATHS: Record<'claude' | 'cursor' | 'codex', readonly string[]> = {
+  claude: ['.claude-plugin', 'marketplace.json'],
+  cursor: ['.cursor-plugin', 'marketplace.json'],
+  codex: ['.agents', 'plugins', 'marketplace.json'],
+};
+
+/** Default Codex plugin category when none is otherwise specified (design spec §"Codex"). */
+const CODEX_DEFAULT_CATEGORY = 'Productivity';
+
+/**
+ * Serialize a registry object as 2-space JSON with a trailing newline — byte-stable with the
+ * `registerInMarketplace`/dist serialization so freshness compares cleanly.
+ */
+function serializeRegistry(obj: unknown): string {
+  return `${JSON.stringify(obj, null, 2)}\n`;
+}
+
+/**
+ * Build a Claude/Cursor (string-source) registry object from the workspace metadata and the
+ * plugins whose envelope includes `target`. Entry shape:
+ * `{ name, source, description?, tags? }` — `description`/`tags` keys are omitted when absent
+ * (never serialized as `undefined`).
+ */
+function buildStringSourceRegistry(
+  workspace: AipmWorkspace,
+  plugins: readonly RegistryPluginInfo[],
+): Record<string, unknown> {
+  const { marketplace } = workspace;
+  const registry: Record<string, unknown> = { name: marketplace.name };
+  if (marketplace.owner !== undefined) {
+    registry['owner'] = marketplace.owner;
+  }
+  if (marketplace.description !== undefined) {
+    registry['metadata'] = { description: marketplace.description };
+  }
+  registry['plugins'] = plugins.map((p) => {
+    const entry: Record<string, unknown> = { name: p.name, source: p.source };
+    if (p.description !== undefined) entry['description'] = p.description;
+    if (p.keywords !== undefined) entry['tags'] = [...p.keywords];
+    return entry;
+  });
+  return registry;
+}
+
+/**
+ * Build the Codex (object-source) registry object. Entry shape:
+ * `{ name, source: { source: 'local', path }, policy: { installation, authentication }, category }`.
+ * `interface.displayName` defaults to `marketplace.name`; `category` defaults to
+ * `'Productivity'` (design spec §"Codex").
+ */
+function buildCodexRegistry(
+  workspace: AipmWorkspace,
+  plugins: readonly RegistryPluginInfo[],
+): Record<string, unknown> {
+  const { marketplace } = workspace;
+  return {
+    name: marketplace.name,
+    interface: { displayName: marketplace.name },
+    plugins: plugins.map((p) => ({
+      name: p.name,
+      source: { source: 'local', path: p.source },
+      policy: { installation: 'AVAILABLE', authentication: 'ON_INSTALL' },
+      category: CODEX_DEFAULT_CATEGORY,
+    })),
+  };
+}
+
+/**
+ * Compute the generated marketplace registries for a repo, **without writing**. The single source
+ * of truth shared by `runBuild` (which writes `expectedContent`) and the freshness check (which
+ * compares the on-disk bytes against it).
+ *
+ * A registry file is produced for each registry-backed target (`claude` → `.claude-plugin/`,
+ * `cursor` → `.cursor-plugin/`, `codex` → `.agents/plugins/`) that appears in **at least one**
+ * plugin's envelope. Each registry lists exactly the plugins whose envelope includes that target,
+ * in the order given (callers pass plugins sorted by discovery). Registries are sentinel-less.
+ *
+ * @param repoRoot - Absolute repo root (where the registries live).
+ * @param plugins - Discovered plugins with name/source/envelope/description/keywords.
+ * @param workspace - The validated `aipm.workspace.ts` metadata.
+ */
+export function computeRegistryArtifacts(
+  repoRoot: string,
+  plugins: readonly RegistryPluginInfo[],
+  workspace: AipmWorkspace,
+): RegistryArtifact[] {
+  const artifacts: RegistryArtifact[] = [];
+
+  for (const target of ['claude', 'cursor', 'codex'] as const) {
+    const members = plugins.filter((p) => p.envelope.includes(target));
+    if (members.length === 0) continue; // no plugin declares this target → no registry file
+
+    const obj =
+      target === 'codex'
+        ? buildCodexRegistry(workspace, members)
+        : buildStringSourceRegistry(workspace, members);
+
+    artifacts.push({
+      target,
+      absPath: path.join(repoRoot, ...REGISTRY_REL_PATHS[target]),
+      expectedContent: serializeRegistry(obj),
+    });
+  }
+
+  return artifacts;
+}
+
+/**
+ * Assemble the {@link RegistryPluginInfo} for every discovered plugin under `repoRoot`, loading
+ * each plugin's `aipm.config.ts` for its envelope, description, and keywords. Shared by `runBuild`
+ * and the freshness check so both feed `computeRegistryArtifacts` identical input.
+ *
+ * @param repoRoot - Absolute repo root (the base for the `./`-prefixed `source`).
+ * @param pluginDirs - Absolute plugin directories (already discovery-sorted).
+ */
+export async function collectRegistryPlugins(
+  repoRoot: string,
+  pluginDirs: readonly string[],
+): Promise<RegistryPluginInfo[]> {
+  const infos: RegistryPluginInfo[] = [];
+  for (const pluginDir of pluginDirs) {
+    const config = await loadPluginConfig(pluginDir);
+    const source = `./${path.relative(repoRoot, pluginDir).split(path.sep).join('/')}`;
+    infos.push({
+      name: path.basename(pluginDir),
+      source,
+      envelope: config.targets,
+      ...(config.description !== undefined ? { description: config.description } : {}),
+      ...(config.keywords !== undefined ? { keywords: config.keywords } : {}),
+    });
+  }
+  return infos;
+}
+
 /** Collect every file path under `dir`, relative to `dir`. Returns `[]` if `dir` is absent. */
 export function collectFilesRelative(dir: string): string[] {
   if (!fs.existsSync(dir)) return [];
@@ -262,11 +440,36 @@ async function buildOnePlugin(pluginDir: string, distDir: string): Promise<Build
  *   a transform fails, or (when `failFast`) post-build validation reports hard findings.
  */
 export async function runBuild(targetPath: string, opts?: BuildOptions): Promise<BuildResult[]> {
-  const { pluginDirs, distDir } = await discoverPlugins(targetPath);
+  const { repoRoot, pluginDirs, distDir } = await discoverPlugins(targetPath);
 
   const results: BuildResult[] = [];
   for (const pluginDir of pluginDirs) {
     results.push(await buildOnePlugin(pluginDir, distDir));
+  }
+
+  // ── Marketplace registries (opt-in via aipm.workspace.ts at the repo root) ──
+  // When the repo has opted into registry generation, the three marketplace.json files are
+  // GENERATED here (subsuming the hand-authored registries + validateMarketplaceRegistration).
+  // Registries are repo-level, so we compute them from EVERY plugin under the repo root — not just
+  // the one a single-plugin `targetPath` named — so a partial build never drops sibling entries.
+  // Re-discovering from `repoRoot` (rather than reusing `pluginDirs`, which holds only the named
+  // plugin for single-plugin input) is what makes the registry repo-complete. When no
+  // `aipm.workspace.ts` is present, generation does nothing and the registries stay hand-authored.
+  const workspace = await loadWorkspaceConfig(repoRoot);
+  if (workspace !== undefined) {
+    const { pluginDirs: allPluginDirs } = await discoverPlugins(repoRoot);
+    const registryPlugins = await collectRegistryPlugins(repoRoot, allPluginDirs);
+    const registries = computeRegistryArtifacts(repoRoot, registryPlugins, workspace);
+    for (const registry of registries) {
+      writeFileEnsuringDir(registry.absPath, registry.expectedContent);
+    }
+    // Record the generated registries as repo-level artifacts on every built plugin's result so
+    // they surface in BuildResult regardless of which plugin a single-plugin build targeted.
+    for (const result of results) {
+      for (const registry of registries) {
+        result.artifacts.push({ path: registry.absPath, target: registry.target });
+      }
+    }
   }
 
   // §5.4: build runs validate before returning success. Skip freshness here — we just wrote the

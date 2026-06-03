@@ -139,15 +139,48 @@ export function stripGeneratedArtifacts(pluginDir: string): string[] {
   return removed.sort();
 }
 
-/** Render an `aipm.config.ts` source string for the given targets. */
-function renderAipmConfig(targets: readonly TargetId[], version = '0.1.0'): string {
+/** Optional shared metadata an `aipm.config.ts` may carry (registry-generation source fields). */
+interface SynthConfigMetadata {
+  /** Maps to the generated registry entry's `description` (Claude/Cursor). */
+  description?: string;
+  /** Maps to the generated registry entry's `tags` (Claude/Cursor). */
+  keywords?: readonly string[];
+}
+
+/** Render an `aipm.config.ts` source string for the given targets and optional metadata. */
+function renderAipmConfig(
+  targets: readonly TargetId[],
+  meta: SynthConfigMetadata = {},
+  version = '0.1.0',
+): string {
   const targetList = targets.map((t) => `'${t}'`).join(', ');
+  const lines = [`  version: '${version}',`, `  targets: [${targetList}],`];
+  if (meta.description !== undefined) {
+    lines.push(`  description: ${JSON.stringify(meta.description)},`);
+  }
+  if (meta.keywords !== undefined) {
+    lines.push(`  keywords: ${JSON.stringify(meta.keywords)},`);
+  }
   return `import { defineConfig } from '@ai-plugin-marketplace/core';
 
 export default defineConfig({
-  version: '${version}',
-  targets: [${targetList}],
+${lines.join('\n')}
 });
+`;
+}
+
+/**
+ * Render an `aipm.workspace.ts` source string. Its presence at a repo root opts the repo into
+ * marketplace-registry generation.
+ */
+function renderAipmWorkspace(marketplace: {
+  name: string;
+  owner?: { name: string; email?: string };
+  description?: string;
+}): string {
+  return `import { defineWorkspace } from '@ai-plugin-marketplace/core';
+
+export default defineWorkspace(${JSON.stringify({ marketplace }, null, 2)});
 `;
 }
 
@@ -228,6 +261,71 @@ export function synthPluginRepo(
   return {
     repoRoot,
     pluginDir,
+    cleanup: () => {
+      if (fs.existsSync(repoRoot)) fs.rmSync(repoRoot, { recursive: true });
+    },
+  };
+}
+
+// ---------------------------------------------------------------------------
+// Lightweight, template-independent fixtures for registry-generation tests
+// ---------------------------------------------------------------------------
+
+/** A single plugin's declaration for {@link synthRegistryRepo}. */
+export interface SynthRegistryPlugin {
+  /** Plugin directory basename (becomes the registry entry `name`). */
+  name: string;
+  /** Declared support envelope. */
+  targets: readonly TargetId[];
+  /** Optional shared metadata mapped to the generated registry entry. */
+  meta?: SynthConfigMetadata;
+}
+
+/** A handle to a synthesized registry-generation repo, with cleanup. */
+export interface SynthRegistryRepo {
+  /** Absolute repo root (contains `plugins/` and, when requested, `aipm.workspace.ts`). */
+  repoRoot: string;
+  /** Remove the temp repo. */
+  cleanup: () => void;
+}
+
+/**
+ * Synthesize a temp repo with one or more minimal plugins (each just an `aipm.config.ts`) and,
+ * optionally, an `aipm.workspace.ts` to opt the repo into registry generation. Unlike
+ * {@link synthPluginRepo}, this does NOT copy the heavy template plugin — registry generation only
+ * reads each plugin's `aipm.config.ts` (envelope + description/keywords) plus the directory name,
+ * so a minimal fixture is sufficient and keeps these tests independent of the template checkout.
+ *
+ * @param plugins - The plugins to create under `plugins/<name>/`.
+ * @param workspace - Workspace metadata to write to `aipm.workspace.ts`; omit to leave it absent
+ *   (the backward-compat path).
+ */
+export function synthRegistryRepo(
+  plugins: readonly SynthRegistryPlugin[],
+  workspace?: { name: string; owner?: { name: string; email?: string }; description?: string },
+): SynthRegistryRepo {
+  const repoRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'aipm-synth-reg-'));
+
+  for (const plugin of plugins) {
+    const pluginDir = path.join(repoRoot, 'plugins', plugin.name);
+    fs.mkdirSync(pluginDir, { recursive: true });
+    fs.writeFileSync(
+      path.join(pluginDir, 'aipm.config.ts'),
+      renderAipmConfig(plugin.targets, plugin.meta ?? {}),
+      'utf-8',
+    );
+  }
+
+  if (workspace !== undefined) {
+    fs.writeFileSync(
+      path.join(repoRoot, 'aipm.workspace.ts'),
+      renderAipmWorkspace(workspace),
+      'utf-8',
+    );
+  }
+
+  return {
+    repoRoot,
     cleanup: () => {
       if (fs.existsSync(repoRoot)) fs.rmSync(repoRoot, { recursive: true });
     },

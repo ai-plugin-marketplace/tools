@@ -78,6 +78,17 @@ Validate and brand a repo configuration, applying defaults for any omitted field
 </td></tr>
 <tr><td>
 
+[defineWorkspace(config)](./core.defineworkspace.md)
+
+
+</td><td>
+
+Validate and brand a workspace configuration. Throws a `ZodError` on invalid input (unknown keys, missing `marketplace.name`<!-- -->).
+
+
+</td></tr>
+<tr><td>
+
 [init(targetDir, opts)](./core.init.md)
 
 
@@ -167,6 +178,17 @@ Raw input shape accepted by `defineConfig`<!-- -->. Plugin authors type their co
 Raw input shape accepted by `defineRepoConfig`<!-- -->. Authored as `aipm.repo.ts` at the \*\*repo root\*\* of a project that hosts a marketplace inside a larger software repo. The file is optional: when absent, the toolkit behaves as if `defineRepoConfig({})` was used, reproducing the historical "repo root == marketplace root, fixed `plugins/`<!-- -->" topology.
 
 Both paths are repo-root-relative and must stay within the repo (no absolute paths, no `..` segments), because host platforms resolve a plugin's `source` relative to the repo root.
+
+
+</td></tr>
+<tr><td>
+
+[AipmWorkspaceInput](./core.aipmworkspaceinput.md)
+
+
+</td><td>
+
+Raw input shape accepted by `defineWorkspace`<!-- -->. Authored as `aipm.workspace.ts` at the \*\*repo root\*\*. Its presence opts the repo into \*\*marketplace-registry generation\*\*: the toolkit generates the per-target `marketplace.json` registries from this workspace metadata plus the discovered plugins, commits them, and freshness-checks them. When the file is \*\*absent\*\*, the toolkit behaves exactly as before (registries are hand-authored and `validateMarketplaceRegistration` runs).
 
 
 </td></tr>
@@ -325,6 +347,17 @@ Validated plugin configuration. Structurally identical to `AipmConfigInput` but 
 </td><td>
 
 Validated repo configuration. Carries a module-private brand indicating `defineRepoConfig` validated it; unlike the input, both fields are always present (defaults applied).
+
+
+</td></tr>
+<tr><td>
+
+[AipmWorkspace](./core.aipmworkspace.md)
+
+
+</td><td>
+
+Validated workspace configuration. Structurally identical to [AipmWorkspaceInput](./core.aipmworkspaceinput.md) but carries a module-private brand indicating `defineWorkspace` validated it at runtime.
 
 
 </td></tr>

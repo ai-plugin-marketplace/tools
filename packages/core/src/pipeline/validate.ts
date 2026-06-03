@@ -22,12 +22,16 @@ import { validateKiroPlugin } from '../targets/kiro/validate.js';
 import { validateVercelPlugin } from '../targets/vercel/validate.js';
 import {
   collectFilesRelative,
+  collectRegistryPlugins,
   computeDistBundles,
   computePluginHookArtifacts,
+  computeRegistryArtifacts,
   regenerateBundleToTemp,
 } from './build.js';
+import type { RegistryArtifact } from './build.js';
 import { discoverPlugins } from './discover.js';
-import { ConfigLoadError, loadPluginConfig } from './load-config.js';
+import { ConfigLoadError, loadPluginConfig, loadWorkspaceConfig } from './load-config.js';
+import type { AipmWorkspace } from '../config.js';
 import type { Finding, TargetId, ValidateOptions, ValidationResult } from './types.js';
 
 // ---------------------------------------------------------------------------
@@ -734,14 +738,15 @@ function validatePerTargetSchemas(pluginDir: string, envelope: readonly TargetId
  */
 function freshnessFinding(
   ci: boolean,
-  pluginName: string,
+  pluginName: string | undefined,
   message: string,
   hint?: string,
 ): Finding {
   return {
     severity: ci ? 'hard' : 'soft',
     code: 'freshness',
-    plugin: pluginName,
+    // Repo-level freshness (e.g. registries) has no owning plugin — omit the key entirely.
+    ...(pluginName !== undefined ? { plugin: pluginName } : {}),
     message,
     ...(hint !== undefined ? { hint } : {}),
   };
@@ -840,6 +845,73 @@ function checkFreshness(
 }
 
 /**
+ * Repo-level freshness check for the generated marketplace registries (design spec §"Marketplace
+ * registries"). Runs ONLY when an `aipm.workspace.ts` is present (registry generation opted in).
+ *
+ * Registries are sentinel-less, so freshness is a whole-file regenerate-and-byte-compare: recompute
+ * the expected bytes for every registry-backed target that some plugin declares, then compare to
+ * the committed file. A missing file or any byte difference (drift, hand-edit, stale entry) is a
+ * `freshness` finding — this is what subsumes the source-correctness half of
+ * `validateMarketplaceRegistration` (a wrong `source` is now stale, not a separate finding).
+ *
+ * Generation logic is shared with `runBuild` via `collectRegistryPlugins`/`computeRegistryArtifacts`
+ * so the build output and the freshness oracle cannot drift. Findings are repo-scoped (no `plugin`).
+ */
+async function checkRegistryFreshness(
+  repoRoot: string,
+  pluginDirs: readonly string[],
+  workspace: AipmWorkspace,
+  ci: boolean,
+): Promise<Finding[]> {
+  let expected: RegistryArtifact[];
+  try {
+    const registryPlugins = await collectRegistryPlugins(repoRoot, pluginDirs);
+    expected = computeRegistryArtifacts(repoRoot, registryPlugins, workspace);
+  } catch (err) {
+    // A plugin config that won't load is reported per-plugin as envelope-invalid elsewhere; here
+    // we surface the inability to compute the registry oracle as repo-scoped freshness drift.
+    const message = err instanceof Error ? err.message : String(err);
+    return [
+      freshnessFinding(
+        ci,
+        undefined,
+        `Unable to compute expected marketplace registries: ${message}`,
+        'fix the offending aipm.config.ts and run `aipm build`.',
+      ),
+    ];
+  }
+
+  const findings: Finding[] = [];
+  for (const registry of expected) {
+    const rel = path.relative(repoRoot, registry.absPath);
+    if (!fs.existsSync(registry.absPath)) {
+      findings.push(
+        freshnessFinding(
+          ci,
+          undefined,
+          `Generated registry '${rel}' is missing.`,
+          'run `aipm build` to generate it.',
+        ),
+      );
+      continue;
+    }
+    const onDisk = fs.readFileSync(registry.absPath, 'utf-8');
+    if (onDisk !== registry.expectedContent) {
+      findings.push(
+        freshnessFinding(
+          ci,
+          undefined,
+          `Generated registry '${rel}' is stale — it differs from what \`aipm build\` would produce (hand-edited or out of date).`,
+          "run `aipm build` to regenerate it; edit `aipm.workspace.ts` / each plugin's `aipm.config.ts`, not the generated registry.",
+        ),
+      );
+    }
+  }
+
+  return findings;
+}
+
+/**
  * Compare two directory trees and return the relative paths that differ (present in only one
  * side, or present in both with differing bytes). An empty result means the trees are identical.
  */
@@ -913,6 +985,25 @@ export async function runValidate(
   const { repoRoot, distDir, pluginDirs } = discovery;
   const findings: Finding[] = [];
 
+  // Registry generation is opt-in via `aipm.workspace.ts`. When present, the marketplace registries
+  // are GENERATED, so their correctness is enforced by the repo-level freshness check below and the
+  // per-plugin `validateMarketplaceRegistration` is SKIPPED (it would otherwise double-report). When
+  // absent, the historical hand-authored-registry path runs unchanged. An invalid workspace config
+  // surfaces as a single repo-scoped finding (parallel to `repo-config-invalid`).
+  let workspace: AipmWorkspace | undefined;
+  try {
+    workspace = await loadWorkspaceConfig(repoRoot);
+  } catch (err) {
+    if (err instanceof ConfigLoadError) {
+      return {
+        findings: [{ severity: 'hard', code: 'repo-config-invalid', message: err.message }],
+        passed: false,
+      };
+    }
+    throw err;
+  }
+  const generatesRegistries = workspace !== undefined;
+
   for (const pluginDir of pluginDirs) {
     const pluginName = path.basename(pluginDir);
 
@@ -951,13 +1042,27 @@ export async function runValidate(
     if (envelope.length > 1 && !hasBlockingSchemaError) {
       findings.push(...validateNameConsistency(pluginDir, envelope));
       findings.push(...validateMcpKeySync(pluginDir, envelope));
-      findings.push(...validateMarketplaceRegistration(pluginDir, repoRoot, envelope));
+      // When registries are generated, their correctness is enforced by freshness below — skip the
+      // hand-authored-registry check to avoid double findings (design spec, locked decision 2).
+      if (!generatesRegistries) {
+        findings.push(...validateMarketplaceRegistration(pluginDir, repoRoot, envelope));
+      }
     }
 
     // ── 5. Freshness ─────────────────────────────────────────────────────────
     if (!skipFreshness) {
       findings.push(...checkFreshness(pluginDir, distDir, envelope, ci));
     }
+  }
+
+  // ── 6. Repo-level registry freshness (only when generation is opted in) ─────
+  // Registries are repo-scoped, so this runs once per repo against EVERY plugin under the repo
+  // root — not just the plugins in `pluginDirs` (which is length-1 for single-plugin input). That
+  // mirrors how `runBuild` regenerates the repo-complete registry, so a single-plugin validate of
+  // a repo that has sibling plugins compares against the same expected bytes the build would write.
+  if (!skipFreshness && workspace !== undefined) {
+    const { pluginDirs: allPluginDirs } = await discoverPlugins(repoRoot);
+    findings.push(...(await checkRegistryFreshness(repoRoot, allPluginDirs, workspace, ci)));
   }
 
   const passed = !findings.some((f) => f.severity === 'hard');

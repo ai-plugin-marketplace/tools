@@ -150,6 +150,6 @@ unraid-cli/
 
 ## Reference
 
-- `defineRepoConfig` API: [`docs/core.definerepoconfig.md`](../core.definerepoconfig.md)
+- `defineRepoConfig` API: [`packages/core/docs/core.definerepoconfig.md`](../../packages/core/docs/core.definerepoconfig.md)
 - Design rationale and constraints: [`docs/specs/embedded-marketplaces-and-codex-target.md`](../specs/embedded-marketplaces-and-codex-target.md)
 - Toolkit architecture: [`docs/specs/architecture.md`](../specs/architecture.md)

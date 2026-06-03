@@ -26,8 +26,13 @@ import {
   computeDistBundles,
   computePluginHookArtifacts,
   computeRegistryArtifacts,
+  computeRootArtifacts,
+  detectRootCollisions,
   managedRegistryPaths,
+  readRootManifestPaths,
   regenerateBundleToTemp,
+  rootManifestPath,
+  serializeRootManifest,
 } from './build.js';
 import type { RegistryArtifact } from './build.js';
 import { discoverPlugins } from './discover.js';
@@ -938,6 +943,152 @@ async function checkRegistryFreshness(
 }
 
 /**
+ * Repo-level check for the single-artifact-host repo-root native artifacts (gemini / kiro), design
+ * spec "Phase 1". Runs ONLY when an `aipm.workspace.ts` is present (the same opt-in gate as
+ * registries). Surfaces three independent finding kinds:
+ *
+ * 1. **`single-artifact-host`** (always hard) — a host declared by more than one plugin. Comes
+ *    straight from {@link computeRootArtifacts}'s N=1 gate, so build and validate agree exactly on
+ *    which hosts are emittable.
+ * 2. **`root-artifact-collision`** (always hard) — a generated root path is occupied by a file the
+ *    toolkit does not track as previously-generated. Detected against the committed sidecar's
+ *    tracked set, mirroring build's collision guard. (A collision detected at validate time is a
+ *    finding even though build would have refused to write it.)
+ * 3. **`freshness`** (hard in CI, soft locally) — for every emittable root file: missing or stale
+ *    (byte-compare against `computeRootArtifacts`' bytes); for every path in the committed sidecar
+ *    no longer expected but still on disk: orphaned/stale; and the sidecar manifest itself must
+ *    match what `aipm build` would write.
+ *
+ * Generation logic is shared with `runBuild` via `computeRootArtifacts`/`detectRootCollisions`/
+ * `serializeRootManifest`, so the build output and the freshness oracle cannot drift. Findings are
+ * repo-scoped (no `plugin`).
+ */
+async function checkRootArtifactFreshness(
+  repoRoot: string,
+  pluginDirs: readonly string[],
+  workspace: AipmWorkspace,
+  ci: boolean,
+  skipFreshness: boolean,
+  cache?: ConfigCache,
+): Promise<Finding[]> {
+  let root: ReturnType<typeof computeRootArtifacts>;
+  try {
+    const plugins = await collectRegistryPlugins(repoRoot, pluginDirs, cache);
+    root = computeRootArtifacts(repoRoot, plugins, workspace);
+  } catch (err) {
+    // A plugin config that won't load is reported per-plugin as envelope-invalid elsewhere; only
+    // surface the inability to compute the root oracle as freshness drift when freshness is checked.
+    if (skipFreshness) return [];
+    const message = err instanceof Error ? err.message : String(err);
+    return [
+      freshnessFinding(
+        ci,
+        undefined,
+        `Unable to compute expected repo-root artifacts: ${message}`,
+        'fix the offending aipm.config.ts and run `aipm build`.',
+      ),
+    ];
+  }
+
+  const findings: Finding[] = [];
+
+  // 1. N=1 gate findings (always hard, own code). Surfaced regardless of `skipFreshness` so the
+  // post-build validate (which skips freshness) still fails fast on an ambiguous host declaration.
+  findings.push(...root.findings);
+
+  // 2. Collision findings against the committed sidecar's tracked set (build's safety guard 3).
+  // Also surfaced regardless of `skipFreshness` — a collision is a structural refusal, not drift.
+  const priorTracked = readRootManifestPaths(repoRoot);
+  const collisions = detectRootCollisions(repoRoot, root, priorTracked);
+  const { collidedHosts } = collisions;
+  findings.push(...collisions.findings);
+
+  // The freshness-coded checks (missing/stale/orphan/sidecar) are skipped after a fresh build.
+  if (skipFreshness) return findings;
+
+  // 3a. The set of paths build WOULD write this run (excluding suppressed/collided hosts) — this is
+  // the canonical expected tracked set the sidecar must match.
+  const expectedTracked: string[] = [];
+  for (const file of root.files) {
+    if (collidedHosts.has(file.host)) continue;
+    const rel = file.relPath;
+    expectedTracked.push(rel);
+    const abs = path.join(repoRoot, ...rel.split('/'));
+    if (!fs.existsSync(abs)) {
+      findings.push(
+        freshnessFinding(
+          ci,
+          undefined,
+          `Generated repo-root artifact '${rel}' is missing.`,
+          'run `aipm build` to generate it.',
+        ),
+      );
+      continue;
+    }
+    const onDisk = fs.readFileSync(abs);
+    if (!onDisk.equals(file.content)) {
+      findings.push(
+        freshnessFinding(
+          ci,
+          undefined,
+          `Generated repo-root artifact '${rel}' is stale — it differs from what \`aipm build\` would produce (hand-edited or out of date).`,
+          "run `aipm build` to regenerate it; edit the owning plugin's source, not the generated repo-root file.",
+        ),
+      );
+    }
+  }
+
+  // 3b. Orphans: any path the committed sidecar recorded that build would no longer write but which
+  // still sits on disk. `aipm build` removes these, so their presence means the tree is stale.
+  const expectedSet = new Set(expectedTracked);
+  for (const rel of priorTracked) {
+    if (expectedSet.has(rel)) continue;
+    const abs = path.join(repoRoot, ...rel.split('/'));
+    if (fs.existsSync(abs)) {
+      findings.push(
+        freshnessFinding(
+          ci,
+          undefined,
+          `Generated repo-root artifact '${rel}' is stale — it is no longer produced, so \`aipm build\` would remove it.`,
+          'run `aipm build` to remove the orphaned artifact.',
+        ),
+      );
+    }
+  }
+
+  // 3c. The sidecar manifest itself is a generated, freshness-checked artifact: its bytes must
+  // match what build would write for the expected tracked set. When build would write no artifacts
+  // AND no sidecar exists, the expected state is "no sidecar" — only flag a stale/missing sidecar
+  // when one is expected (non-empty tracked set) or one already exists on disk.
+  const manifestAbs = rootManifestPath(repoRoot);
+  const manifestExists = fs.existsSync(manifestAbs);
+  if (expectedTracked.length > 0 || manifestExists) {
+    const expectedManifest = serializeRootManifest(expectedTracked);
+    if (!manifestExists) {
+      findings.push(
+        freshnessFinding(
+          ci,
+          undefined,
+          `Generated root manifest '${path.relative(repoRoot, manifestAbs)}' is missing.`,
+          'run `aipm build` to generate it.',
+        ),
+      );
+    } else if (fs.readFileSync(manifestAbs, 'utf-8') !== expectedManifest) {
+      findings.push(
+        freshnessFinding(
+          ci,
+          undefined,
+          `Generated root manifest '${path.relative(repoRoot, manifestAbs)}' is stale — it differs from what \`aipm build\` would produce.`,
+          'run `aipm build` to regenerate it.',
+        ),
+      );
+    }
+  }
+
+  return findings;
+}
+
+/**
  * Compare two directory trees and return the relative paths that differ (present in only one
  * side, or present in both with differing bytes). An empty result means the trees are identical.
  */
@@ -1085,19 +1236,36 @@ export async function runValidate(
     }
   }
 
-  // ── 6. Repo-level registry freshness (only when generation is opted in) ─────
-  // Registries are repo-scoped, so this runs once per repo against EVERY plugin under the repo
-  // root — not just the plugins in `pluginDirs` (which is length-1 for single-plugin input). That
-  // mirrors how `runBuild` regenerates the repo-complete registry, so a single-plugin validate of
-  // a repo that has sibling plugins compares against the same expected bytes the build would write.
-  if (!skipFreshness && workspace !== undefined) {
+  // ── 6. Repo-level generation checks (only when generation is opted in) ──────
+  // Registries AND single-artifact-host root artifacts are repo-scoped, so these run once per repo
+  // against EVERY plugin under the repo root — not just the plugins in `pluginDirs` (length-1 for
+  // single-plugin input). That mirrors how `runBuild` regenerates the repo-complete output, so a
+  // single-plugin validate of a repo with sibling plugins compares against the same expected bytes.
+  //
+  // The registry block is freshness-only (gated on `!skipFreshness`). The root-artifact block runs
+  // whenever a workspace is present — even under `skipFreshness` — because its `single-artifact-host`
+  // / `root-artifact-collision` findings are structural gates (not drift), and `runBuild`'s
+  // post-build validate (which skips freshness) must still fail fast on them.
+  if (workspace !== undefined) {
     // For repo-root input, pluginDirs already covers the whole repo — reuse it (and the warm
     // config cache) rather than re-discovering and reloading. Single-plugin input needs a
-    // repo-wide re-scan so the registry oracle stays repo-complete.
+    // repo-wide re-scan so the oracle stays repo-complete.
     const isRepoRoot = path.resolve(targetPath) === repoRoot;
     const allPluginDirs = isRepoRoot ? pluginDirs : (await discoverPlugins(repoRoot)).pluginDirs;
+    if (!skipFreshness) {
+      findings.push(
+        ...(await checkRegistryFreshness(repoRoot, allPluginDirs, workspace, ci, configCache)),
+      );
+    }
     findings.push(
-      ...(await checkRegistryFreshness(repoRoot, allPluginDirs, workspace, ci, configCache)),
+      ...(await checkRootArtifactFreshness(
+        repoRoot,
+        allPluginDirs,
+        workspace,
+        ci,
+        skipFreshness,
+        configCache,
+      )),
     );
   }
 

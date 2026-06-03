@@ -33,7 +33,7 @@ import type { ConfigCache } from './load-config.js';
 import { applyJsonSentinel } from './sentinel.js';
 import type { SentinelMode } from './sentinel.js';
 import { runValidate } from './validate.js';
-import type { BuildOptions, BuildResult, GeneratedFile, TargetId } from './types.js';
+import type { BuildOptions, BuildResult, Finding, GeneratedFile, TargetId } from './types.js';
 
 // ---------------------------------------------------------------------------
 // Shared generation primitives (consumed by build AND freshness — §10.5)
@@ -363,6 +363,250 @@ export async function collectRegistryPlugins(
   return infos;
 }
 
+// ---------------------------------------------------------------------------
+// Single-artifact-host repo-root native emission (Gemini / Kiro)
+// ---------------------------------------------------------------------------
+
+/**
+ * The hosts that have NO multi-plugin marketplace concept: each installs exactly ONE
+ * extension/power per repo, read from the **repo root**. `gemini extensions install <git>` reads a
+ * root `gemini-extension.json`; Kiro "Add from GitHub" reads a root `POWER.md`. Because the repo
+ * root has a single slot per host, at most one plugin may declare each — see the N=1 gate below.
+ */
+const SINGLE_ARTIFACT_HOSTS = ['gemini', 'kiro'] as const satisfies readonly TargetId[];
+
+/** A single-artifact host (`gemini` | `kiro`). */
+type SingleArtifactHost = (typeof SINGLE_ARTIFACT_HOSTS)[number];
+
+/** Repo-root-relative path of the sidecar that tracks the toolkit-generated root file set. */
+const ROOT_MANIFEST_REL = ['.aipm', 'generated-root.json'] as const;
+
+/** Absolute path of the generated-root sidecar manifest under `repoRoot`. */
+export function rootManifestPath(repoRoot: string): string {
+  return path.join(repoRoot, ...ROOT_MANIFEST_REL);
+}
+
+/**
+ * Bundle each single-artifact host into a fresh temp dir, returning the per-host destination dir.
+ * The bundlers `rmSync` their destDir (gemini/bundle.ts, kiro/bundle.ts), so they MUST be pointed
+ * at a throwaway temp directory — never the repo root or any real dir. Mirrors the
+ * `regenerate`/temp pattern used by {@link computeDistBundles}.
+ */
+function bundleHostToTemp(host: SingleArtifactHost, pluginDir: string): string {
+  const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), `aipm-root-${host}-`));
+  if (host === 'gemini') {
+    bundleGeminiPlugin(pluginDir, tempDir);
+  } else {
+    bundleKiroPlugin(pluginDir, tempDir);
+  }
+  return tempDir;
+}
+
+/**
+ * A single repo-root file the toolkit generates for a single-artifact host. `relPath` is the path
+ * relative to the repo root (POSIX-separated, the tracked-set form); `content` is the exact bytes.
+ */
+interface RootArtifactFile {
+  /** Repo-root-relative POSIX path (e.g. `gemini-extension.json`, `commands/foo.toml`). */
+  relPath: string;
+  /** The host whose bundle produced this file. */
+  host: SingleArtifactHost;
+  /** Exact bytes to write at the repo root. */
+  content: Buffer;
+}
+
+/**
+ * Result of {@link computeRootArtifacts}: the repo-root files to emit (across all single-artifact
+ * hosts that passed the N=1 gate), the set of repo-root-relative paths generation owns, and any
+ * `single-artifact-host` findings for hosts that more than one plugin declared (whose root artifact
+ * is suppressed).
+ */
+export interface RootArtifacts {
+  /** Files to write at the repo root (empty if no host is emittable). */
+  files: RootArtifactFile[];
+  /** Repo-root-relative POSIX paths the toolkit generated this run (the tracked set). Sorted. */
+  trackedPaths: string[];
+  /** Hard `single-artifact-host` findings — one per host declared by more than one plugin. */
+  findings: Finding[];
+}
+
+/**
+ * Build a hard `single-artifact-host` finding. Repo-scoped (no owning plugin): the ambiguity is a
+ * property of the whole repo's plugin set, not any one plugin.
+ */
+function singleArtifactHostFinding(
+  host: SingleArtifactHost,
+  declarers: readonly string[],
+): Finding {
+  const list = [...declarers].sort().join(', ');
+  return {
+    severity: 'hard',
+    code: 'single-artifact-host',
+    message:
+      `Host '${host}' installs ONE extension/power per repo from the repo root, but ${String(declarers.length)} plugins declare it: [${list}]. ` +
+      `Its root artifact is NOT emitted while this ambiguity stands.`,
+    hint: `Remove '${host}' from all but one plugin's targets in aipm.config.ts so a single plugin owns the repo-root ${host} artifact.`,
+  };
+}
+
+/**
+ * Compute the repo-root native artifacts for the single-artifact hosts (`gemini`, `kiro`),
+ * **without writing**. The single source of truth shared by `runBuild` (which writes the files,
+ * applies the collision guard, and orphan-removes) and the freshness check (which compares disk to
+ * these bytes). Bundling happens into a throwaway temp dir — the repo root is never passed to a
+ * bundler, so the bundlers' `rmSync(destDir)` can never touch repo-root state.
+ *
+ * **N=1 gate (`single-artifact-host`).** For each host, count the plugins whose envelope declares
+ * it. Exactly one declarer → emit that plugin's bundled files at the repo root. More than one →
+ * emit a hard `single-artifact-host` finding and emit NOTHING for that host (the toolkit can't pick
+ * which plugin owns the single root slot). Zero → nothing to emit (and no finding). The two hosts
+ * are independent: a repo where plugin A declares `gemini` and plugin B declares `kiro` emits both
+ * (a root `gemini-extension.json` and a root `POWER.md` — distinct files).
+ *
+ * @param repoRoot - Absolute repo root (where the artifacts live). Accepted for signature
+ *   parallelism with {@link computeRegistryArtifacts}; the bundlers read only the plugin dir.
+ * @param plugins - Discovered plugins with name/source/envelope (the registry plugin infos already
+ *   collected for {@link computeRegistryArtifacts}). Each `source` resolves the plugin dir.
+ * @param _workspace - The validated workspace metadata. Unused by the bundlers today; accepted for
+ *   parallelism with the registry compute signature and to future-proof host metadata injection.
+ */
+export function computeRootArtifacts(
+  repoRoot: string,
+  plugins: readonly RegistryPluginInfo[],
+  _workspace: AipmWorkspace,
+): RootArtifacts {
+  const files: RootArtifactFile[] = [];
+  const trackedPaths = new Set<string>();
+  const findings: Finding[] = [];
+
+  for (const host of SINGLE_ARTIFACT_HOSTS) {
+    const declarers = plugins.filter((p) => p.envelope.includes(host));
+    if (declarers.length === 0) continue; // no plugin declares this host → nothing to emit
+    if (declarers.length > 1) {
+      // N>1 gate: ambiguous owner. Suppress emission and flag.
+      findings.push(
+        singleArtifactHostFinding(
+          host,
+          declarers.map((p) => p.name),
+        ),
+      );
+      continue;
+    }
+
+    // Exactly one declarer: bundle it into temp, then capture its files as repo-root artifacts.
+    const declarer = declarers[0];
+    if (declarer === undefined) continue; // unreachable (length === 1), satisfies noUncheckedIndexedAccess
+    // `source` is `./<rel>` POSIX from the repo root; resolve to the absolute plugin dir.
+    const pluginDir = path.resolve(repoRoot, declarer.source);
+
+    let tempDir: string | undefined;
+    try {
+      tempDir = bundleHostToTemp(host, pluginDir);
+      for (const rel of collectFilesRelative(tempDir)) {
+        // Tracked set is POSIX-separated (stable across platforms; the freshness oracle and
+        // sidecar compare against this exact form).
+        const relPosix = rel.split(path.sep).join('/');
+        trackedPaths.add(relPosix);
+        files.push({
+          relPath: relPosix,
+          host,
+          content: fs.readFileSync(path.join(tempDir, rel)),
+        });
+      }
+    } finally {
+      if (tempDir !== undefined && fs.existsSync(tempDir)) {
+        fs.rmSync(tempDir, { recursive: true });
+      }
+    }
+  }
+
+  return { files, trackedPaths: [...trackedPaths].sort(), findings };
+}
+
+/**
+ * Build a hard `root-artifact-collision` finding for a repo-root path the toolkit would generate
+ * but which is already occupied by a file it does NOT track as previously-generated (so the file
+ * belongs to the host software / the author). Repo-scoped — names the offending path.
+ */
+function rootCollisionFinding(host: SingleArtifactHost, relPath: string): Finding {
+  return {
+    severity: 'hard',
+    code: 'root-artifact-collision',
+    message:
+      `Cannot emit the repo-root '${host}' artifact: '${relPath}' already exists and is not toolkit-generated. ` +
+      `Generation refuses to overwrite repo-root state it does not own.`,
+    hint: `Move or remove '${relPath}' (or, if it is stale toolkit output, add it to ${ROOT_MANIFEST_REL.join('/')}) and re-run \`aipm build\`.`,
+  };
+}
+
+/**
+ * Detect repo-root collisions for the freshly computed {@link RootArtifacts}, given the PRIOR
+ * tracked set. A file collides when it exists on disk AND its repo-root-relative path is NOT in the
+ * prior tracked set — i.e. it is not something the toolkit previously created, so it belongs to the
+ * host/author and must not be clobbered (safety guard 3). A clean repo (no pre-existing root files)
+ * never collides. Collision is evaluated PER HOST: if any of a host's files collide, that host is
+ * suppressed entirely (no partial writes) and a single finding names the first offending path.
+ *
+ * Returns the collision findings plus the set of hosts that collided (so the caller can skip
+ * writing/tracking their files). Pure — no I/O beyond `existsSync`.
+ */
+export function detectRootCollisions(
+  repoRoot: string,
+  artifacts: RootArtifacts,
+  priorTracked: readonly string[],
+): { findings: Finding[]; collidedHosts: Set<SingleArtifactHost> } {
+  const priorSet = new Set(priorTracked);
+  const findings: Finding[] = [];
+  const collidedHosts = new Set<SingleArtifactHost>();
+
+  for (const file of artifacts.files) {
+    if (collidedHosts.has(file.host)) continue; // already flagged this host's first collision
+    const abs = path.join(repoRoot, ...file.relPath.split('/'));
+    if (fs.existsSync(abs) && !priorSet.has(file.relPath)) {
+      findings.push(rootCollisionFinding(file.host, file.relPath));
+      collidedHosts.add(file.host);
+    }
+  }
+
+  return { findings, collidedHosts };
+}
+
+/**
+ * Serialize the generated-root sidecar manifest. Shape: `{ version: 1, paths: string[] }` where
+ * `paths` is the sorted set of repo-root-relative POSIX paths the toolkit generated (the sidecar
+ * itself is NOT listed — it is tracked separately and always lives at {@link rootManifestPath}).
+ * 2-space JSON + trailing newline, byte-stable so the freshness compare is exact.
+ */
+export function serializeRootManifest(trackedPaths: readonly string[]): string {
+  return `${JSON.stringify({ version: 1, paths: [...trackedPaths].sort() }, null, 2)}\n`;
+}
+
+/**
+ * Read the prior generated-root sidecar manifest, returning the tracked-path set it recorded.
+ * Returns an empty array when the sidecar is absent or unparseable — a missing/corrupt sidecar is
+ * treated as "nothing tracked yet" (a clean first build), and the collision guard then protects any
+ * pre-existing root files. POSIX-separated paths are returned as-is.
+ */
+export function readRootManifestPaths(repoRoot: string): string[] {
+  const manifestPath = rootManifestPath(repoRoot);
+  if (!fs.existsSync(manifestPath)) return [];
+  try {
+    const parsed = JSON.parse(fs.readFileSync(manifestPath, 'utf-8')) as unknown;
+    if (
+      typeof parsed === 'object' &&
+      parsed !== null &&
+      'paths' in parsed &&
+      Array.isArray((parsed as { paths: unknown }).paths)
+    ) {
+      const { paths } = parsed as { paths: unknown[] };
+      return paths.filter((p): p is string => typeof p === 'string');
+    }
+  } catch {
+    // Corrupt sidecar → treat as nothing tracked; the collision guard protects existing files.
+  }
+  return [];
+}
+
 /** Collect every file path under `dir`, relative to `dir`. Returns `[]` if `dir` is absent. */
 export function collectFilesRelative(dir: string): string[] {
   if (!fs.existsSync(dir)) return [];
@@ -503,6 +747,62 @@ export async function runBuild(targetPath: string, opts?: BuildOptions): Promise
     for (const result of results) {
       for (const registry of registries) {
         result.artifacts.push({ path: registry.absPath, target: registry.target });
+      }
+    }
+
+    // ── Single-artifact-host repo-root native emission (gemini / kiro) ──────────
+    // These hosts install ONE extension/power per repo from the repo ROOT and have no marketplace
+    // concept, so the artifact is emitted at the repo root (not under dist/). Like registries, this
+    // is repo-level and computed from EVERY plugin so the N=1 gate sees the whole repo. The emit is
+    // safety-guarded: bundling happens in temp (never against repoRoot), a collision guard refuses
+    // to overwrite non-generated root files, and orphan removal is bounded to the prior tracked set
+    // recorded in the committed sidecar manifest.
+    const priorTracked = readRootManifestPaths(repoRoot);
+    const root = computeRootArtifacts(repoRoot, registryPlugins, workspace);
+    const { collidedHosts } = detectRootCollisions(repoRoot, root, priorTracked);
+
+    // The tracked set is only the paths we actually WRITE — files of a collided (suppressed) host
+    // are neither written nor tracked, so orphan removal can never delete a host-owned collider.
+    const writtenTracked = new Set<string>();
+    const emittedHosts = new Set<SingleArtifactHost>();
+    for (const file of root.files) {
+      if (collidedHosts.has(file.host)) continue;
+      const abs = path.join(repoRoot, ...file.relPath.split('/'));
+      fs.mkdirSync(path.dirname(abs), { recursive: true });
+      fs.writeFileSync(abs, file.content);
+      writtenTracked.add(file.relPath);
+      emittedHosts.add(file.host);
+      for (const result of results) {
+        result.artifacts.push({ path: abs, target: file.host });
+      }
+    }
+
+    // Orphan removal: any path in the PRIOR tracked set that is no longer generated this run is a
+    // path the toolkit previously created and now owns the right to delete (e.g. the gemini plugin
+    // was dropped, or a second gemini plugin disabled emission via the N=1 gate). Bounded strictly
+    // to `priorTracked` — we never delete a file we did not previously record as generated.
+    for (const rel of priorTracked) {
+      if (writtenTracked.has(rel)) continue;
+      const abs = path.join(repoRoot, ...rel.split('/'));
+      if (fs.existsSync(abs)) fs.rmSync(abs);
+    }
+
+    // Write/update the sidecar manifest (itself a generated, freshness-checked artifact). When the
+    // tracked set is empty AND no sidecar existed, skip writing so a repo that never used these
+    // hosts stays free of an empty `.aipm/` dir; otherwise keep it in sync (including emptying it).
+    const manifestAbs = rootManifestPath(repoRoot);
+    const trackedSorted = [...writtenTracked].sort();
+    if (trackedSorted.length > 0 || fs.existsSync(manifestAbs)) {
+      writeFileEnsuringDir(manifestAbs, serializeRootManifest(trackedSorted));
+      // The sidecar spans hosts but `GeneratedFile.target` is singular; attribute it to an
+      // actually-emitted host (deterministic order), and only when something was emitted this run.
+      // When the manifest is being emptied via orphan removal, no host produced it — don't record
+      // it as a host artifact.
+      const sidecarHost = (['gemini', 'kiro'] as const).find((h) => emittedHosts.has(h));
+      if (sidecarHost !== undefined) {
+        for (const result of results) {
+          result.artifacts.push({ path: manifestAbs, target: sidecarHost });
+        }
       }
     }
   }

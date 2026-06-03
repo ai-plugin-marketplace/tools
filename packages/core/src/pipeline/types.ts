@@ -124,6 +124,15 @@ export interface ValidationResult {
  * Enumerated finding codes. Additive — new codes arrive in toolkit MINOR releases; removing
  * or renaming a code is MAJOR. Consumers SHOULD handle unknown codes gracefully.
  *
+ * - `single-artifact-host`: a "single-artifact host" (`gemini` or `kiro`) — which installs ONE
+ *   extension/power per repo from the repo ROOT and has no marketplace concept — is declared by
+ *   MORE THAN ONE plugin in the repo. The root artifact for that host is NOT emitted while the
+ *   ambiguity stands (the toolkit can't choose which plugin owns the single root slot).
+ * - `root-artifact-collision`: a generated repo-root path the toolkit would write is already
+ *   occupied by a file the toolkit does NOT track as previously-generated — i.e. it belongs to the
+ *   host software / the author. Generation refuses to overwrite it rather than clobber repo-root
+ *   state.
+ *
  * @public
  */
 export type FindingCode =
@@ -134,7 +143,9 @@ export type FindingCode =
   | 'name-consistency'
   | 'mcp-key-sync'
   | 'marketplace-registration'
-  | 'freshness';
+  | 'freshness'
+  | 'single-artifact-host'
+  | 'root-artifact-collision';
 
 /**
  * A single validation finding.

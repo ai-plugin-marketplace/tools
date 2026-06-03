@@ -279,6 +279,13 @@ export interface SynthRegistryPlugin {
   targets: readonly TargetId[];
   /** Optional shared metadata mapped to the generated registry entry. */
   meta?: SynthConfigMetadata;
+  /**
+   * Optional extra source files to write under the plugin directory, keyed by POSIX-relative path
+   * (e.g. `gemini-extension.json`, `GEMINI.md`, `commands/foo.toml`, `POWER.md`, `mcp.json`). These
+   * are the author-authored host artifacts the single-artifact-host bundlers copy to the repo root.
+   * Parent directories are created automatically.
+   */
+  files?: Record<string, string>;
 }
 
 /** A handle to a synthesized registry-generation repo, with cleanup. */
@@ -314,6 +321,13 @@ export function synthRegistryRepo(
       renderAipmConfig(plugin.targets, plugin.meta ?? {}),
       'utf-8',
     );
+    // Write any author-authored host source files (e.g. gemini-extension.json, POWER.md) so the
+    // single-artifact-host bundlers have something to copy to the repo root.
+    for (const [rel, content] of Object.entries(plugin.files ?? {})) {
+      const dest = path.join(pluginDir, ...rel.split('/'));
+      fs.mkdirSync(path.dirname(dest), { recursive: true });
+      fs.writeFileSync(dest, content, 'utf-8');
+    }
   }
 
   if (workspace !== undefined) {

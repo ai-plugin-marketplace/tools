@@ -28,7 +28,8 @@ import { bundleKiroPlugin } from '../targets/kiro/bundle.js';
 import type { AipmWorkspace } from '../config.js';
 
 import { discoverPlugins } from './discover.js';
-import { loadPluginConfig, loadWorkspaceConfig } from './load-config.js';
+import { createConfigCache, loadPluginConfig, loadWorkspaceConfig } from './load-config.js';
+import type { ConfigCache } from './load-config.js';
 import { applyJsonSentinel } from './sentinel.js';
 import type { SentinelMode } from './sentinel.js';
 import { runValidate } from './validate.js';
@@ -334,10 +335,11 @@ export function computeRegistryArtifacts(
 export async function collectRegistryPlugins(
   repoRoot: string,
   pluginDirs: readonly string[],
+  cache?: ConfigCache,
 ): Promise<RegistryPluginInfo[]> {
   const infos: RegistryPluginInfo[] = [];
   for (const pluginDir of pluginDirs) {
-    const config = await loadPluginConfig(pluginDir);
+    const config = await loadPluginConfig(pluginDir, cache);
     const source = `./${path.relative(repoRoot, pluginDir).split(path.sep).join('/')}`;
     infos.push({
       name: path.basename(pluginDir),
@@ -380,11 +382,15 @@ function writeFileEnsuringDir(absPath: string, content: string): void {
  * Build a single plugin: load envelope, emit in-plugin hook JSONs and dist bundles, and return
  * the `BuildResult` (without running validation — the caller orchestrates §5.4 validation once).
  */
-async function buildOnePlugin(pluginDir: string, distDir: string): Promise<BuildResult> {
+async function buildOnePlugin(
+  pluginDir: string,
+  distDir: string,
+  cache?: ConfigCache,
+): Promise<BuildResult> {
   const start = performance.now();
   const pluginName = path.basename(pluginDir);
 
-  const config = await loadPluginConfig(pluginDir);
+  const config = await loadPluginConfig(pluginDir, cache);
   const envelope = config.targets;
 
   const artifacts: GeneratedFile[] = [];
@@ -442,9 +448,13 @@ async function buildOnePlugin(pluginDir: string, distDir: string): Promise<Build
 export async function runBuild(targetPath: string, opts?: BuildOptions): Promise<BuildResult[]> {
   const { repoRoot, pluginDirs, distDir } = await discoverPlugins(targetPath);
 
+  // One per-invocation config memo shared across the build loop and registry collection, so each
+  // plugin's aipm.config.ts is transpiled once rather than reloaded per phase (see ConfigCache).
+  const configCache = createConfigCache();
+
   const results: BuildResult[] = [];
   for (const pluginDir of pluginDirs) {
-    results.push(await buildOnePlugin(pluginDir, distDir));
+    results.push(await buildOnePlugin(pluginDir, distDir, configCache));
   }
 
   // ── Marketplace registries (opt-in via aipm.workspace.ts at the repo root) ──
@@ -457,8 +467,12 @@ export async function runBuild(targetPath: string, opts?: BuildOptions): Promise
   // `aipm.workspace.ts` is present, generation does nothing and the registries stay hand-authored.
   const workspace = await loadWorkspaceConfig(repoRoot);
   if (workspace !== undefined) {
-    const { pluginDirs: allPluginDirs } = await discoverPlugins(repoRoot);
-    const registryPlugins = await collectRegistryPlugins(repoRoot, allPluginDirs);
+    // For repo-root input, pluginDirs already covers the whole repo — reuse it (and the warm
+    // config cache) instead of re-discovering and reloading. Only single-plugin input needs a
+    // repo-wide re-scan to make the registry repo-complete.
+    const isRepoRoot = path.resolve(targetPath) === repoRoot;
+    const allPluginDirs = isRepoRoot ? pluginDirs : (await discoverPlugins(repoRoot)).pluginDirs;
+    const registryPlugins = await collectRegistryPlugins(repoRoot, allPluginDirs, configCache);
     const registries = computeRegistryArtifacts(repoRoot, registryPlugins, workspace);
     for (const registry of registries) {
       writeFileEnsuringDir(registry.absPath, registry.expectedContent);

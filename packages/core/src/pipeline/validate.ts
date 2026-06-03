@@ -30,7 +30,13 @@ import {
 } from './build.js';
 import type { RegistryArtifact } from './build.js';
 import { discoverPlugins } from './discover.js';
-import { ConfigLoadError, loadPluginConfig, loadWorkspaceConfig } from './load-config.js';
+import {
+  ConfigLoadError,
+  createConfigCache,
+  loadPluginConfig,
+  loadWorkspaceConfig,
+} from './load-config.js';
+import type { ConfigCache } from './load-config.js';
 import type { AipmWorkspace } from '../config.js';
 import type { Finding, TargetId, ValidateOptions, ValidationResult } from './types.js';
 
@@ -862,10 +868,11 @@ async function checkRegistryFreshness(
   pluginDirs: readonly string[],
   workspace: AipmWorkspace,
   ci: boolean,
+  cache?: ConfigCache,
 ): Promise<Finding[]> {
   let expected: RegistryArtifact[];
   try {
-    const registryPlugins = await collectRegistryPlugins(repoRoot, pluginDirs);
+    const registryPlugins = await collectRegistryPlugins(repoRoot, pluginDirs, cache);
     expected = computeRegistryArtifacts(repoRoot, registryPlugins, workspace);
   } catch (err) {
     // A plugin config that won't load is reported per-plugin as envelope-invalid elsewhere; here
@@ -985,6 +992,10 @@ export async function runValidate(
   const { repoRoot, distDir, pluginDirs } = discovery;
   const findings: Finding[] = [];
 
+  // One per-invocation config memo so each plugin's aipm.config.ts is transpiled once — reused by
+  // the main loop below and the repo-level registry freshness step (see ConfigCache).
+  const configCache = createConfigCache();
+
   // Registry generation is opt-in via `aipm.workspace.ts`. When present, the marketplace registries
   // are GENERATED, so their correctness is enforced by the repo-level freshness check below and the
   // per-plugin `validateMarketplaceRegistration` is SKIPPED (it would otherwise double-report). When
@@ -1010,7 +1021,7 @@ export async function runValidate(
     // ── 1. Envelope load + shape validation ─────────────────────────────────
     let envelope: readonly TargetId[];
     try {
-      const config = await loadPluginConfig(pluginDir);
+      const config = await loadPluginConfig(pluginDir, configCache);
       envelope = config.targets;
     } catch (err) {
       // Distinguish "no/invalid config" (envelope-invalid) from unexpected errors. Either way,
@@ -1061,8 +1072,14 @@ export async function runValidate(
   // mirrors how `runBuild` regenerates the repo-complete registry, so a single-plugin validate of
   // a repo that has sibling plugins compares against the same expected bytes the build would write.
   if (!skipFreshness && workspace !== undefined) {
-    const { pluginDirs: allPluginDirs } = await discoverPlugins(repoRoot);
-    findings.push(...(await checkRegistryFreshness(repoRoot, allPluginDirs, workspace, ci)));
+    // For repo-root input, pluginDirs already covers the whole repo — reuse it (and the warm
+    // config cache) rather than re-discovering and reloading. Single-plugin input needs a
+    // repo-wide re-scan so the registry oracle stays repo-complete.
+    const isRepoRoot = path.resolve(targetPath) === repoRoot;
+    const allPluginDirs = isRepoRoot ? pluginDirs : (await discoverPlugins(repoRoot)).pluginDirs;
+    findings.push(
+      ...(await checkRegistryFreshness(repoRoot, allPluginDirs, workspace, ci, configCache)),
+    );
   }
 
   const passed = !findings.some((f) => f.severity === 'hard');

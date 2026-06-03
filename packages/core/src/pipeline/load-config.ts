@@ -121,6 +121,25 @@ async function importDefaultExport(configPath: string, filename: string): Promis
 }
 
 /**
+ * A per-invocation memo of loaded plugin configs, keyed by absolute plugin directory. Created
+ * fresh by an orchestrator (`runBuild`/`runValidate`) and threaded through the helpers it calls,
+ * so a single invocation transpiles each `aipm.config.ts` **once** instead of repeatedly (the
+ * build loop, registry collection, and post-build validate would otherwise each reload every
+ * config — an expensive jiti transpile with module/fs caching disabled).
+ *
+ * Intentionally **per-invocation, not a module-level cache**: configs are static within one CLI
+ * run but may change between runs (and tests overwrite-and-reload across invocations), so a
+ * longer-lived cache would risk serving stale parses. Each `createConfigCache()` lives only for
+ * the orchestrator call that created it.
+ */
+export type ConfigCache = Map<string, AipmConfig>;
+
+/** Create an empty {@link ConfigCache} for a single orchestrator invocation. */
+export function createConfigCache(): ConfigCache {
+  return new Map();
+}
+
+/**
  * Load and validate a plugin's `aipm.config.ts`, returning the branded {@link AipmConfig}.
  *
  * The on-disk module's `default` export is re-validated through {@link defineConfig} so callers
@@ -128,11 +147,19 @@ async function importDefaultExport(configPath: string, filename: string): Promis
  * `defineConfig` in their source (e.g. exported a plain object literal).
  *
  * @param pluginDir - Absolute path to the `plugins/<name>/` directory.
+ * @param cache - Optional per-invocation memo (see {@link ConfigCache}). When supplied, a config
+ *   already loaded in this invocation is returned without re-transpiling.
  * @returns The validated, branded config.
  * @throws {ConfigLoadError} If the file is absent, fails to import, has no default export, or
  *   the default export fails schema validation.
  */
-export async function loadPluginConfig(pluginDir: string): Promise<AipmConfig> {
+export async function loadPluginConfig(
+  pluginDir: string,
+  cache?: ConfigCache,
+): Promise<AipmConfig> {
+  const cached = cache?.get(pluginDir);
+  if (cached !== undefined) return cached;
+
   const configPath = configPathFor(pluginDir);
 
   if (!fs.existsSync(configPath)) {
@@ -145,12 +172,15 @@ export async function loadPluginConfig(pluginDir: string): Promise<AipmConfig> {
 
   // Re-validate through defineConfig so the result is a branded AipmConfig. defineConfig throws
   // a ZodError on malformed input; wrap it so callers get a single ConfigLoadError type.
+  let config: AipmConfig;
   try {
-    return defineConfig(defaultExport as AipmConfigInput);
+    config = defineConfig(defaultExport as AipmConfigInput);
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
     throw new ConfigLoadError(`Invalid ${AIPM_CONFIG_FILENAME}: ${message}`, { cause: err });
   }
+  cache?.set(pluginDir, config);
+  return config;
 }
 
 /**

@@ -48,9 +48,9 @@ const CODEX_REL = ['.agents', 'plugins', 'marketplace.json'] as const;
 // ---------------------------------------------------------------------------
 
 describe('registry generation — entry shapes (workspace present)', () => {
-  let repo: SynthRegistryRepo;
+  let repo: SynthRegistryRepo | undefined;
   afterEach(() => {
-    repo.cleanup();
+    repo?.cleanup();
   });
 
   it('writes Claude/Cursor string-source registries with name/source/description/tags', async () => {
@@ -162,9 +162,9 @@ describe('registry generation — entry shapes (workspace present)', () => {
 });
 
 describe('registry generation — freshness (workspace present)', () => {
-  let repo: SynthRegistryRepo;
+  let repo: SynthRegistryRepo | undefined;
   afterEach(() => {
-    repo.cleanup();
+    repo?.cleanup();
   });
 
   it('a built repo validates clean with no registry freshness finding', async () => {
@@ -231,9 +231,9 @@ describe('registry generation — freshness (workspace present)', () => {
 });
 
 describe('registry generation — backward compat (workspace absent)', () => {
-  let repo: SynthRegistryRepo;
+  let repo: SynthRegistryRepo | undefined;
   afterEach(() => {
-    repo.cleanup();
+    repo?.cleanup();
   });
 
   it('generates no registries when no aipm.workspace.ts is present', async () => {
@@ -258,5 +258,46 @@ describe('registry generation — backward compat (workspace absent)', () => {
       f.message.includes('marketplace.json'),
     );
     expect(registryFresh).toStrictEqual([]);
+  });
+});
+
+describe('registry generation — orphaned registries (target no longer declared)', () => {
+  let repo: SynthRegistryRepo | undefined;
+  afterEach(() => {
+    repo?.cleanup();
+  });
+
+  // An orphan = a committed managed registry for a target NO plugin declares anymore (e.g. the
+  // last `claude` plugin was dropped). It isn't in the "expected" set, so generation must remove
+  // it and validation must flag it — otherwise a dead registry lingers committed with no signal.
+
+  it('build removes an orphaned registry whose target no plugin declares', async () => {
+    repo = synthRegistryRepo([{ name: 'alpha', targets: ['cursor'] }], { name: 'm' });
+    // Plant a previously-generated claude registry (no plugin declares claude now).
+    const orphan = path.join(repo.repoRoot, ...CLAUDE_REL);
+    fs.mkdirSync(path.dirname(orphan), { recursive: true });
+    fs.writeFileSync(orphan, '{\n  "name": "m",\n  "plugins": []\n}\n', 'utf-8');
+
+    await runBuild(repo.repoRoot);
+
+    expect(fs.existsSync(orphan)).toBe(false); // removed
+    expect(fs.existsSync(path.join(repo.repoRoot, ...CURSOR_REL))).toBe(true); // expected one kept
+  });
+
+  it('validate flags an orphaned registry as a freshness finding', async () => {
+    repo = synthRegistryRepo([{ name: 'alpha', targets: ['cursor'] }], { name: 'm' });
+    await runBuild(repo.repoRoot); // writes the expected cursor registry
+    // Now plant an orphaned claude registry that `aipm build` would have removed.
+    const orphan = path.join(repo.repoRoot, ...CLAUDE_REL);
+    fs.mkdirSync(path.dirname(orphan), { recursive: true });
+    fs.writeFileSync(orphan, '{\n  "name": "m",\n  "plugins": []\n}\n', 'utf-8');
+
+    const result = await runValidate(repo.repoRoot, { ci: true });
+
+    const orphanFinding = ofCode(result.findings, 'freshness').filter((f) =>
+      f.message.includes('.claude-plugin/marketplace.json'),
+    );
+    expect(orphanFinding.length).toBe(1);
+    expect(result.passed).toBe(false);
   });
 });

@@ -223,6 +223,17 @@ const REGISTRY_REL_PATHS: Record<'claude' | 'cursor' | 'codex', readonly string[
   codex: ['.agents', 'plugins', 'marketplace.json'],
 };
 
+/**
+ * Absolute paths of every registry the toolkit MANAGES under a repo root (one per registry-backed
+ * target), regardless of whether the current envelope produces it. Used to detect **orphaned**
+ * registries — a committed `marketplace.json` for a target no longer declared by any plugin —
+ * which `runBuild` removes and the validator flags as stale. Shared so build and validate agree
+ * on exactly which files generation owns (and never touch anything else).
+ */
+export function managedRegistryPaths(repoRoot: string): string[] {
+  return Object.values(REGISTRY_REL_PATHS).map((rel) => path.join(repoRoot, ...rel));
+}
+
 /** Default Codex plugin category when none is otherwise specified (design spec §"Codex"). */
 const CODEX_DEFAULT_CATEGORY = 'Productivity';
 
@@ -474,8 +485,18 @@ export async function runBuild(targetPath: string, opts?: BuildOptions): Promise
     const allPluginDirs = isRepoRoot ? pluginDirs : (await discoverPlugins(repoRoot)).pluginDirs;
     const registryPlugins = await collectRegistryPlugins(repoRoot, allPluginDirs, configCache);
     const registries = computeRegistryArtifacts(repoRoot, registryPlugins, workspace);
+    const expectedPaths = new Set(registries.map((r) => r.absPath));
     for (const registry of registries) {
       writeFileEnsuringDir(registry.absPath, registry.expectedContent);
+    }
+    // Remove ORPHANED registries: a managed `marketplace.json` for a target no longer declared by
+    // any plugin (e.g. the last `claude` plugin was dropped). Without this, a stale generated
+    // registry would linger in the working tree and stay committed. Only the toolkit-managed
+    // registry paths are ever touched.
+    for (const orphan of managedRegistryPaths(repoRoot)) {
+      if (!expectedPaths.has(orphan) && fs.existsSync(orphan)) {
+        fs.rmSync(orphan);
+      }
     }
     // Record the generated registries as repo-level artifacts on every built plugin's result so
     // they surface in BuildResult regardless of which plugin a single-plugin build targeted.

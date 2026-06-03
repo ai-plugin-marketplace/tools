@@ -26,6 +26,7 @@ import {
   computeDistBundles,
   computePluginHookArtifacts,
   computeRegistryArtifacts,
+  managedRegistryPaths,
   regenerateBundleToTemp,
 } from './build.js';
 import type { RegistryArtifact } from './build.js';
@@ -910,6 +911,24 @@ async function checkRegistryFreshness(
           undefined,
           `Generated registry '${rel}' is stale — it differs from what \`aipm build\` would produce (hand-edited or out of date).`,
           "run `aipm build` to regenerate it; edit `aipm.workspace.ts` / each plugin's `aipm.config.ts`, not the generated registry.",
+        ),
+      );
+    }
+  }
+
+  // Orphan check: a managed registry committed for a target NO plugin declares anymore is not in
+  // `expected`, so the loop above can't see it. Flag any managed registry path that exists on disk
+  // but isn't expected — `aipm build` removes these, so its presence means the tree is stale.
+  const expectedPaths = new Set(expected.map((r) => r.absPath));
+  for (const orphan of managedRegistryPaths(repoRoot)) {
+    if (!expectedPaths.has(orphan) && fs.existsSync(orphan)) {
+      const rel = path.relative(repoRoot, orphan);
+      findings.push(
+        freshnessFinding(
+          ci,
+          undefined,
+          `Generated registry '${rel}' is stale — no plugin declares its target, so \`aipm build\` would remove it.`,
+          'run `aipm build` to remove the orphaned registry, or add a plugin that declares its target.',
         ),
       );
     }

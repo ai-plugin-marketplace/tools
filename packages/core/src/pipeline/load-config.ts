@@ -98,9 +98,15 @@ async function importDefaultExport(configPath: string, filename: string): Promis
     // Disable the default↔namespace interop so a config with no `default` export reads as a
     // genuinely-absent default rather than jiti synthesizing one from the namespace.
     interopDefault: false,
-    // Disable caches so repeated loads (e.g. freshness re-reads) see current disk state.
+    // `moduleCache: false` so a config rewritten in-process (tests, freshness re-reads) is
+    // re-evaluated rather than served stale from jiti's in-memory, path-keyed module cache.
     moduleCache: false,
-    fsCache: false,
+    // `fsCache: true` (jiti's default) caches the expensive *transpile* on disk, keyed by a hash
+    // of the source — so it is correctness-safe across rewrites (changed content → new key →
+    // recompile) while letting the many identical config loads in one run skip re-transpiling.
+    // This is the dominant per-load cost; caching it keeps the (jiti-heavy) test suite from
+    // pegging a worker long enough to trip vitest's birpc heartbeat ("Timeout calling onTaskUpdate").
+    fsCache: true,
   });
 
   let mod: Record<string, unknown>;

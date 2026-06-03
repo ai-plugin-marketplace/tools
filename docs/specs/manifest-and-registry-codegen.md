@@ -8,8 +8,8 @@ Authoring a plugin today means repeating the same facts in many places, by hand:
 
 - **`version`** lives in `aipm.config.ts` (the plugin's release version, spec §9) **and** is re-typed into every target manifest (`.claude-plugin/plugin.json`, `.codex-plugin/plugin.json`, `gemini-extension.json`, `POWER.md` frontmatter, `.cursor-plugin/plugin.json`). They can silently drift.
 - **`name` / `description` / `author` / `keywords`** are duplicated across those same up-to-five manifests.
-- **Component lists** — `skills`, `agents`, `commands`, `hooks` path arrays in `plugin.json` — are maintained by hand even though the files already exist on disk under `skills/`, `agents/`, etc.
-- **Marketplace registries** — the three `marketplace.json` files — are hand-edited for top-level metadata, and (per the [embedded-marketplace guide](../guides/embedded-marketplace.md), step 5) this is an explicit manual chore.
+- **Component lists** — the `skills` / `agents` / `commands` path arrays in `plugin.json` (and the `hooks` path it points at) — are maintained by hand even though the files already exist on disk under `skills/`, `agents/`, etc.
+- **Marketplace registries** — the three `marketplace.json` files — are hand-edited for top-level metadata, an explicit manual chore in the [embedded-marketplace setup](./embedded-marketplaces-and-codex-target.md).
 
 The intended outcome: **declare each fact once**, let the toolkit generate the derivable manifest/registry content, and keep per-target native fidelity available as a hand-authored override. This removes the duplication without abandoning the toolkit's "per-target native authoring" principle.
 
@@ -63,7 +63,7 @@ Generated from `aipm.workspace.ts` metadata + the discovered plugins:
 
 ### `aipm init --embedded`
 
-Additive scaffolder for an existing software repo (never clobbers): probe for path collisions, then generate `aipm.workspace.ts`, `aipm.repo.ts` (relocated roots if `plugins/`/`dist/` are taken), empty registries, and a non-colliding CI workflow. Automates the guide's manual setup.
+Additive scaffolder for an existing software repo (never clobbers): probe for path collisions, then generate `aipm.workspace.ts`, `aipm.repo.ts` (relocated roots if `plugins/`/`dist/` are taken), empty registries, and a non-colliding CI workflow. Automates the manual embedded-marketplace setup.
 
 ## Migration & backward compatibility
 

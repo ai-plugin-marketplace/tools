@@ -70,6 +70,23 @@ describe('loadPluginConfig — success', () => {
 
     expect(config.targets).toStrictEqual(['kiro']);
   });
+
+  it('re-reads a config rewritten in-process (jiti fsCache must be content-keyed, not stale)', async () => {
+    // Regression guard for the loader's caching policy: `fsCache: true` (the on-disk transpile
+    // cache) is only safe because it is keyed by source CONTENT, and `moduleCache: false` forces
+    // re-evaluation. If a future jiti change (or a switch to mtime/path keying) reintroduced stale
+    // reads, this would fail — the loader would return the first config after the file was rewritten
+    // at the same path. No shared ConfigCache is passed, so each call exercises jiti directly.
+    writeConfig(`export default { version: '0.1.0', targets: ['claude'] };\n`);
+    const first = await loadPluginConfig(pluginDir);
+    expect(first.targets).toStrictEqual(['claude']);
+
+    // Overwrite the SAME path with different content and reload.
+    writeConfig(`export default { version: '0.2.0', targets: ['cursor', 'gemini'] };\n`);
+    const second = await loadPluginConfig(pluginDir);
+    expect(second.targets).toStrictEqual(['cursor', 'gemini']);
+    expect(second.version).toBe('0.2.0');
+  });
 });
 
 describe('loadPluginConfig — failure modes', () => {

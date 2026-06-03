@@ -68,15 +68,25 @@ export class ConfigLoadError extends Error {
 }
 
 /**
- * Absolute path to this package's public entrypoint, **without** a file extension, derived from
- * the location of this module. When bundled to `dist/pipeline/load-config.js` this resolves to
- * `dist/index`; when run from source as `src/pipeline/load-config.ts` it resolves to `src/index`.
- * jiti's resolver appends the correct extension in each case.
+ * Absolute path (extension-less) that the config-file `import '@ai-plugin-marketplace/core'`
+ * specifier is aliased to when jiti loads a config. Resolves to `<src|dist>/config`, derived from
+ * this module's location; jiti's resolver appends `.ts` from source (vitest) or `.js` from the
+ * compiled `dist/` (production).
+ *
+ * **Why `config`, not `index`.** Config files only import the `define*` functions, which all live
+ * in `config.ts` (whose only deps are `zod` + the tiny `types.ts`). Aliasing to the package
+ * `index` would instead drag the *entire* source graph — `operations` → `build`/`validate` →
+ * all six target modules + `yaml` — through jiti's on-the-fly transpiler on **every** config load.
+ * With one fresh jiti instance per load, that meant re-transpiling the whole package hundreds of
+ * times across the test suite, blocking the vitest worker long enough to trip its `onTaskUpdate`
+ * RPC timeout intermittently on slow CI. Pointing the alias at the minimal `config` module keeps
+ * each load's transpile graph tiny. (Production is unaffected either way — `dist/*.js` is already
+ * compiled, so jiti loads it without transpiling.)
  */
-function corePackageEntrypoint(): string {
+function coreConfigEntrypoint(): string {
   const here = fileURLToPath(import.meta.url);
-  // here = <pkgRoot>/<src|dist>/pipeline/load-config.<ts|js>; index sits two levels up.
-  return path.join(path.dirname(here), '..', 'index');
+  // here = <pkgRoot>/<src|dist>/pipeline/load-config.<ts|js>; config.ts sits two levels up.
+  return path.join(path.dirname(here), '..', 'config');
 }
 
 /** Absolute path to a plugin's `aipm.config.ts`, given the plugin directory. */
@@ -94,13 +104,19 @@ function configPathFor(pluginDir: string): string {
  */
 async function importDefaultExport(configPath: string, filename: string): Promise<unknown> {
   const jiti = createJiti(import.meta.url, {
-    alias: { [CORE_PACKAGE_SPECIFIER]: corePackageEntrypoint() },
+    alias: { [CORE_PACKAGE_SPECIFIER]: coreConfigEntrypoint() },
     // Disable the default↔namespace interop so a config with no `default` export reads as a
     // genuinely-absent default rather than jiti synthesizing one from the namespace.
     interopDefault: false,
-    // Disable caches so repeated loads (e.g. freshness re-reads) see current disk state.
+    // `moduleCache: false` so a config rewritten in-process (tests, freshness re-reads) is
+    // re-evaluated rather than served stale from jiti's in-memory, path-keyed module cache.
     moduleCache: false,
-    fsCache: false,
+    // `fsCache: true` (jiti's default) caches the expensive *transpile* on disk, keyed by a hash
+    // of the source — so it is correctness-safe across rewrites (changed content → new key →
+    // recompile) while letting the many identical config loads in one run skip re-transpiling.
+    // This is the dominant per-load cost; caching it keeps the (jiti-heavy) test suite from
+    // pegging a worker long enough to trip vitest's birpc heartbeat ("Timeout calling onTaskUpdate").
+    fsCache: true,
   });
 
   let mod: Record<string, unknown>;

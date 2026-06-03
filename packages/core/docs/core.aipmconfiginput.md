@@ -37,6 +37,44 @@ Description
 </th></tr></thead>
 <tbody><tr><td>
 
+[description?](./core.aipmconfiginput.description.md)
+
+
+</td><td>
+
+
+</td><td>
+
+string
+
+
+</td><td>
+
+_(Optional)_ Optional one-line description of the plugin. When the repo opts into registry generation (an `aipm.workspace.ts` is present), this becomes the plugin entry's `description` (Claude/Cursor) in the generated `marketplace.json`<!-- -->. Optional so existing configs stay valid.
+
+
+</td></tr>
+<tr><td>
+
+[keywords?](./core.aipmconfiginput.keywords.md)
+
+
+</td><td>
+
+
+</td><td>
+
+readonly string\[\]
+
+
+</td><td>
+
+_(Optional)_ Optional discovery keywords for the plugin. When the repo opts into registry generation, these become the plugin entry's `tags` (Claude/Cursor) in the generated `marketplace.json`<!-- -->. Optional so existing configs stay valid.
+
+
+</td></tr>
+<tr><td>
+
 [targets](./core.aipmconfiginput.targets.md)
 
 

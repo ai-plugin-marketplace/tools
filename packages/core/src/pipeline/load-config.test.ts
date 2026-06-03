@@ -18,8 +18,10 @@ import {
   ConfigLoadError,
   DEFAULT_REPO_CONFIG,
   hasRepoConfig,
+  hasWorkspaceConfig,
   loadPluginConfig,
   loadRepoConfig,
+  loadWorkspaceConfig,
 } from './load-config.js';
 
 let pluginDir: string;
@@ -40,6 +42,11 @@ function writeConfig(source: string): void {
 /** Write an `aipm.repo.ts` with the given source body (reusing pluginDir as a repo root). */
 function writeRepoConfig(source: string): void {
   fs.writeFileSync(path.join(pluginDir, 'aipm.repo.ts'), source, 'utf-8');
+}
+
+/** Write an `aipm.workspace.ts` with the given source body (reusing pluginDir as a repo root). */
+function writeWorkspaceConfig(source: string): void {
+  fs.writeFileSync(path.join(pluginDir, 'aipm.workspace.ts'), source, 'utf-8');
 }
 
 describe('loadPluginConfig — success', () => {
@@ -138,5 +145,45 @@ describe('loadRepoConfig', () => {
   it('throws ConfigLoadError for an unknown key (strict schema)', async () => {
     writeRepoConfig(`export default { plugins: 'agent-plugins' };\n`);
     await expect(loadRepoConfig(pluginDir)).rejects.toBeInstanceOf(ConfigLoadError);
+  });
+});
+
+describe('loadWorkspaceConfig', () => {
+  it('returns undefined when no aipm.workspace.ts is present (registry generation opt-out)', async () => {
+    expect(hasWorkspaceConfig(pluginDir)).toBe(false);
+    await expect(loadWorkspaceConfig(pluginDir)).resolves.toBeUndefined();
+  });
+
+  it('loads a config that imports defineWorkspace from the core package', async () => {
+    writeWorkspaceConfig(
+      `import { defineWorkspace } from '@ai-plugin-marketplace/core';\n` +
+        `export default defineWorkspace({ marketplace: { name: 'my-market', description: 'desc' } });\n`,
+    );
+    expect(hasWorkspaceConfig(pluginDir)).toBe(true);
+    const ws = await loadWorkspaceConfig(pluginDir);
+    expect(ws?.marketplace.name).toBe('my-market');
+    expect(ws?.marketplace.description).toBe('desc');
+  });
+
+  it('re-validates a plain-object default export through defineWorkspace (brand applied)', async () => {
+    writeWorkspaceConfig(`export default { marketplace: { name: 'plain-object-market' } };\n`);
+    const ws = await loadWorkspaceConfig(pluginDir);
+    expect(ws?.marketplace.name).toBe('plain-object-market');
+  });
+
+  it('throws ConfigLoadError for a missing marketplace.name', async () => {
+    writeWorkspaceConfig(`export default { marketplace: {} };\n`);
+    await expect(loadWorkspaceConfig(pluginDir)).rejects.toBeInstanceOf(ConfigLoadError);
+    await expect(loadWorkspaceConfig(pluginDir)).rejects.toThrow(/Invalid aipm\.workspace/);
+  });
+
+  it('throws ConfigLoadError for an unknown key (strict schema)', async () => {
+    writeWorkspaceConfig(`export default { marketplace: { name: 'm' }, extra: true };\n`);
+    await expect(loadWorkspaceConfig(pluginDir)).rejects.toBeInstanceOf(ConfigLoadError);
+  });
+
+  it('throws ConfigLoadError when there is no default export', async () => {
+    writeWorkspaceConfig(`export const notDefault = { marketplace: { name: 'm' } };\n`);
+    await expect(loadWorkspaceConfig(pluginDir)).rejects.toThrow(/no default export/);
   });
 });

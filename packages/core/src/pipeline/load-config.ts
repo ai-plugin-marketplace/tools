@@ -25,8 +25,14 @@ import { fileURLToPath } from 'node:url';
 
 import { createJiti } from 'jiti';
 
-import { defineConfig, defineRepoConfig } from '../config.js';
-import type { AipmConfig, AipmConfigInput, AipmRepoConfigInput } from '../config.js';
+import { defineConfig, defineRepoConfig, defineWorkspace } from '../config.js';
+import type {
+  AipmConfig,
+  AipmConfigInput,
+  AipmRepoConfigInput,
+  AipmWorkspace,
+  AipmWorkspaceInput,
+} from '../config.js';
 
 /** The canonical config filename every plugin must provide (§6.1). */
 export const AIPM_CONFIG_FILENAME = 'aipm.config.ts';
@@ -37,6 +43,14 @@ export const AIPM_CONFIG_FILENAME = 'aipm.config.ts';
  * Module-private — callers use {@link hasRepoConfig}/{@link loadRepoConfig} rather than the name.
  */
 const AIPM_REPO_CONFIG_FILENAME = 'aipm.repo.ts';
+
+/**
+ * Optional workspace-level config filename. Its presence at a repo root opts the repo into
+ * marketplace-registry generation; absence preserves the historical hand-authored-registry
+ * behavior. Module-private — callers use {@link hasWorkspaceConfig}/{@link loadWorkspaceConfig}
+ * rather than the name (mirrors {@link AIPM_REPO_CONFIG_FILENAME}).
+ */
+const AIPM_WORKSPACE_CONFIG_FILENAME = 'aipm.workspace.ts';
 
 /** The npm specifier a plugin's `aipm.config.ts` imports `defineConfig` from. */
 const CORE_PACKAGE_SPECIFIER = '@ai-plugin-marketplace/core';
@@ -107,6 +121,25 @@ async function importDefaultExport(configPath: string, filename: string): Promis
 }
 
 /**
+ * A per-invocation memo of loaded plugin configs, keyed by absolute plugin directory. Created
+ * fresh by an orchestrator (`runBuild`/`runValidate`) and threaded through the helpers it calls,
+ * so a single invocation transpiles each `aipm.config.ts` **once** instead of repeatedly (the
+ * build loop, registry collection, and post-build validate would otherwise each reload every
+ * config — an expensive jiti transpile with module/fs caching disabled).
+ *
+ * Intentionally **per-invocation, not a module-level cache**: configs are static within one CLI
+ * run but may change between runs (and tests overwrite-and-reload across invocations), so a
+ * longer-lived cache would risk serving stale parses. Each `createConfigCache()` lives only for
+ * the orchestrator call that created it.
+ */
+export type ConfigCache = Map<string, AipmConfig>;
+
+/** Create an empty {@link ConfigCache} for a single orchestrator invocation. */
+export function createConfigCache(): ConfigCache {
+  return new Map();
+}
+
+/**
  * Load and validate a plugin's `aipm.config.ts`, returning the branded {@link AipmConfig}.
  *
  * The on-disk module's `default` export is re-validated through {@link defineConfig} so callers
@@ -114,11 +147,19 @@ async function importDefaultExport(configPath: string, filename: string): Promis
  * `defineConfig` in their source (e.g. exported a plain object literal).
  *
  * @param pluginDir - Absolute path to the `plugins/<name>/` directory.
+ * @param cache - Optional per-invocation memo (see {@link ConfigCache}). When supplied, a config
+ *   already loaded in this invocation is returned without re-transpiling.
  * @returns The validated, branded config.
  * @throws {ConfigLoadError} If the file is absent, fails to import, has no default export, or
  *   the default export fails schema validation.
  */
-export async function loadPluginConfig(pluginDir: string): Promise<AipmConfig> {
+export async function loadPluginConfig(
+  pluginDir: string,
+  cache?: ConfigCache,
+): Promise<AipmConfig> {
+  const cached = cache?.get(pluginDir);
+  if (cached !== undefined) return cached;
+
   const configPath = configPathFor(pluginDir);
 
   if (!fs.existsSync(configPath)) {
@@ -131,12 +172,15 @@ export async function loadPluginConfig(pluginDir: string): Promise<AipmConfig> {
 
   // Re-validate through defineConfig so the result is a branded AipmConfig. defineConfig throws
   // a ZodError on malformed input; wrap it so callers get a single ConfigLoadError type.
+  let config: AipmConfig;
   try {
-    return defineConfig(defaultExport as AipmConfigInput);
+    config = defineConfig(defaultExport as AipmConfigInput);
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
     throw new ConfigLoadError(`Invalid ${AIPM_CONFIG_FILENAME}: ${message}`, { cause: err });
   }
+  cache?.set(pluginDir, config);
+  return config;
 }
 
 /**
@@ -184,5 +228,41 @@ export async function loadRepoConfig(repoRoot: string): Promise<ResolvedRepoConf
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
     throw new ConfigLoadError(`Invalid ${AIPM_REPO_CONFIG_FILENAME}: ${message}`, { cause: err });
+  }
+}
+
+/** True iff `repoRoot` contains an `aipm.workspace.ts` (i.e. registry generation is opted in). */
+export function hasWorkspaceConfig(repoRoot: string): boolean {
+  return fs.existsSync(path.join(repoRoot, AIPM_WORKSPACE_CONFIG_FILENAME));
+}
+
+/**
+ * Load the optional `aipm.workspace.ts` at `repoRoot`, returning the validated, branded
+ * {@link AipmWorkspace}.
+ *
+ * When the file is **absent**, returns `undefined` — the signal that this repo has NOT opted into
+ * registry generation (the toolkit then leaves the hand-authored registries alone). When
+ * **present**, the module's `default` export is re-validated through `defineWorkspace` so the
+ * result provably passed the canonical schema.
+ *
+ * @param repoRoot - Absolute path to the repo root.
+ * @returns The validated workspace config, or `undefined` when no `aipm.workspace.ts` exists.
+ * @throws {ConfigLoadError} If the file exists but cannot be imported or fails validation.
+ */
+export async function loadWorkspaceConfig(repoRoot: string): Promise<AipmWorkspace | undefined> {
+  const configPath = path.join(repoRoot, AIPM_WORKSPACE_CONFIG_FILENAME);
+  if (!fs.existsSync(configPath)) {
+    return undefined;
+  }
+
+  const defaultExport = await importDefaultExport(configPath, AIPM_WORKSPACE_CONFIG_FILENAME);
+
+  try {
+    return defineWorkspace(defaultExport as AipmWorkspaceInput);
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    throw new ConfigLoadError(`Invalid ${AIPM_WORKSPACE_CONFIG_FILENAME}: ${message}`, {
+      cause: err,
+    });
   }
 }

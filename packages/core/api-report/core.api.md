@@ -14,6 +14,8 @@ export type AipmConfig = AipmConfigInput & {
 
 // @public
 export interface AipmConfigInput {
+    description?: string;
+    keywords?: readonly string[];
     targets: readonly TargetId[];
     version: string;
 }
@@ -30,6 +32,23 @@ export type AipmRepoConfig = {
 export interface AipmRepoConfigInput {
     distDir?: string;
     pluginsRoot?: string;
+}
+
+// @public
+export type AipmWorkspace = AipmWorkspaceInput & {
+    readonly [aipmWorkspaceBrand]: 'AipmWorkspace';
+};
+
+// @public
+export interface AipmWorkspaceInput {
+    marketplace: {
+        name: string;
+        owner?: {
+            name: string;
+            email?: string;
+        };
+        description?: string;
+    };
 }
 
 // @public
@@ -56,6 +75,9 @@ export function defineConfig(config: AipmConfigInput): AipmConfig;
 
 // @public
 export function defineRepoConfig(config?: AipmRepoConfigInput): AipmRepoConfig;
+
+// @public
+export function defineWorkspace(config: AipmWorkspaceInput): AipmWorkspace;
 
 // @public
 export interface Finding {

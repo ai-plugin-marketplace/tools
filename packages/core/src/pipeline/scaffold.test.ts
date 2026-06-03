@@ -358,6 +358,49 @@ describe('runScaffold — marketplace registration', () => {
     expect(result.passed).toBe(true);
   });
 
+  it('registers a repo-relative source when the plugins root is relocated (embedded marketplace)', async () => {
+    // Embedded layout: the plugins root is `agent-plugins/`, not `plugins/`.
+    const relocatedRoot = path.join(tmpDir, 'agent-plugins');
+    await runScaffold('my-plugin', relocatedRoot, { targets: ['claude', 'codex'] });
+
+    const claudeReg = readRegistry(tmpDir, '.claude-plugin');
+    expect(claudeReg.plugins).toStrictEqual([
+      { name: 'my-plugin', source: './agent-plugins/my-plugin' },
+    ]);
+
+    // Codex registry uses the object-source shape; its path must also be repo-relative.
+    const codexFull = path.join(tmpDir, '.agents', 'plugins', 'marketplace.json');
+    const codexReg = JSON.parse(fs.readFileSync(codexFull, 'utf-8')) as {
+      plugins: { name: string; source: { source: string; path: string } }[];
+    };
+    expect(codexReg.plugins[0]?.source).toStrictEqual({
+      source: 'local',
+      path: './agent-plugins/my-plugin',
+    });
+  });
+
+  it('makes the embedded scaffold→validate happy path clean (relocated pluginsRoot)', async () => {
+    // Declare the relocated root so discovery + validation resolve the same source the scaffolder
+    // wrote. Without this fix, scaffold wrote `./plugins/<name>` while validate expected
+    // `./agent-plugins/<name>`, producing a spurious marketplace-registration finding.
+    fs.writeFileSync(
+      path.join(tmpDir, 'aipm.repo.ts'),
+      `export default { pluginsRoot: 'agent-plugins' };\n`,
+      'utf-8',
+    );
+    await runScaffold('my-plugin', path.join(tmpDir, 'agent-plugins'), {
+      targets: ['claude', 'cursor'],
+    });
+
+    const result = await runValidate(tmpDir, { skipFreshness: true });
+
+    const registrationFindings = result.findings.filter(
+      (f) => f.code === 'marketplace-registration',
+    );
+    expect(registrationFindings).toStrictEqual([]);
+    expect(result.passed).toBe(true);
+  });
+
   it('creates NO marketplace files when the envelope has neither claude nor cursor', async () => {
     await runScaffold('my-plugin', pluginsRoot(), { targets: ['gemini'] });
 

@@ -23,6 +23,19 @@ aipm scaffold my-plugin
 pnpm up @ai-plugin-marketplace/cli
 ```
 
+## Embedding a marketplace in an existing repo
+
+The flow above creates a **dedicated** marketplace repo. You can also turn a repo whose primary purpose is shipping _software_ (a CLI, a library) into a marketplace for the agent plugins that drive it, so the software and its skills ship together. Add an optional `aipm.repo.ts` to relocate the plugins/dist roots off any names your repo already uses:
+
+```ts
+// aipm.repo.ts (repo root)
+import { defineRepoConfig } from '@ai-plugin-marketplace/core';
+
+export default defineRepoConfig({ pluginsRoot: 'agent-plugins', distDir: 'agent-plugins/dist' });
+```
+
+`aipm scaffold` / `build` / `validate` then operate against the relocated root. Full step-by-step: [**Embedding a marketplace in an existing software repo**](./docs/guides/embedded-marketplace.md).
+
 ## Architecture
 
 The definitive architecture specification lives at [`docs/specs/architecture.md`](./docs/specs/architecture.md). Read it before making non-trivial changes to package boundaries, the public API, the per-target module structure, or the versioning contract.

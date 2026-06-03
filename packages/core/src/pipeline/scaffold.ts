@@ -168,13 +168,19 @@ interface MarketplaceRegistryDescriptor {
   target: TargetId;
   /** Path segments under the repo root locating this registry's marketplace.json. */
   marketplaceRel: string[];
-  /** Build the plugin entry to append (shape varies per registry). */
-  makeEntry: (pluginName: string) => StringSourceEntry | CodexEntry;
+  /** Build the plugin entry to append, given the plugin name and its repo-relative `source`. */
+  makeEntry: (pluginName: string, source: string) => StringSourceEntry | CodexEntry;
 }
 
-/** The canonical `source` value for a plugin's registry entry (§4.4 — `./plugins/<name>`). */
-function expectedSource(pluginName: string): string {
-  return `./plugins/${pluginName}`;
+/**
+ * The canonical `source` value for a plugin's registry entry: the plugin directory's path
+ * relative to the repo root, `./`-prefixed and POSIX-separated (§4.4). For the default topology
+ * this is `./plugins/<name>`; for an embedded marketplace with a relocated `pluginsRoot` it is
+ * e.g. `./agent-plugins/<name>`. Hosts resolve `source` relative to the repo root, and this must
+ * match what `validateMarketplaceRegistration` expects (it computes the same relative path).
+ */
+function marketplaceSource(repoRoot: string, pluginDir: string): string {
+  return `./${path.relative(repoRoot, pluginDir).split(path.sep).join('/')}`;
 }
 
 /**
@@ -192,19 +198,19 @@ const MARKETPLACE_REGISTRIES: MarketplaceRegistryDescriptor[] = [
   {
     target: 'claude',
     marketplaceRel: ['.claude-plugin', 'marketplace.json'],
-    makeEntry: (name) => ({ name, source: expectedSource(name) }),
+    makeEntry: (name, source) => ({ name, source }),
   },
   {
     target: 'cursor',
     marketplaceRel: ['.cursor-plugin', 'marketplace.json'],
-    makeEntry: (name) => ({ name, source: expectedSource(name) }),
+    makeEntry: (name, source) => ({ name, source }),
   },
   {
     target: 'codex',
     marketplaceRel: ['.agents', 'plugins', 'marketplace.json'],
-    makeEntry: (name) => ({
+    makeEntry: (name, source) => ({
       name,
-      source: { source: 'local', path: expectedSource(name) },
+      source: { source: 'local', path: source },
       policy: { installation: 'AVAILABLE', authentication: 'ON_INSTALL' },
       category: 'Productivity',
     }),
@@ -262,16 +268,18 @@ function registerInMarketplace(
  */
 function registerPluginInMarketplaces(
   repoRoot: string,
-  pluginName: string,
+  pluginDir: string,
   targets: readonly TargetId[],
 ): void {
+  const pluginName = path.basename(pluginDir);
+  const source = marketplaceSource(repoRoot, pluginDir);
   const envelope = new Set(targets);
   for (const { target, marketplaceRel, makeEntry } of MARKETPLACE_REGISTRIES) {
     if (!envelope.has(target)) continue;
     registerInMarketplace(
       path.join(repoRoot, ...marketplaceRel),
       pluginName,
-      makeEntry(pluginName),
+      makeEntry(pluginName, source),
     );
   }
 }
@@ -372,8 +380,9 @@ export async function runScaffold(
     writeFileEnsuringDir(path.join(pluginDir, file.path), file.content);
   }
 
-  // Register in the repo-root marketplace registries (§4.4). repoRoot is the parent of pluginsDir.
-  registerPluginInMarketplaces(path.dirname(pluginsDir), name, targets);
+  // Register in the repo-root marketplace registries (§4.4). repoRoot is the parent of pluginsDir,
+  // so a relocated `pluginsRoot` yields a matching repo-relative `source` (e.g. ./agent-plugins/x).
+  registerPluginInMarketplaces(path.dirname(pluginsDir), pluginDir, targets);
 
   return Promise.resolve();
 }
@@ -430,8 +439,8 @@ export async function runAddTarget(pluginDir: string, target: TargetId): Promise
   }
 
   // Register in the repo-root marketplace registry when adding a registry-backed target (§4.4).
-  // repoRoot = dirname(dirname(pluginDir)) — the `<repoRoot>/plugins/<name>` grandparent.
-  registerPluginInMarketplaces(path.dirname(path.dirname(pluginDir)), pluginName, [target]);
+  // repoRoot = dirname(dirname(pluginDir)) — the `<repoRoot>/<pluginsRoot>/<name>` grandparent.
+  registerPluginInMarketplaces(path.dirname(path.dirname(pluginDir)), pluginDir, [target]);
 
   return Promise.resolve();
 }

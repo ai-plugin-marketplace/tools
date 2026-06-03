@@ -324,7 +324,13 @@ export function synthRegistryRepo(
     // Write any author-authored host source files (e.g. gemini-extension.json, POWER.md) so the
     // single-artifact-host bundlers have something to copy to the repo root.
     for (const [rel, content] of Object.entries(plugin.files ?? {})) {
-      const dest = path.join(pluginDir, ...rel.split('/'));
+      const dest = path.resolve(pluginDir, ...rel.split('/'));
+      // Guard against a `files` key that escapes the plugin dir (e.g. `../x` or absolute). Even in
+      // test-support, an escaping write could clobber unrelated runner files or cause flakiness.
+      const root = path.resolve(pluginDir);
+      if (dest !== root && !dest.startsWith(root + path.sep)) {
+        throw new Error(`synthRegistryRepo: file path '${rel}' escapes the plugin directory`);
+      }
       fs.mkdirSync(path.dirname(dest), { recursive: true });
       fs.writeFileSync(dest, content, 'utf-8');
     }

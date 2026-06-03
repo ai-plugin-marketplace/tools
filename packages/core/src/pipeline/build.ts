@@ -764,12 +764,14 @@ export async function runBuild(targetPath: string, opts?: BuildOptions): Promise
     // The tracked set is only the paths we actually WRITE — files of a collided (suppressed) host
     // are neither written nor tracked, so orphan removal can never delete a host-owned collider.
     const writtenTracked = new Set<string>();
+    const emittedHosts = new Set<SingleArtifactHost>();
     for (const file of root.files) {
       if (collidedHosts.has(file.host)) continue;
       const abs = path.join(repoRoot, ...file.relPath.split('/'));
       fs.mkdirSync(path.dirname(abs), { recursive: true });
       fs.writeFileSync(abs, file.content);
       writtenTracked.add(file.relPath);
+      emittedHosts.add(file.host);
       for (const result of results) {
         result.artifacts.push({ path: abs, target: file.host });
       }
@@ -792,8 +794,15 @@ export async function runBuild(targetPath: string, opts?: BuildOptions): Promise
     const trackedSorted = [...writtenTracked].sort();
     if (trackedSorted.length > 0 || fs.existsSync(manifestAbs)) {
       writeFileEnsuringDir(manifestAbs, serializeRootManifest(trackedSorted));
-      for (const result of results) {
-        result.artifacts.push({ path: manifestAbs, target: 'gemini' });
+      // The sidecar spans hosts but `GeneratedFile.target` is singular; attribute it to an
+      // actually-emitted host (deterministic order), and only when something was emitted this run.
+      // When the manifest is being emptied via orphan removal, no host produced it — don't record
+      // it as a host artifact.
+      const sidecarHost = (['gemini', 'kiro'] as const).find((h) => emittedHosts.has(h));
+      if (sidecarHost !== undefined) {
+        for (const result of results) {
+          result.artifacts.push({ path: manifestAbs, target: sidecarHost });
+        }
       }
     }
   }

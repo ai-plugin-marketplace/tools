@@ -1,5 +1,26 @@
 # @ai-plugin-marketplace/core
 
+## 0.3.0
+
+### Minor Changes
+
+- [#17](https://github.com/ai-plugin-marketplace/tools/pull/17) [`015c40c`](https://github.com/ai-plugin-marketplace/tools/commit/015c40c2a6ce928a4c3cc30cf26668056ce98a9d) Thanks [@mike-north](https://github.com/mike-north)! - Add `aipm init --refresh` to keep a marketplace repo's toolkit-owned scaffold files (the CI
+  workflow and `.gitignore`) in sync with the installed tooling — the upgrade path to run after
+  `pnpm up @ai-plugin-marketplace/*`. A `.aipm/scaffold.json` content-hash sidecar (seeded by
+  `aipm init`) guards the operation: pristine files are upgraded, missing files recreated, and files
+  the author has edited are reported as conflicts and left untouched unless `--force` is given. The
+  new `refreshScaffold` operation is exported from `@ai-plugin-marketplace/core`. `aipm init` also now
+  records `packageManager` in the generated `package.json` so the generated CI workflow resolves a
+  pnpm version.
+
+### Patch Changes
+
+- [#17](https://github.com/ai-plugin-marketplace/tools/pull/17) [`015c40c`](https://github.com/ai-plugin-marketplace/tools/commit/015c40c2a6ce928a4c3cc30cf26668056ce98a9d) Thanks [@mike-north](https://github.com/mike-north)! - Fix `aipm init` pinning a nonexistent `@ai-plugin-marketplace/cli` version. `init` pinned both the
+  `cli` and `core` dev dependencies to core's own version; because `cli` and `core` ship
+  independently (e.g. `cli 0.1.1` ships with `core 0.2.0`), this produced a `package.json` requesting
+  a `cli` version that does not exist on npm, yielding an uninstallable repo. `init` now pins each
+  dependency to a caret of its own version (the cli entrypoint supplies the cli version).
+
 ## 0.2.0
 
 ### Minor Changes

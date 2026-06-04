@@ -15,6 +15,7 @@ import * as path from 'node:path';
 import { runBuild } from './build.js';
 import { runInit } from './init.js';
 import { loadRepoConfig } from './load-config.js';
+import { runRefreshScaffold } from './scaffold-refresh.js';
 import { runScaffold, runAddTarget, runCheckSupport } from './scaffold.js';
 import { TARGET_IDS } from './types.js';
 import { runValidate } from './validate.js';
@@ -24,6 +25,8 @@ import type {
   InitOptions,
   MigrateOptions,
   MigrateResult,
+  RefreshOptions,
+  RefreshOutcome,
   ScaffoldOptions,
   SupportReport,
   TargetId,
@@ -67,6 +70,25 @@ export function validate(targetPath: string, opts?: ValidateOptions): Promise<Va
  */
 export function init(targetDir: string, opts?: InitOptions): Promise<void> {
   return runInit(targetDir, opts);
+}
+
+/**
+ * Refresh the toolkit-owned scaffold files (CI workflow, `.gitignore`) of an existing marketplace
+ * repo at `targetDir` to match the installed tooling — the upgrade path after
+ * `pnpm up @ai-plugin-marketplace/*`. Guarded by the `.aipm/scaffold.json` content-hash sidecar:
+ * user-modified files are reported as conflicts and left untouched unless `opts.force` is set.
+ * Returns one outcome per managed file; never rejects on conflict.
+ *
+ * @public
+ */
+export function refreshScaffold(
+  targetDir: string,
+  opts?: RefreshOptions,
+): Promise<RefreshOutcome[]> {
+  // Defer into the microtask queue so a synchronous failure in the orchestrator (e.g. an I/O error)
+  // surfaces as a rejected promise — matching `refreshScaffold(...).catch(...)` expectations —
+  // rather than throwing from this call before the promise exists.
+  return Promise.resolve().then(() => runRefreshScaffold(targetDir, opts));
 }
 
 /**

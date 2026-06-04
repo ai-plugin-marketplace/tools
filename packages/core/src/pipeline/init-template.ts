@@ -19,6 +19,13 @@ const json = String.raw;
 const md = String.raw;
 const yaml = String.raw;
 
+/**
+ * pnpm version pinned in the generated `package.json#packageManager`. The CI workflow reads the
+ * pnpm version from this field (it runs `pnpm/action-setup` without a hard-coded version), so the
+ * two stay in sync. Bumped deliberately when the recommended pnpm baseline moves.
+ */
+const PACKAGE_MANAGER = 'pnpm@10.30.3';
+
 /** A relative path plus the file's full contents, ready to write under the target directory. */
 export interface InitFile {
   /** POSIX-style path relative to the target directory. */
@@ -32,28 +39,29 @@ export interface InitFile {
  *
  * - `private: true` — a plugin repo is never published to npm; only its plugins ship to registries.
  * - `type: 'module'` — the toolkit is ESM-only (§8.1), and `aipm.config.ts` files are ESM.
+ * - `packageManager` pins pnpm; the CI workflow reads the pnpm version from here.
  * - `scripts` call `aipm` directly (it is on PATH via the dev dependency's bin).
- * - The `@ai-plugin-marketplace/cli` dev dependency is pinned to `^<toolkitVersion>` so authors
- *   upgrade the whole toolkit in lockstep via `pnpm up` (§9.1 lockstep release, §11 contract).
+ * - `cli` provides the `aipm` binary; `core` provides `defineConfig`/`defineWorkspace` for each
+ *   plugin's `aipm.config.ts` (§6.1). They ship independently and may differ (`cli 0.1.1` ships
+ *   with `core 0.2.0`), so each is pinned to a caret of its own version; authors upgrade both via
+ *   `pnpm up` (§11 contract).
  *
  * Emitted as 2-space JSON with a trailing newline to match the repo's formatting conventions.
  */
-function renderPackageJson(name: string, toolkitVersion: string): string {
+function renderPackageJson(name: string, cliVersion: string, coreVersion: string): string {
   const pkg = {
     name,
     private: true,
     type: 'module',
+    packageManager: PACKAGE_MANAGER,
     scripts: {
       build: 'aipm build',
       check: 'aipm validate',
       scaffold: 'aipm scaffold',
     },
     devDependencies: {
-      // cli provides the `aipm` binary; core provides `defineConfig` for each
-      // plugin's `aipm.config.ts` import (§6.1). Both pinned to the same toolkit
-      // version and upgraded together via `pnpm up`.
-      '@ai-plugin-marketplace/cli': `^${toolkitVersion}`,
-      '@ai-plugin-marketplace/core': `^${toolkitVersion}`,
+      '@ai-plugin-marketplace/cli': `^${cliVersion}`,
+      '@ai-plugin-marketplace/core': `^${coreVersion}`,
     },
   };
   return `${JSON.stringify(pkg, null, 2)}\n`;
@@ -108,21 +116,43 @@ function renderCiWorkflow(): string {
 
 on:
   push:
+    branches: [main]
   pull_request:
+    branches: [main]
 
 jobs:
-  build-and-validate:
+  CI:
     runs-on: ubuntu-latest
+    env:
+      CI: "true"
     steps:
       - uses: actions/checkout@v4
+
       - uses: pnpm/action-setup@v4
+        # version is read from package.json#packageManager — do not duplicate here
+
       - uses: actions/setup-node@v4
         with:
-          node-version: 20
+          node-version: 24
           cache: pnpm
-      - run: pnpm install --frozen-lockfile
-      - run: pnpm exec aipm build
-      - run: pnpm exec aipm validate
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Build plugins
+        run: pnpm exec aipm build
+
+      - name: Verify the tree is clean after build (freshness)
+        run: |
+          if [ -n "$(git status --porcelain)" ]; then
+            echo "::error::Working tree is dirty after 'aipm build'. Run 'aipm build' locally and commit the regenerated artifacts."
+            git status --porcelain
+            git --no-pager diff
+            exit 1
+          fi
+
+      - name: Validate plugins
+        run: pnpm exec aipm validate
 `;
 }
 
@@ -136,21 +166,37 @@ function renderGitignore(): string {
 }
 
 /**
- * Build the complete, deterministic seed file set for a consumer repo named `name`, pinning the
- * `@ai-plugin-marketplace/cli` dev dependency to `^${toolkitVersion}`.
+ * Toolkit-owned **scaffold** files that `aipm init --refresh` keeps in sync with the installed
+ * tooling: the CI workflow and `.gitignore`. These are pure tooling recipes — their content is
+ * independent of the repo name and the pinned toolkit version, so refresh can re-render them with
+ * no inputs and compare byte-for-byte. (Files with repo identity or user content — `package.json`,
+ * `aipm.workspace.ts`, `README.md`, plugins, `aipm build` output — are deliberately NOT here.)
  *
- * The set mirrors §3.2: `package.json`, `.gitignore`, `README.md`, both repo-root marketplace
- * registries, an empty `plugins/` (seeded with `.gitkeep` so the directory is tracked), and the
- * CI workflow. Output is a pure function of the two inputs — stable ordering, no timestamps.
+ * Output is deterministic and stably ordered.
  */
-export function buildInitFiles(name: string, toolkitVersion: string): InitFile[] {
+export function buildManagedScaffoldFiles(): InitFile[] {
   return [
-    { path: 'package.json', content: renderPackageJson(name, toolkitVersion) },
     { path: '.gitignore', content: renderGitignore() },
+    { path: '.github/workflows/ci.yml', content: renderCiWorkflow() },
+  ];
+}
+
+/**
+ * Build the complete, deterministic seed file set for a consumer repo named `name`, pinning the
+ * `cli`/`core` dev dependencies to carets of `cliVersion`/`coreVersion` respectively.
+ *
+ * The set mirrors §3.2: `package.json`, the {@link buildManagedScaffoldFiles managed scaffold
+ * files} (`.gitignore`, CI workflow), `README.md`, both repo-root marketplace registries, and an
+ * empty `plugins/` (seeded with `.gitkeep` so the directory is tracked). Output is a pure function
+ * of the inputs — stable ordering, no timestamps.
+ */
+export function buildInitFiles(name: string, cliVersion: string, coreVersion: string): InitFile[] {
+  return [
+    { path: 'package.json', content: renderPackageJson(name, cliVersion, coreVersion) },
     { path: 'README.md', content: renderReadme(name) },
     { path: '.claude-plugin/marketplace.json', content: renderEmptyMarketplace() },
     { path: '.cursor-plugin/marketplace.json', content: renderEmptyMarketplace() },
     { path: 'plugins/.gitkeep', content: '' },
-    { path: '.github/workflows/ci.yml', content: renderCiWorkflow() },
+    ...buildManagedScaffoldFiles(),
   ];
 }

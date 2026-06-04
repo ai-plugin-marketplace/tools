@@ -54,6 +54,13 @@ jobs:
       - name: Check (typecheck, lint, api-report, test, knip, syncpack, format)
         run: pnpm run check
 
+      # Dogfood: this repo is itself an embedded AI plugin marketplace (see aipm.workspace.ts).
+      # Validate that its committed, generated marketplace artifacts are in sync with what
+      # `aipm build` would produce. The check step above already built the CLI to dist; CI sets
+      # `CI=1`, so any freshness drift is a hard failure.
+      - name: Validate embedded marketplace (dogfood)
+        run: node packages/cli/dist/bin.js validate
+
   pack:
     name: Package shape (pnpm pack)
     runs-on: ubuntu-latest

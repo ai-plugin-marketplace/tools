@@ -1,0 +1,20 @@
+{
+  "name": "ai-plugin-marketplace",
+  "interface": {
+    "displayName": "ai-plugin-marketplace"
+  },
+  "plugins": [
+    {
+      "name": "marketplace-authoring",
+      "source": {
+        "source": "local",
+        "path": "./agent-plugins/marketplace-authoring"
+      },
+      "policy": {
+        "installation": "AVAILABLE",
+        "authentication": "ON_INSTALL"
+      },
+      "category": "Productivity"
+    }
+  ]
+}

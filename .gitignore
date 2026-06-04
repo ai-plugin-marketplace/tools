@@ -1,5 +1,8 @@
 node_modules/
-dist/
+# The toolchain packages' build output is not committed. (Scoped to packages/* so it does NOT
+# catch the embedded marketplace's `agent-plugins/dist/` bundles, which ARE committed and
+# freshness-checked — see aipm.workspace.ts / the dogfood.)
+packages/*/dist/
 coverage/
 packages/*/temp/
 *.tsbuildinfo

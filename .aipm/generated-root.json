@@ -1,0 +1,9 @@
+{
+  "version": 1,
+  "paths": [
+    "GEMINI.md",
+    "POWER.md",
+    "gemini-extension.json",
+    "skills/marketplace-authoring/SKILL.md"
+  ]
+}

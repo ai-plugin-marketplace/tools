@@ -10,3 +10,20 @@ dist
 packages/*/docs
 packages/*/api-report
 packages/*/temp
+
+# Embedded AI plugin marketplace (this repo dogfoods its own toolchain). This content is authored
+# and generated under `aipm` and validated by `aipm validate`'s freshness check — formatting the
+# generated artifacts would fight that check. The toolchain's own source under packages/ is still
+# formatted normally.
+agent-plugins
+.aipm
+.claude-plugin
+.cursor-plugin
+.agents
+/gemini-extension.json
+/GEMINI.md
+/POWER.md
+/mcp.json
+/skills
+/commands
+/steering

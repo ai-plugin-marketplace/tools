@@ -81,6 +81,26 @@ function kiroPlugin(name: string): SynthRegistryPlugin {
   };
 }
 
+/**
+ * A single plugin declaring BOTH single-artifact hosts and carrying a skill shared by the gemini
+ * and kiro bundles — the dogfood shape. The shared `skills/<name>/SKILL.md` is emitted to the root
+ * once but is collected once per host by the freshness oracle; this is the regression case for the
+ * sidecar dedupe in `serializeRootManifest`.
+ */
+function comboPlugin(name: string): SynthRegistryPlugin {
+  return {
+    name,
+    targets: ['gemini', 'kiro'],
+    files: {
+      'gemini-extension.json': `{\n  "name": "${name}",\n  "version": "0.0.1"\n}\n`,
+      'GEMINI.md': `# ${name}\n`,
+      'POWER.md': `---\nname: ${name}\ndescription: ${name} power\nversion: 0.0.1\n---\n# ${name}\n`,
+      'mcp.json': '{\n  "mcpServers": {}\n}\n',
+      'skills/skill-x/SKILL.md': `---\nname: skill-x\ndescription: a shared skill\n---\n# skill-x\n`,
+    },
+  };
+}
+
 /** Parse the sidecar manifest's tracked `paths`. */
 function readSidecarPaths(repoRoot: string): string[] {
   const raw = JSON.parse(fs.readFileSync(path.join(repoRoot, ...SIDECAR_REL), 'utf-8')) as {
@@ -238,6 +258,22 @@ describe('single-artifact-host — freshness', () => {
   let repo: SynthRegistryRepo | undefined;
   afterEach(() => {
     repo?.cleanup();
+  });
+
+  it('one plugin declaring both gemini AND kiro builds, then re-validates clean (sidecar dedupe)', async () => {
+    // Regression: a skill shared by both bundles lands in the sidecar once (build dedupes via a
+    // Set), but the freshness oracle collects it once per emitting host. Before the dedupe in
+    // serializeRootManifest, the sidecar read as perpetually stale right after a build.
+    repo = synthRegistryRepo([comboPlugin('combo')], WORKSPACE);
+    await runBuild(repo.repoRoot);
+
+    const result = await runValidate(repo.repoRoot, { ci: true });
+    expect(result.findings.filter((f) => f.code === 'freshness')).toStrictEqual([]);
+    expect(result.passed).toBe(true);
+    // The shared skill is tracked exactly once.
+    expect(readSidecarPaths(repo.repoRoot).filter((p) => p.endsWith('skill-x/SKILL.md'))).toEqual([
+      'skills/skill-x/SKILL.md',
+    ]);
   });
 
   it('a hand-edited generated root artifact is a HARD freshness finding under ci:true', async () => {

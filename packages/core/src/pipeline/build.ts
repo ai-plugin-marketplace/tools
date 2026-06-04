@@ -578,7 +578,12 @@ export function detectRootCollisions(
  * 2-space JSON + trailing newline, byte-stable so the freshness compare is exact.
  */
 export function serializeRootManifest(trackedPaths: readonly string[]): string {
-  return `${JSON.stringify({ version: 1, paths: [...trackedPaths].sort() }, null, 2)}\n`;
+  // Canonicalize (dedupe + sort) so the bytes are identical regardless of caller. The freshness
+  // oracle in validate.ts collects one entry per emitting host, so a path shared by both the gemini
+  // and kiro bundles (e.g. `skills/<name>/SKILL.md`) appears twice; build passes a deduped set.
+  // Without deduping here, those two callers would serialize differently and the sidecar would read
+  // as perpetually stale (a false `freshness` finding).
+  return `${JSON.stringify({ version: 1, paths: [...new Set(trackedPaths)].sort() }, null, 2)}\n`;
 }
 
 /**

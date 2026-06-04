@@ -105,6 +105,7 @@ export function init(targetDir: string, opts?: InitOptions): Promise<void>;
 
 // @public
 export interface InitOptions {
+    cliVersion?: string;
     name?: string;
 }
 
@@ -125,6 +126,20 @@ export interface MigrateResult {
     migrationsApplied: number;
     status: 'no-migrations-needed' | 'applied' | 'failed';
 }
+
+// @public
+export interface RefreshOptions {
+    force?: boolean;
+}
+
+// @public
+export interface RefreshOutcome {
+    path: string;
+    status: 'updated' | 'unchanged' | 'recreated' | 'conflict' | 'overwritten';
+}
+
+// @public
+export function refreshScaffold(targetDir: string, opts?: RefreshOptions): Promise<RefreshOutcome[]>;
 
 // @public
 export function scaffold(name: string, opts?: ScaffoldOptions): Promise<void>;

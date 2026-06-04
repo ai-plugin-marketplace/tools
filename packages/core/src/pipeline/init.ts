@@ -4,18 +4,19 @@
  *
  * This is the filesystem-writing orchestrator behind the public `init` operation and the
  * `aipm init [dir]` CLI surface. The generated file *contents* live in `init-template.ts`; this
- * module is the I/O boundary: it resolves the toolkit version to pin, refuses to clobber a
- * non-empty target, and writes the seed tree.
+ * module is the I/O boundary: it resolves the versions to pin, refuses to clobber a non-empty
+ * target, writes the seed tree, and seeds the `.aipm/scaffold.json` refresh sidecar.
  *
- * **Version pinning (§9.1 lockstep release).** core and cli ship in lockstep, so the `cli` dev
- * dependency is pinned to a caret of core's *own* version — read at runtime from this package's
- * `package.json`, resolved relative to {@link import.meta.url} exactly as `load-config.ts` resolves
- * the package entrypoint. Today that yields `^0.1.0-alpha.0`; once 0.1.0 ships, an `init` run from
- * the published cli pins `^0.1.0`.
+ * **Version pinning.** `cli` and `core` ship independently and may differ (e.g. `cli 0.1.1` ships
+ * with `core 0.2.0`), so the generated `package.json` pins each to a caret of its *own* version.
+ * `core`'s version is read at runtime from this package's `package.json` (resolved relative to
+ * {@link import.meta.url}, exactly as `load-config.ts` resolves the package entrypoint); `cli`'s
+ * version is supplied by the cli entrypoint via {@link InitOptions.cliVersion} (it reads its own
+ * `package.json`). When `cliVersion` is omitted, it falls back to core's version.
  *
  * @see docs/specs/architecture.md §3.2 (template repo contents)
- * @see docs/specs/architecture.md §9.1 (lockstep release lines)
  * @see docs/specs/architecture.md §11 (template→toolkit dependency contract)
+ * @see docs/specs/scaffold-refresh-and-upgrade.md (`aipm init --refresh`)
  */
 
 import * as fs from 'node:fs';
@@ -23,6 +24,7 @@ import * as path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 import { buildInitFiles } from './init-template.js';
+import { writeScaffoldSidecar } from './scaffold-refresh.js';
 import type { InitOptions } from './types.js';
 
 /**
@@ -55,18 +57,20 @@ function isFreshTarget(dir: string): boolean {
 /**
  * Scaffold a thin consumer repo at `targetDir` (§3.2).
  *
- * Writes `package.json` (with the `@ai-plugin-marketplace/cli` dev dependency pinned to a caret of
- * the current toolkit version), `.gitignore`, `README.md`, both repo-root marketplace registries
- * (`{ "plugins": [] }`), an empty `plugins/` (tracked via `.gitkeep`), and a CI workflow that runs
- * `aipm build` then `aipm validate` (§10.5 freshness). The repo name defaults to
- * `basename(targetDir)`; override it with `opts.name`.
+ * Writes `package.json` (with `cli`/`core` dev dependencies pinned to carets of their respective
+ * versions), `.gitignore`, `README.md`, both repo-root marketplace registries (`{ "plugins": [] }`),
+ * an empty `plugins/` (tracked via `.gitkeep`), and a CI workflow that runs `aipm build` then
+ * `aipm validate` (§10.5 freshness). It also seeds `.aipm/scaffold.json` so a later
+ * `aipm init --refresh` can tell pristine toolkit-owned files from user edits. The repo name
+ * defaults to `basename(targetDir)`; override it with `opts.name`.
  *
  * **Refuses to clobber.** If `targetDir` exists and is a non-empty directory (or exists as a
  * non-directory), the function throws and writes nothing. Creating into a fresh or empty directory
  * is fine.
  *
  * @param targetDir - Absolute or relative path to the directory to scaffold into.
- * @param opts - Init options; `name` overrides the derived repo name.
+ * @param opts - Init options; `name` overrides the derived repo name, `cliVersion` the pinned cli
+ *   dependency version (defaults to core's version).
  * @throws {Error} When `targetDir` exists and is non-empty (or is not a directory).
  */
 export async function runInit(targetDir: string, opts: InitOptions = {}): Promise<void> {
@@ -80,7 +84,9 @@ export async function runInit(targetDir: string, opts: InitOptions = {}): Promis
   }
 
   const name = opts.name ?? path.basename(resolved);
-  const files = buildInitFiles(name, coreVersion());
+  const core = coreVersion();
+  const cli = opts.cliVersion ?? core;
+  const files = buildInitFiles(name, cli, core);
 
   fs.mkdirSync(resolved, { recursive: true });
   for (const file of files) {
@@ -88,6 +94,9 @@ export async function runInit(targetDir: string, opts: InitOptions = {}): Promis
     fs.mkdirSync(path.dirname(full), { recursive: true });
     fs.writeFileSync(full, file.content, 'utf-8');
   }
+
+  // Seed the refresh sidecar so `aipm init --refresh` has a baseline of toolkit-owned content.
+  writeScaffoldSidecar(resolved);
 
   return Promise.resolve();
 }

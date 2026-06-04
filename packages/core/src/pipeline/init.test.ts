@@ -1,15 +1,17 @@
 /**
  * Tests for `runInit`: scaffold a thin consumer repo (§3.2) into a real temp directory and assert
- * the full seed file set, the pinned `@ai-plugin-marketplace/cli` dev dependency (§9.1 lockstep,
- * §11 contract), and that the generated repo passes `runValidate` out of the box (an empty
- * `plugins/` is valid). Uses real temp directories (`fs.mkdtempSync`), matching `scaffold.test.ts`.
+ * the full seed file set, the pinned `cli`/`core` dev dependencies (§11 contract), the seeded
+ * `.aipm/scaffold.json` refresh sidecar, and that the generated repo passes `runValidate` out of
+ * the box (an empty `plugins/` is valid). Uses real temp directories (`fs.mkdtempSync`), matching
+ * `scaffold.test.ts`.
  *
- * The expected pinned version is read from core's own `package.json` — the same source `runInit`
- * resolves at runtime — rather than hard-coded, so the assertion tracks the lockstep version.
+ * `cli` and `core` ship independently and may differ, so `runInit` pins each to a caret of its own
+ * version: `core` from core's own `package.json` (read here the same way), `cli` from
+ * `opts.cliVersion` (falling back to core's version when omitted).
  *
  * @see docs/specs/architecture.md §3.2 (template repo contents)
- * @see docs/specs/architecture.md §9.1 (lockstep release lines)
  * @see docs/specs/architecture.md §11 (template→toolkit dependency contract)
+ * @see docs/specs/scaffold-refresh-and-upgrade.md (`aipm init --refresh`)
  */
 
 import * as fs from 'node:fs';
@@ -36,6 +38,7 @@ interface GeneratedPackageJson {
   name?: string;
   private?: boolean;
   type?: string;
+  packageManager?: string;
   scripts?: Record<string, string>;
   devDependencies?: Record<string, string>;
 }
@@ -77,7 +80,7 @@ describe('runInit', () => {
     const repoDir = path.join(tmpDir, 'my-repo');
     await runInit(repoDir);
 
-    // §3.2: every seed file is present.
+    // §3.2: every seed file is present, plus the refresh sidecar.
     for (const rel of [
       'package.json',
       '.gitignore',
@@ -86,6 +89,7 @@ describe('runInit', () => {
       '.cursor-plugin/marketplace.json',
       'plugins/.gitkeep',
       '.github/workflows/ci.yml',
+      '.aipm/scaffold.json',
     ]) {
       expect(fs.existsSync(path.join(repoDir, rel)), `${rel} should exist`).toBe(true);
     }
@@ -105,14 +109,45 @@ describe('runInit', () => {
     expect(pkg.name).toBe('explicit-name');
   });
 
-  it('pins the cli dev dependency to a caret of the current toolkit version (§9.1, §11)', async () => {
+  it('defaults the cli pin to core’s version when no cliVersion is given (§11)', async () => {
     const repoDir = path.join(tmpDir, 'pinned');
     await runInit(repoDir);
     const pkg = readPackageJson(repoDir);
-    // §11: the template depends on @ai-plugin-marketplace/cli via ^semver;
-    // core rides along (same version) so each plugin's aipm.config.ts can import defineConfig (§6.1).
     expect(pkg.devDependencies?.['@ai-plugin-marketplace/cli']).toBe(`^${CORE_VERSION}`);
     expect(pkg.devDependencies?.['@ai-plugin-marketplace/core']).toBe(`^${CORE_VERSION}`);
+  });
+
+  it('pins cli and core independently when cli and core versions skew', async () => {
+    // Regression: init must NOT pin cli to core's version. cli and core ship independently
+    // (e.g. cli 0.1.1 ships with core 0.2.0); pinning both to core's version yields an
+    // uninstallable `@ai-plugin-marketplace/cli` range.
+    const repoDir = path.join(tmpDir, 'skewed');
+    await runInit(repoDir, { cliVersion: '9.9.9' });
+    const pkg = readPackageJson(repoDir);
+    expect(pkg.devDependencies?.['@ai-plugin-marketplace/cli']).toBe('^9.9.9');
+    expect(pkg.devDependencies?.['@ai-plugin-marketplace/core']).toBe(`^${CORE_VERSION}`);
+  });
+
+  it('pins pnpm via packageManager so CI resolves a pnpm version (§3.2)', async () => {
+    const repoDir = path.join(tmpDir, 'pkg-mgr');
+    await runInit(repoDir);
+    const pkg = readPackageJson(repoDir);
+    expect(pkg.packageManager).toMatch(/^pnpm@\d+\.\d+\.\d+$/);
+  });
+
+  it('seeds .aipm/scaffold.json recording the managed scaffold files', async () => {
+    const repoDir = path.join(tmpDir, 'sidecar');
+    await runInit(repoDir);
+    const sidecar = JSON.parse(read(repoDir, '.aipm/scaffold.json')) as {
+      version?: number;
+      files?: { path: string; hash: string }[];
+    };
+    expect(sidecar.version).toBe(1);
+    const paths = (sidecar.files ?? []).map((f) => f.path).sort();
+    expect(paths).toEqual(['.github/workflows/ci.yml', '.gitignore']);
+    for (const f of sidecar.files ?? []) {
+      expect(f.hash, `${f.path} hash`).toMatch(/^sha256-[0-9a-f]{64}$/);
+    }
   });
 
   it('emits a private, ESM package.json with the aipm scripts (§3.2)', async () => {

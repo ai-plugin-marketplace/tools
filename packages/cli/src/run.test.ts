@@ -114,6 +114,39 @@ describe('aipm init', () => {
     expect(code).toBe(1);
     expect(err).toContain('init failed');
   });
+
+  it('init --refresh reports unchanged on a freshly scaffolded repo and exits 0', async () => {
+    const target = path.join(tmpDir, 'refresh-clean');
+    await invoke(['init', target]);
+    const { code, out } = await invoke(['init', '--refresh', target]);
+    expect(code).toBe(0);
+    expect(out).toContain('unchanged');
+    expect(out).toContain('.github/workflows/ci.yml');
+  });
+
+  it('init --refresh reports a conflict for a locally-modified file and leaves it (exit 0)', async () => {
+    const target = path.join(tmpDir, 'refresh-conflict');
+    await invoke(['init', target]);
+    const ci = path.join(target, '.github/workflows/ci.yml');
+    fs.writeFileSync(ci, 'name: Custom\n', 'utf-8');
+    const { code, out } = await invoke(['init', '--refresh', target]);
+    expect(code).toBe(0);
+    expect(out).toContain('conflict');
+    expect(out).toContain('--force');
+    expect(fs.readFileSync(ci, 'utf-8')).toBe('name: Custom\n');
+  });
+
+  it('init --refresh --force overwrites a locally-modified file (exit 0)', async () => {
+    const target = path.join(tmpDir, 'refresh-force');
+    await invoke(['init', target]);
+    const ci = path.join(target, '.github/workflows/ci.yml');
+    const original = fs.readFileSync(ci, 'utf-8');
+    fs.writeFileSync(ci, 'name: Custom\n', 'utf-8');
+    const { code, out } = await invoke(['init', '--refresh', '--force', target]);
+    expect(code).toBe(0);
+    expect(out).toContain('overwritten');
+    expect(fs.readFileSync(ci, 'utf-8')).toBe(original);
+  });
 });
 
 describe('aipm migrate', () => {

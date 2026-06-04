@@ -26,11 +26,13 @@ import {
   init,
   listTargets,
   migrate,
+  refreshScaffold,
   scaffold,
   validate,
 } from '@ai-plugin-marketplace/core';
 import type {
   Finding,
+  RefreshOutcome,
   SupportReport,
   TargetId,
   ValidationResult,
@@ -48,6 +50,7 @@ Usage:
 
 Commands:
   init [dir]                    Scaffold a new plugin repo (default: cwd)
+  init --refresh [dir]          Update toolkit-owned scaffold files in an existing repo
   build [path]                  Build plugin artifacts (default: cwd)
   validate [path]               Run validators on plugins (default: cwd)
   scaffold <name>               Create a new plugin from templates
@@ -57,6 +60,8 @@ Commands:
   list-targets                  List target IDs this toolkit knows about
 
 Options:
+  --refresh                     With init: refresh an existing repo instead of creating one
+  --force                       With init --refresh: overwrite locally-modified scaffold files
   --help, -h                    Show this help message
   --version, -V                 Print toolkit version
 `;
@@ -103,6 +108,20 @@ function reportSupport(report: SupportReport, out: NodeJS.WritableStream): void 
   }
 }
 
+/** Write a per-file summary of an `init --refresh` run, plus guidance when conflicts were skipped. */
+function reportRefresh(outcomes: readonly RefreshOutcome[], out: NodeJS.WritableStream): void {
+  for (const o of outcomes) {
+    out.write(`${o.status.padEnd(12)} ${o.path}\n`);
+  }
+  const conflicts = outcomes.filter((o) => o.status === 'conflict');
+  if (conflicts.length > 0) {
+    out.write(
+      `\n${String(conflicts.length)} file(s) have local modifications and were left unchanged.\n`,
+    );
+    out.write('Review them, then re-run `aipm init --refresh --force` to overwrite.\n');
+  }
+}
+
 export async function run(argv: readonly string[], opts: RunOptions = {}): Promise<number> {
   const out = opts.stdout ?? process.stdout;
   const err = opts.stderr ?? process.stderr;
@@ -122,8 +141,16 @@ export async function run(argv: readonly string[], opts: RunOptions = {}): Promi
   try {
     switch (command) {
       case 'init': {
-        const dir = rest[0] ?? process.cwd();
-        await init(dir);
+        const refresh = rest.includes('--refresh');
+        const force = rest.includes('--force');
+        const dir = rest.find((arg) => !arg.startsWith('-')) ?? process.cwd();
+        if (refresh) {
+          const outcomes = await refreshScaffold(dir, { force });
+          reportRefresh(outcomes, out);
+          // Conflicts are reported, not failures — keep exit 0 so this is script-safe.
+          return 0;
+        }
+        await init(dir, { cliVersion: toolkitVersion() });
         const created = path.resolve(dir);
         out.write(`Created plugin repo at ${created}.\n`);
         out.write('Next: run `pnpm install`, then `aipm scaffold <name>` to add a plugin.\n');

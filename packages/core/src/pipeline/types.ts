@@ -193,6 +193,47 @@ export interface InitOptions {
    * directory.
    */
   name?: string;
+
+  /**
+   * Version of `@ai-plugin-marketplace/cli` to pin the generated `package.json`'s `cli`
+   * dev dependency to (as `^<cliVersion>`). The cli entrypoint supplies its own version here; cli
+   * and core ship independently and may differ (e.g. `cli 0.1.1` ships with `core 0.2.0`). When
+   * omitted, falls back to core's own version (the historical lockstep assumption).
+   */
+  cliVersion?: string;
+}
+
+/**
+ * Options for {@link refreshScaffold}.
+ *
+ * @public
+ */
+export interface RefreshOptions {
+  /**
+   * Overwrite toolkit-owned scaffold files even when their on-disk content has diverged from what
+   * the toolkit last wrote (i.e. the user edited them). Without this, diverged files are reported
+   * as conflicts and left untouched.
+   */
+  force?: boolean;
+}
+
+/**
+ * Per-file outcome of a {@link refreshScaffold} run. Returned (one per managed scaffold file) so
+ * the CLI can report what changed without re-deriving it.
+ *
+ * @public
+ */
+export interface RefreshOutcome {
+  /** Repo-relative POSIX path of the managed scaffold file. */
+  path: string;
+  /**
+   * - `updated` — content changed and was rewritten (file was pristine or `--force`).
+   * - `unchanged` — already matched the current render; nothing written.
+   * - `recreated` — file was missing and was written from the render.
+   * - `conflict` — on-disk content diverged from the recorded hash; left untouched (no `--force`).
+   * - `overwritten` — diverged but rewritten because `--force` was set.
+   */
+  status: 'updated' | 'unchanged' | 'recreated' | 'conflict' | 'overwritten';
 }
 
 // ---------------------------------------------------------------------------

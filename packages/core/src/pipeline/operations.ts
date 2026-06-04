@@ -85,7 +85,10 @@ export function refreshScaffold(
   targetDir: string,
   opts?: RefreshOptions,
 ): Promise<RefreshOutcome[]> {
-  return Promise.resolve(runRefreshScaffold(targetDir, opts));
+  // Defer into the microtask queue so a synchronous failure in the orchestrator (e.g. an I/O error)
+  // surfaces as a rejected promise — matching `refreshScaffold(...).catch(...)` expectations —
+  // rather than throwing from this call before the promise exists.
+  return Promise.resolve().then(() => runRefreshScaffold(targetDir, opts));
 }
 
 /**

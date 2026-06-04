@@ -59,19 +59,26 @@ function readSidecar(repoRoot: string): Map<string, string> {
   const map = new Map<string, string>();
   const abs = sidecarPath(repoRoot);
   if (!fs.existsSync(abs)) return map;
+
+  // Read errors (permissions, transient I/O) propagate — they are real operational problems, not a
+  // "malformed sidecar" we should silently swallow. Only a JSON parse failure is tolerated.
+  const raw = fs.readFileSync(abs, 'utf-8');
+  let parsed: { files?: unknown };
   try {
-    const parsed = JSON.parse(fs.readFileSync(abs, 'utf-8')) as { files?: unknown };
-    if (Array.isArray(parsed.files)) {
-      for (const raw of parsed.files) {
-        const entry = raw as Partial<SidecarEntry>;
-        if (typeof entry.path === 'string' && typeof entry.hash === 'string') {
-          map.set(entry.path, entry.hash);
-        }
-      }
-    }
+    parsed = JSON.parse(raw) as { files?: unknown };
   } catch {
     // A malformed sidecar is treated as absent: every managed file becomes "untracked" and must
     // either already match the current render (adopted) or be resolved via --force.
+    return map;
+  }
+
+  if (Array.isArray(parsed.files)) {
+    for (const rawEntry of parsed.files) {
+      const entry = rawEntry as Partial<SidecarEntry>;
+      if (typeof entry.path === 'string' && typeof entry.hash === 'string') {
+        map.set(entry.path, entry.hash);
+      }
+    }
   }
   return map;
 }

@@ -1,6 +1,26 @@
 # ai-plugin-marketplace/tools
 
-Monorepo publishing the `@ai-plugin-marketplace/*` toolkit consumed by the [`template`](https://github.com/ai-plugin-marketplace/template) repository.
+Monorepo publishing the `@ai-plugin-marketplace/*` toolkit (consumed by the [`template`](https://github.com/ai-plugin-marketplace/template) repository) — and, dogfooding that toolkit, **itself an AI plugin marketplace**.
+
+## Install the agent plugin
+
+This repo ships one plugin, **`marketplace-authoring`**, that equips your coding agent to turn any software repo into an AI plugin marketplace with this toolkit. Install it into your assistant through its native mechanism:
+
+| Assistant       | Install                                                                                    |
+| --------------- | ------------------------------------------------------------------------------------------ |
+| **Claude Code** | `/plugin marketplace add ai-plugin-marketplace/tools`                                      |
+| **Cursor**      | Dashboard → Settings → Plugins → Import → `https://github.com/ai-plugin-marketplace/tools` |
+| **Codex**       | `codex plugin marketplace add ai-plugin-marketplace/tools`                                 |
+| **Gemini CLI**  | `gemini extensions install https://github.com/ai-plugin-marketplace/tools`                 |
+| **Kiro**        | Powers panel → "Add power from GitHub" → repo URL                                          |
+
+Or, cross-tool via the universal [`plugins`](https://github.com/vercel-labs/plugins) CLI (it installs the **native** plugin where the tool supports it):
+
+```sh
+npx plugins add ai-plugin-marketplace/tools
+```
+
+Then ask your agent to _"add AI plugin marketplace support to this repo"_ and the skill walks it through the rest.
 
 ## Packages
 

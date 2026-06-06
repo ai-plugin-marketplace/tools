@@ -163,8 +163,8 @@ jobs:
  * secrets.
  *
  * Deliberately does **not** ignore `dist/`: toolkit build output (per-plugin `dist/` bundles and
- * `hooks/*.json`) is committed for consumer install and the freshness check — see the build
- * contract and `.gitattributes`.
+ * generated hook JSON) is committed and freshness-checked — see `docs/specs/architecture.md` §P5
+ * ("Both authored sources and generated outputs are committed") and §10.5 (Freshness check).
  *
  * This is **seed-only**: `aipm init` writes it, but it is intentionally absent from
  * {@link buildManagedScaffoldFiles} so `aipm init --refresh` never clobbers or perpetually flags

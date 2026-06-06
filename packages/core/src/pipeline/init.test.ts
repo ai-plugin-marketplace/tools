@@ -144,10 +144,34 @@ describe('runInit', () => {
     };
     expect(sidecar.version).toBe(1);
     const paths = (sidecar.files ?? []).map((f) => f.path).sort();
-    expect(paths).toEqual(['.github/workflows/ci.yml', '.gitignore']);
+    // `.gitignore` is seed-only (not refresh-managed), so the sidecar tracks only `ci.yml` (#19).
+    expect(paths).toEqual(['.github/workflows/ci.yml']);
     for (const f of sidecar.files ?? []) {
       expect(f.hash, `${f.path} hash`).toMatch(/^sha256-[0-9a-f]{64}$/);
     }
+  });
+
+  it('seeds a comprehensive .gitignore that protects secrets and common cruft (#19)', async () => {
+    // Safety acceptance: a fresh scaffold must ignore `.env*` so secrets can't be committed, plus
+    // logs/coverage/scratch — while retaining the originally-required `*.local.*` and `.DS_Store`.
+    const repoDir = path.join(tmpDir, 'gitignore-seed');
+    await runInit(repoDir);
+    const gitignore = read(repoDir, '.gitignore');
+    for (const pattern of [
+      '.env',
+      '.env.*',
+      '*.log',
+      'coverage/',
+      'scratch/',
+      'node_modules/',
+      '*.tsbuildinfo',
+      '*.local.*',
+      '.DS_Store',
+    ]) {
+      expect(gitignore.split('\n')).toContain(pattern);
+    }
+    // Build output is deliberately committed — refresh/freshness depends on it — so never ignore it.
+    expect(gitignore.split('\n')).not.toContain('dist/');
   });
 
   it('emits a private, ESM package.json with the aipm scripts (§3.2)', async () => {

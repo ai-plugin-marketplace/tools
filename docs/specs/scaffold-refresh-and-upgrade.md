@@ -3,10 +3,11 @@
 ## Motivation
 
 A marketplace/consumer repo (the `template`, or any repo created by `aipm init`) carries
-**toolkit-owned scaffold files** — chiefly `.github/workflows/ci.yml` and `.gitignore` — whose
-canonical content lives in the toolkit's `init-template.ts` render functions. Today there is no way
-to refresh those files when the toolkit evolves: they must be hand-edited in lockstep, and they
-drift. Two concrete symptoms:
+**toolkit-owned scaffold files** — chiefly `.github/workflows/ci.yml` — whose canonical content
+lives in the toolkit's `init-template.ts` render functions. Today there is no way to refresh those
+files when the toolkit evolves: they must be hand-edited in lockstep, and they drift. (`.gitignore`
+is also seeded by `init`, but it is **not** refresh-managed — see the file-ownership table — because
+users legitimately extend it.) Two concrete symptoms:
 
 1. **Drift.** The `template`'s `ci.yml` (node 24, branch filters, a freshness `git status` step) has
    diverged from what `aipm init` renders (node 20, no freshness step) — two representations of the
@@ -37,16 +38,16 @@ This is distinct from `aipm migrate` (schema/breaking migrations), which stays s
 
 ## File ownership — what refresh manages
 
-| File / area                                               | Managed by refresh? | Why                                                                                                                                                             |
-| --------------------------------------------------------- | ------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `.github/workflows/ci.yml`                                | **Yes**             | Pure tooling recipe; should track the toolkit.                                                                                                                  |
-| `.gitignore`                                              | **Yes**             | Toolkit baseline (`node_modules/`, OS cruft, etc.).                                                                                                             |
-| `package.json` **dependencies**                           | **No**              | Version bumps are `pnpm up`'s job + lockfile. (Future work: refresh could _report_ when pinned `cli`/`core` drift from the rendered pins; not implemented yet.) |
-| `package.json` other fields                               | **No**              | User owns `scripts`, added deps, etc.                                                                                                                           |
-| `aipm.workspace.ts`                                       | **No**              | Repo identity (marketplace name/owner/description) — authored.                                                                                                  |
-| `README.md`, `CONTRIBUTING.md`                            | **No**              | Authored prose.                                                                                                                                                 |
-| `plugins/**`                                              | **No**              | User content.                                                                                                                                                   |
-| Registries, `dist/`, root Gemini/Kiro emission, hook JSON | **No**              | Owned by `aipm build`, freshness-checked separately.                                                                                                            |
+| File / area                                               | Managed by refresh? | Why                                                                                                                                                                 |
+| --------------------------------------------------------- | ------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `.github/workflows/ci.yml`                                | **Yes**             | Pure tooling recipe; should track the toolkit.                                                                                                                      |
+| `.gitignore`                                              | **No**              | Seeded by `aipm init` (comprehensive baseline incl. `.env*`); user owns it thereafter — users extend it freely, so refresh must not clobber or perpetually flag it. |
+| `package.json` **dependencies**                           | **No**              | Version bumps are `pnpm up`'s job + lockfile. (Future work: refresh could _report_ when pinned `cli`/`core` drift from the rendered pins; not implemented yet.)     |
+| `package.json` other fields                               | **No**              | User owns `scripts`, added deps, etc.                                                                                                                               |
+| `aipm.workspace.ts`                                       | **No**              | Repo identity (marketplace name/owner/description) — authored.                                                                                                      |
+| `README.md`, `CONTRIBUTING.md`                            | **No**              | Authored prose.                                                                                                                                                     |
+| `plugins/**`                                              | **No**              | User content.                                                                                                                                                       |
+| Registries, `dist/`, root Gemini/Kiro emission, hook JSON | **No**              | Owned by `aipm build`, freshness-checked separately.                                                                                                                |
 
 The managed set is intentionally small: the files that are _pure tooling recipe_ and break or rot
 when they lag the toolkit.
@@ -98,8 +99,10 @@ versions:
   → `aipm build` → freshness `git status` gate → `aipm validate`; pnpm version from
   `package.json#packageManager`).
 - `package.json`: add `packageManager: "pnpm@<pinned>"` (a named constant), correct version pins.
-- `.gitignore`: canonical lean list (includes `*.local.*`, `.DS_Store`, `node_modules/`,
-  `*.tsbuildinfo`).
+- `.gitignore`: comprehensive baseline — ignores `.env*` (so secrets can't be committed from a fresh
+  scaffold), `*.log`, `coverage`, common caches, `scratch/`, plus `node_modules/`, `*.tsbuildinfo`,
+  `*.local.*`, and `.DS_Store`. Deliberately does **not** ignore `dist/` (committed build output).
+  Seed-only — `init` writes it, the user owns it thereafter (it is not in the refresh-managed set).
 - Greenfield `init` keeps its existing registry/`README` behavior: it still seeds empty
   hand-authored registries (`{ "plugins": [] }`) and a simple starter `README.md`, and does **not**
   emit `aipm.workspace.ts`. This keeps a fresh repo `validate`-clean without coupling `init` to the
@@ -124,8 +127,8 @@ to the rendered pins is possible future work; not implemented.)_
 ## Backward compatibility
 
 - `aipm init <empty-dir>` is unchanged except for the corrected version pins, the added
-  `packageManager` field, and the canonical CI-workflow/`.gitignore` renders. It still seeds the
-  empty registries and starter `README.md` as before.
+  `packageManager` field, the canonical CI-workflow render, and the comprehensive (seed-only)
+  `.gitignore`. It still seeds the empty registries and starter `README.md` as before.
 - It additionally seeds the `.aipm/scaffold.json` refresh sidecar.
 - `--refresh` is purely additive.
 - The `.aipm/scaffold.json` sidecar is additive and ignored by older tooling.

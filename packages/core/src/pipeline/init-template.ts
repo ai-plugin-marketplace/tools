@@ -156,43 +156,83 @@ jobs:
 `;
 }
 
-/** `.gitignore` for a consumer repo: dependencies, build intermediates, OS/local cruft. */
+/**
+ * `.gitignore` for a consumer repo. Comprehensive baseline covering dependencies, build
+ * intermediates, logs, test coverage, caches, environment/secret files, scratch artifacts, and
+ * OS/local cruft. Notably ignores `.env*` so a freshly scaffolded repo cannot accidentally commit
+ * secrets.
+ *
+ * Deliberately does **not** ignore `dist/`: toolkit build output (per-plugin `dist/` bundles and
+ * generated hook JSON) is committed and freshness-checked — see `docs/specs/architecture.md` §P5
+ * ("Both authored sources and generated outputs are committed") and §10.5 (Freshness check).
+ *
+ * This is **seed-only**: `aipm init` writes it, but it is intentionally absent from
+ * {@link buildManagedScaffoldFiles} so `aipm init --refresh` never clobbers or perpetually flags
+ * the user's own additions (`.gitignore` is something users legitimately extend).
+ */
 function renderGitignore(): string {
-  return `node_modules/
-.DS_Store
-*.local.*
+  return `# Dependencies
+node_modules/
+
+# Build intermediates
 *.tsbuildinfo
+
+# Logs
+*.log
+logs/
+
+# Test coverage
+coverage/
+*.lcov
+
+# Caches
+.cache/
+.eslintcache
+.npm/
+
+# Environment / secrets
+.env
+.env.*
+!.env.example
+
+# Scratch & manual-test artifacts
+scratch/
+
+# OS / editor cruft
+.DS_Store
+
+# Local overrides
+*.local.*
 `;
 }
 
 /**
  * Toolkit-owned **scaffold** files that `aipm init --refresh` keeps in sync with the installed
- * tooling: the CI workflow and `.gitignore`. These are pure tooling recipes — their content is
- * independent of the repo name and the pinned toolkit version, so refresh can re-render them with
- * no inputs and compare byte-for-byte. (Files with repo identity or user content — `package.json`,
- * `aipm.workspace.ts`, `README.md`, plugins, `aipm build` output — are deliberately NOT here.)
+ * tooling: the CI workflow. It is a pure tooling recipe — its content is independent of the repo
+ * name and the pinned toolkit version, so refresh can re-render it with no inputs and compare
+ * byte-for-byte. (Files with repo identity or user content — `package.json`, `aipm.workspace.ts`,
+ * `README.md`, plugins, `aipm build` output — are deliberately NOT here. `.gitignore` is seeded by
+ * `init` but NOT managed, since users extend it freely.)
  *
  * Output is deterministic and stably ordered.
  */
 export function buildManagedScaffoldFiles(): InitFile[] {
-  return [
-    { path: '.gitignore', content: renderGitignore() },
-    { path: '.github/workflows/ci.yml', content: renderCiWorkflow() },
-  ];
+  return [{ path: '.github/workflows/ci.yml', content: renderCiWorkflow() }];
 }
 
 /**
  * Build the complete, deterministic seed file set for a consumer repo named `name`, pinning the
  * `cli`/`core` dev dependencies to carets of `cliVersion`/`coreVersion` respectively.
  *
- * The set mirrors §3.2: `package.json`, the {@link buildManagedScaffoldFiles managed scaffold
- * files} (`.gitignore`, CI workflow), `README.md`, both repo-root marketplace registries, and an
- * empty `plugins/` (seeded with `.gitkeep` so the directory is tracked). Output is a pure function
- * of the inputs — stable ordering, no timestamps.
+ * The set mirrors §3.2: `package.json`, the seed-only `.gitignore`, the
+ * {@link buildManagedScaffoldFiles managed scaffold files} (CI workflow), `README.md`, both
+ * repo-root marketplace registries, and an empty `plugins/` (seeded with `.gitkeep` so the
+ * directory is tracked). Output is a pure function of the inputs — stable ordering, no timestamps.
  */
 export function buildInitFiles(name: string, cliVersion: string, coreVersion: string): InitFile[] {
   return [
     { path: 'package.json', content: renderPackageJson(name, cliVersion, coreVersion) },
+    { path: '.gitignore', content: renderGitignore() },
     { path: 'README.md', content: renderReadme(name) },
     { path: '.claude-plugin/marketplace.json', content: renderEmptyMarketplace() },
     { path: '.cursor-plugin/marketplace.json', content: renderEmptyMarketplace() },

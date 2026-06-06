@@ -130,8 +130,21 @@ describe('runRefreshScaffold', () => {
 
   it('reports all managed files unchanged immediately after init', () => {
     const outcomes = runRefreshScaffold(repoDir);
-    expect(outcomes.map((o) => o.path).sort()).toEqual([CI_REL, GITIGNORE_REL]);
+    // `.gitignore` is seed-only; the only refresh-managed file is `ci.yml` (#19).
+    expect(outcomes.map((o) => o.path).sort()).toEqual([CI_REL]);
     expect(outcomes.every((o) => o.status === 'unchanged')).toBe(true);
+  });
+
+  it('never refresh-manages .gitignore: it stays out of outcomes and user edits survive (#19)', () => {
+    // `.gitignore` is seeded by init but owned by the user thereafter. Refresh must never report it
+    // (no perpetual conflict) nor touch it (no clobbering user additions), with or without --force.
+    const edited = `${read(GITIGNORE_REL)}my-custom-dir/\n`;
+    write(GITIGNORE_REL, edited);
+    for (const opts of [undefined, { force: true }]) {
+      const outcomes = runRefreshScaffold(repoDir, opts);
+      expect(outcomes.some((o) => o.path === GITIGNORE_REL)).toBe(false);
+      expect(read(GITIGNORE_REL)).toBe(edited);
+    }
   });
 
   it('reports a conflict and leaves a user-edited file untouched (no --force)', () => {
@@ -150,27 +163,27 @@ describe('runRefreshScaffold', () => {
   });
 
   it('recreates a deleted managed file', () => {
-    fs.rmSync(path.join(repoDir, GITIGNORE_REL));
+    fs.rmSync(path.join(repoDir, CI_REL));
     const outcomes = runRefreshScaffold(repoDir);
-    expect(statusFor(GITIGNORE_REL, outcomes)).toBe('recreated');
-    expect(exists(GITIGNORE_REL)).toBe(true);
+    expect(statusFor(CI_REL, outcomes)).toBe('recreated');
+    expect(exists(CI_REL)).toBe(true);
   });
 
   it('updates a pristine file that lags the render', () => {
     // Simulate an older toolkit render: stale on-disk content whose hash the sidecar still records.
-    const stale = 'stale-ignore\n';
-    write(GITIGNORE_REL, stale);
+    const stale = 'name: Stale CI\n';
+    write(CI_REL, stale);
     write(
       SIDECAR_REL,
       `${JSON.stringify(
-        { version: 1, files: [{ path: GITIGNORE_REL, hash: hashScaffoldContent(stale) }] },
+        { version: 1, files: [{ path: CI_REL, hash: hashScaffoldContent(stale) }] },
         null,
         2,
       )}\n`,
     );
     const outcomes = runRefreshScaffold(repoDir);
-    expect(statusFor(GITIGNORE_REL, outcomes)).toBe('updated');
-    expect(read(GITIGNORE_REL)).not.toBe(stale);
+    expect(statusFor(CI_REL, outcomes)).toBe('updated');
+    expect(read(CI_REL)).not.toBe(stale);
   });
 
   it('bootstraps a sidecar-less repo: adopts in-sync files and re-seeds the sidecar', () => {
@@ -182,10 +195,10 @@ describe('runRefreshScaffold', () => {
 
   it('bootstraps a sidecar-less repo: flags diverged files as conflicts', () => {
     fs.rmSync(path.join(repoDir, SIDECAR_REL));
-    write(GITIGNORE_REL, 'hand-rolled\n');
+    write(CI_REL, 'name: Hand-rolled\n');
     const outcomes = runRefreshScaffold(repoDir);
-    expect(statusFor(GITIGNORE_REL, outcomes)).toBe('conflict');
-    expect(read(GITIGNORE_REL)).toBe('hand-rolled\n');
+    expect(statusFor(CI_REL, outcomes)).toBe('conflict');
+    expect(read(CI_REL)).toBe('name: Hand-rolled\n');
   });
 
   it('converges: after --force, a subsequent refresh reports unchanged', () => {

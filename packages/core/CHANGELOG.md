@@ -1,5 +1,43 @@
 # @ai-plugin-marketplace/core
 
+## 0.4.0
+
+### Minor Changes
+
+- [#20](https://github.com/ai-plugin-marketplace/tools/pull/20) [`bbaeaed`](https://github.com/ai-plugin-marketplace/tools/commit/bbaeaedf6c087c325b696863778216b648ef1ddf) Thanks [@mike-north](https://github.com/mike-north)! - `aipm init` now seeds a comprehensive `.gitignore` and stops refresh-managing it.
+  - **Safety fix:** a fresh `aipm init` previously wrote only a 4-line `.gitignore`, so a brand-new
+    scaffold could easily commit secrets. The seeded `.gitignore` now ignores `.env*`, `*.log`,
+    `coverage`, common caches, and `scratch/` (while retaining `node_modules/`, `*.tsbuildinfo`,
+    `*.local.*`, and `.DS_Store`). Build output (`dist/`) is deliberately still tracked.
+  - **No more perpetual refresh conflict:** `.gitignore` is now **seed-only** — written by `init` and
+    owned by the user thereafter. It has been removed from the `aipm init --refresh` managed set
+    (`.aipm/scaffold.json` now tracks only `.github/workflows/ci.yml`), so user additions to
+    `.gitignore` are never clobbered or perpetually flagged as conflicts.
+
+- [#22](https://github.com/ai-plugin-marketplace/tools/pull/22) [`5795854`](https://github.com/ai-plugin-marketplace/tools/commit/57958544cd2684690bd680c2014fde27bca4f7e9) Thanks [@mike-north](https://github.com/mike-north)! - Guard against duplicate marketplace names that collide on install, and give `aipm init` a distinct
+  marketplace name by default.
+
+  Two marketplaces registered under the same `name` collide on install: the later one shadows and
+  strands the earlier one's plugins. The template historically shipped `marketplace.name =
+"ai-plugin-marketplace"` (the upstream's own name), so forks that never renamed it collided with
+  upstream. These two changes make that failure mode hard to fall into.
+  - **`aipm validate` warns on a default/placeholder marketplace name.** A new soft (warning-only)
+    `default-marketplace-name` finding fires when the repo's effective marketplace `name` is a known
+    placeholder (`ai-plugin-marketplace`, `my-ai-plugins`) or its `owner.name` is a placeholder
+    (`AI Plugin Marketplace Template`, `Your Name`). The effective identity is read from
+    `aipm.workspace.ts` when present, otherwise from a committed repo-root registry's top-level
+    `name`/`owner.name`; when no marketplace metadata is declared, nothing is emitted. The finding is
+    always soft — it never fails `aipm validate` — and includes a hint to rename to a unique value
+    (convention `"<your-handle>-ai-plugins"`).
+  - **`aipm init --name <name>` and a distinct default marketplace name.** `aipm init` now writes a
+    named marketplace into both repo-root registries
+    (`{ "name", "owner": { "name" }, "plugins": [] }`) instead of a nameless `{ "plugins": [] }`. The
+    marketplace name defaults to `${USER}-ai-plugins` (falling back to the `my-ai-plugins` placeholder
+    when `$USER` is unset, which `aipm validate` then flags as a nudge to set a real name) and can be
+    overridden with `aipm init --name <name>`. A new `InitOptions.marketplaceName` carries the
+    resolved name; the default is resolved at the I/O boundary so the file-templating layer stays a
+    pure function of its inputs.
+
 ## 0.3.0
 
 ### Minor Changes

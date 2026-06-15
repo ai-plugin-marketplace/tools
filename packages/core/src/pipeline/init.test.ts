@@ -44,6 +44,8 @@ interface GeneratedPackageJson {
 }
 
 interface MarketplaceShape {
+  name?: string;
+  owner?: { name?: string };
   plugins?: unknown[];
 }
 
@@ -187,13 +189,104 @@ describe('runInit', () => {
     });
   });
 
-  it('writes both repo-root marketplace registries as { plugins: [] } (§4.4)', async () => {
+  it('writes both repo-root marketplace registries named, with an empty plugins array (§4.4)', async () => {
     const repoDir = path.join(tmpDir, 'registries');
-    await runInit(repoDir);
+    await runInit(repoDir, { marketplaceName: 'acme-ai-plugins' });
     for (const rel of ['.claude-plugin/marketplace.json', '.cursor-plugin/marketplace.json']) {
       const registry = readMarketplace(repoDir, rel);
-      expect(registry).toEqual({ plugins: [] });
+      // Named registry: a distinct marketplace name prevents the install-time collision where two
+      // marketplaces share a name and the later shadows/strands the earlier's plugins.
+      expect(registry).toEqual({
+        name: 'acme-ai-plugins',
+        owner: { name: 'acme-ai-plugins' },
+        plugins: [],
+      });
     }
+  });
+
+  it('defaults the marketplace name to ${USER}-ai-plugins', async () => {
+    // The default marketplace name is derived from $USER at the I/O boundary (runInit), keeping
+    // init-template.ts a pure function of its inputs.
+    const repoDir = path.join(tmpDir, 'default-mkt-name');
+    const prevUser = process.env['USER'];
+    process.env['USER'] = 'testuser';
+    try {
+      await runInit(repoDir);
+    } finally {
+      if (prevUser === undefined) delete process.env['USER'];
+      else process.env['USER'] = prevUser;
+    }
+    const registry = readMarketplace(repoDir, '.claude-plugin/marketplace.json');
+    expect(registry.name).toBe('testuser-ai-plugins');
+    expect(registry.owner?.name).toBe('testuser-ai-plugins');
+  });
+
+  it('falls back to $USERNAME (Windows) when $USER is unset', async () => {
+    // On Windows the login name is in $USERNAME, not $USER — don't force the placeholder there.
+    const repoDir = path.join(tmpDir, 'username-fallback');
+    const prevUser = process.env['USER'];
+    const prevUsername = process.env['USERNAME'];
+    delete process.env['USER'];
+    process.env['USERNAME'] = 'winuser';
+    try {
+      await runInit(repoDir);
+    } finally {
+      if (prevUser === undefined) delete process.env['USER'];
+      else process.env['USER'] = prevUser;
+      if (prevUsername === undefined) delete process.env['USERNAME'];
+      else process.env['USERNAME'] = prevUsername;
+    }
+    const registry = readMarketplace(repoDir, '.claude-plugin/marketplace.json');
+    expect(registry.name).toBe('winuser-ai-plugins');
+  });
+
+  it('falls back to the my-ai-plugins placeholder when neither $USER nor $USERNAME is set', async () => {
+    const repoDir = path.join(tmpDir, 'fallback-mkt-name');
+    const prevUser = process.env['USER'];
+    const prevUsername = process.env['USERNAME'];
+    delete process.env['USER'];
+    delete process.env['USERNAME'];
+    try {
+      await runInit(repoDir);
+    } finally {
+      if (prevUser !== undefined) process.env['USER'] = prevUser;
+      if (prevUsername !== undefined) process.env['USERNAME'] = prevUsername;
+    }
+    const registry = readMarketplace(repoDir, '.claude-plugin/marketplace.json');
+    expect(registry.name).toBe('my-ai-plugins');
+  });
+
+  it('honors an explicit marketplaceName override independent of the package name', async () => {
+    const repoDir = path.join(tmpDir, 'explicit-mkt');
+    await runInit(repoDir, { name: 'pkg-name', marketplaceName: 'acme-ai-plugins' });
+    const pkg = readPackageJson(repoDir);
+    expect(pkg.name).toBe('pkg-name');
+    const registry = readMarketplace(repoDir, '.claude-plugin/marketplace.json');
+    expect(registry.name).toBe('acme-ai-plugins');
+  });
+
+  it('trims a provided name/marketplaceName before writing it', async () => {
+    const repoDir = path.join(tmpDir, 'trimmed');
+    await runInit(repoDir, { name: '  pkg-name  ', marketplaceName: '  acme-ai-plugins  ' });
+    expect(readPackageJson(repoDir).name).toBe('pkg-name');
+    expect(readMarketplace(repoDir, '.claude-plugin/marketplace.json').name).toBe(
+      'acme-ai-plugins',
+    );
+  });
+
+  it('rejects a blank/whitespace marketplaceName and writes nothing', async () => {
+    // A blank `--name`/marketplaceName would otherwise yield an empty marketplace identity.
+    const repoDir = path.join(tmpDir, 'blank-mkt');
+    await expect(runInit(repoDir, { marketplaceName: '   ' })).rejects.toThrow(
+      /Invalid 'marketplaceName'/,
+    );
+    expect(fs.existsSync(path.join(repoDir, 'package.json'))).toBe(false);
+  });
+
+  it('rejects a blank/whitespace name and writes nothing', async () => {
+    const repoDir = path.join(tmpDir, 'blank-name');
+    await expect(runInit(repoDir, { name: '' })).rejects.toThrow(/Invalid 'name'/);
+    expect(fs.existsSync(path.join(repoDir, 'package.json'))).toBe(false);
   });
 
   it('writes a CI workflow that runs `aipm build` then `aipm validate` (§10.5)', async () => {
@@ -222,11 +315,25 @@ describe('runInit', () => {
   });
 
   it('produces a repo that passes runValidate (empty plugins dir is valid)', async () => {
+    // A non-placeholder marketplace name keeps this independent of $USER and of the
+    // default-marketplace-name guard, so the clean repo has zero findings.
     const repoDir = path.join(tmpDir, 'valid-repo');
-    await runInit(repoDir);
+    await runInit(repoDir, { marketplaceName: 'acme-ai-plugins' });
     const result = await runValidate(repoDir);
     expect(result.passed).toBe(true);
     expect(result.findings).toEqual([]);
+  });
+
+  it('a default/placeholder marketplace name is a SOFT default-marketplace-name finding that does not fail validate', async () => {
+    // The my-ai-plugins fallback (and the upstream ai-plugin-marketplace name) collide on install;
+    // validate warns but must not fail (soft finding, passed stays true).
+    const repoDir = path.join(tmpDir, 'placeholder-name');
+    await runInit(repoDir, { marketplaceName: 'my-ai-plugins' });
+    const result = await runValidate(repoDir);
+    const nameFindings = result.findings.filter((f) => f.code === 'default-marketplace-name');
+    expect(nameFindings).toHaveLength(1);
+    expect(nameFindings[0]?.severity).toBe('soft');
+    expect(result.passed).toBe(true);
   });
 
   it('is deterministic: two runs into separate dirs produce identical files', async () => {

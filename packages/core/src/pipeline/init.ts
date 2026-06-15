@@ -44,6 +44,40 @@ function coreVersion(): string {
 }
 
 /**
+ * Resolve the default marketplace name from the environment: `${USER}-ai-plugins`. Falls back to
+ * `$USERNAME` (set on Windows, where `$USER` is typically absent) before giving up and using the
+ * `my-ai-plugins` placeholder — which `aipm validate` deliberately flags via
+ * `default-marketplace-name`, nudging the author to pass an explicit `--name`.
+ *
+ * Resolved here in the I/O boundary (not in the pure `init-template.ts`) so the template stays a
+ * pure function of its inputs (§: no env reads / clocks in `init-template.ts`).
+ */
+function defaultMarketplaceName(): string {
+  // `$USER` on POSIX, `$USERNAME` on Windows. Treat empty/whitespace as absent so a blank env var
+  // falls through to the next candidate rather than producing a `-ai-plugins` name.
+  for (const candidate of [process.env['USER'], process.env['USERNAME']]) {
+    const trimmed = candidate?.trim();
+    if (trimmed !== undefined && trimmed.length > 0) return `${trimmed}-ai-plugins`;
+  }
+  return 'my-ai-plugins';
+}
+
+/**
+ * Normalize an explicitly-provided `name`/`marketplaceName` option: `undefined` (caller wants the
+ * default) passes through as `undefined`; a non-blank string is returned trimmed; a blank or
+ * whitespace-only string is rejected, since it would yield an invalid `package.json` name and an
+ * empty marketplace identity. `field` names the option in the error message.
+ */
+function resolveProvidedName(value: string | undefined, field: string): string | undefined {
+  if (value === undefined) return undefined;
+  const trimmed = value.trim();
+  if (trimmed.length === 0) {
+    throw new Error(`Invalid '${field}': must be a non-empty, non-whitespace string.`);
+  }
+  return trimmed;
+}
+
+/**
  * True iff `dir` does not exist, or exists as an empty directory. A non-empty directory (or a
  * path that exists as a non-directory) is treated as "would clobber".
  */
@@ -58,19 +92,21 @@ function isFreshTarget(dir: string): boolean {
  * Scaffold a thin consumer repo at `targetDir` (§3.2).
  *
  * Writes `package.json` (with `cli`/`core` dev dependencies pinned to carets of their respective
- * versions), `.gitignore`, `README.md`, both repo-root marketplace registries (`{ "plugins": [] }`),
- * an empty `plugins/` (tracked via `.gitkeep`), and a CI workflow that runs `aipm build` then
- * `aipm validate` (§10.5 freshness). It also seeds `.aipm/scaffold.json` so a later
- * `aipm init --refresh` can tell pristine toolkit-owned files from user edits. The repo name
- * defaults to `basename(targetDir)`; override it with `opts.name`.
+ * versions), `.gitignore`, `README.md`, both repo-root marketplace registries (each named, empty:
+ * `{ "name", "owner": { "name" }, "plugins": [] }`), an empty `plugins/` (tracked via `.gitkeep`),
+ * and a CI workflow that runs `aipm build` then `aipm validate` (§10.5 freshness). It also seeds
+ * `.aipm/scaffold.json` so a later `aipm init --refresh` can tell pristine toolkit-owned files from
+ * user edits. The repo name defaults to `basename(targetDir)` (override with `opts.name`); the
+ * marketplace name defaults to `${USER}-ai-plugins` (override with `opts.marketplaceName`).
  *
  * **Refuses to clobber.** If `targetDir` exists and is a non-empty directory (or exists as a
  * non-directory), the function throws and writes nothing. Creating into a fresh or empty directory
  * is fine.
  *
  * @param targetDir - Absolute or relative path to the directory to scaffold into.
- * @param opts - Init options; `name` overrides the derived repo name, `cliVersion` the pinned cli
- *   dependency version (defaults to core's version).
+ * @param opts - Init options; `name` overrides the derived repo name, `marketplaceName` the
+ *   default `${USER}-ai-plugins` marketplace name, `cliVersion` the pinned cli dependency version
+ *   (defaults to core's version).
  * @throws {Error} When `targetDir` exists and is non-empty (or is not a directory).
  */
 export async function runInit(targetDir: string, opts: InitOptions = {}): Promise<void> {
@@ -83,10 +119,19 @@ export async function runInit(targetDir: string, opts: InitOptions = {}): Promis
     );
   }
 
-  const name = opts.name ?? path.basename(resolved);
+  // Reject an explicitly-provided but blank `name`/`marketplaceName` at the I/O boundary: an empty
+  // or whitespace-only value would otherwise produce an invalid `package.json` name and an empty
+  // marketplace identity in the registries. The derived defaults (basename / env-resolved) are
+  // trusted and not re-validated here.
+  const name = resolveProvidedName(opts.name, 'name') ?? path.basename(resolved);
+  // The marketplace name is the identity hosts register under and must be unique across
+  // marketplaces (a shared name collides on install). Prefer an explicit `--name`, then the
+  // env-derived `${USER}-ai-plugins`, resolved here so `buildInitFiles` stays pure.
+  const marketplaceName =
+    resolveProvidedName(opts.marketplaceName, 'marketplaceName') ?? defaultMarketplaceName();
   const core = coreVersion();
   const cli = opts.cliVersion ?? core;
-  const files = buildInitFiles(name, cli, core);
+  const files = buildInitFiles(name, marketplaceName, cli, core);
 
   fs.mkdirSync(resolved, { recursive: true });
   for (const file of files) {

@@ -106,6 +106,41 @@ describe('aipm init', () => {
     expect(fs.existsSync(path.join(target, 'package.json'))).toBe(true);
   });
 
+  it('init --name <name> writes the marketplace name into the repo-root registries', async () => {
+    const target = path.join(tmpDir, 'named-repo');
+    const { code } = await invoke(['init', '--name', 'acme-ai-plugins', target]);
+    expect(code).toBe(0);
+    const registry = JSON.parse(
+      fs.readFileSync(path.join(target, '.claude-plugin', 'marketplace.json'), 'utf-8'),
+    ) as { name?: string; owner?: { name?: string }; plugins?: unknown[] };
+    expect(registry.name).toBe('acme-ai-plugins');
+    expect(registry.owner?.name).toBe('acme-ai-plugins');
+    // --name sets the package name too.
+    const pkg = JSON.parse(fs.readFileSync(path.join(target, 'package.json'), 'utf-8')) as {
+      name?: string;
+    };
+    expect(pkg.name).toBe('acme-ai-plugins');
+  });
+
+  it('init --name=<name> (equals form) is parsed and the dir argument still resolves', async () => {
+    const target = path.join(tmpDir, 'named-equals');
+    const { code } = await invoke(['init', '--name=acme-ai-plugins', target]);
+    expect(code).toBe(0);
+    const registry = JSON.parse(
+      fs.readFileSync(path.join(target, '.claude-plugin', 'marketplace.json'), 'utf-8'),
+    ) as { name?: string };
+    expect(registry.name).toBe('acme-ai-plugins');
+    expect(fs.existsSync(path.join(target, 'package.json'))).toBe(true);
+  });
+
+  it('init --name= (empty value) fails with exit 1 and writes nothing', async () => {
+    const target = path.join(tmpDir, 'empty-name');
+    const { code, err } = await invoke(['init', '--name=', target]);
+    expect(code).toBe(1);
+    expect(err).toContain('init failed');
+    expect(fs.existsSync(path.join(target, 'package.json'))).toBe(false);
+  });
+
   it('fails (exit 1) when the target directory is non-empty', async () => {
     const target = path.join(tmpDir, 'occupied');
     fs.mkdirSync(target);

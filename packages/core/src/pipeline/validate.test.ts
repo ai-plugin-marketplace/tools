@@ -11,6 +11,7 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
 import { TEMPLATE_REPO, TEMPLATE_REPO_AVAILABLE } from '../test-support/template-repo.js';
 import {
+  checkDefaultMarketplaceName,
   validateCrossTarget,
   validateEnvelopeAdherence,
   validateEnvelopeShape,
@@ -18,6 +19,7 @@ import {
   validateMcpKeySync,
   validateNameConsistency,
 } from './validate.js';
+import { defineWorkspace } from '../config.js';
 
 // ---------------------------------------------------------------------------
 // Test helpers
@@ -739,5 +741,95 @@ describe.skipIf(!TEMPLATE_REPO_AVAILABLE)('parity: real skill-evaluator plugin',
       throw new Error(`Expected zero findings but got ${String(findings.length)}:\n${details}`);
     }
     expect(findings).toHaveLength(0);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// checkDefaultMarketplaceName
+// ---------------------------------------------------------------------------
+
+describe('checkDefaultMarketplaceName()', () => {
+  /** Write a repo-root registry carrying the given top-level marketplace metadata. */
+  function writeNamedRegistry(
+    repoRoot: string,
+    rel: string,
+    metadata: { name?: string; owner?: { name: string } },
+  ): void {
+    write(repoRoot, rel, { ...metadata, plugins: [] });
+  }
+
+  it('emits a SOFT finding when the workspace marketplace name is the upstream default', () => {
+    const workspace = defineWorkspace({ marketplace: { name: 'ai-plugin-marketplace' } });
+    const findings = checkDefaultMarketplaceName(tmpDir, workspace);
+    expect(findings).toHaveLength(1);
+    expect(findings[0]?.code).toBe('default-marketplace-name');
+    expect(findings[0]?.severity).toBe('soft');
+    expect(findings[0]?.hint).toBeDefined();
+  });
+
+  it('emits a SOFT finding for the my-ai-plugins placeholder name', () => {
+    const workspace = defineWorkspace({ marketplace: { name: 'my-ai-plugins' } });
+    const findings = checkDefaultMarketplaceName(tmpDir, workspace);
+    expect(findings).toHaveLength(1);
+    expect(findings[0]?.severity).toBe('soft');
+  });
+
+  it('emits a SOFT finding when the owner name is a template default', () => {
+    const workspace = defineWorkspace({
+      marketplace: { name: 'acme-ai-plugins', owner: { name: 'Your Name' } },
+    });
+    const findings = checkDefaultMarketplaceName(tmpDir, workspace);
+    expect(findings).toHaveLength(1);
+    expect(findings[0]?.code).toBe('default-marketplace-name');
+    expect(findings[0]?.message).toContain('owner');
+  });
+
+  it('emits two findings when both name and owner are template defaults', () => {
+    const workspace = defineWorkspace({
+      marketplace: {
+        name: 'ai-plugin-marketplace',
+        owner: { name: 'AI Plugin Marketplace Template' },
+      },
+    });
+    const findings = checkDefaultMarketplaceName(tmpDir, workspace);
+    expect(findings).toHaveLength(2);
+    expect(findings.every((f) => f.severity === 'soft')).toBe(true);
+  });
+
+  it('emits no finding for a custom marketplace name (workspace)', () => {
+    const workspace = defineWorkspace({
+      marketplace: { name: 'acme-ai-plugins', owner: { name: 'Acme Corp' } },
+    });
+    expect(checkDefaultMarketplaceName(tmpDir, workspace)).toHaveLength(0);
+  });
+
+  it('reads the effective name from a repo-root registry when no workspace exists', () => {
+    const repoRoot = path.join(tmpDir, 'registry-only');
+    writeNamedRegistry(repoRoot, '.claude-plugin/marketplace.json', {
+      name: 'my-ai-plugins',
+      owner: { name: 'my-ai-plugins' },
+    });
+    const findings = checkDefaultMarketplaceName(repoRoot, undefined);
+    expect(findings.some((f) => f.code === 'default-marketplace-name')).toBe(true);
+    expect(findings.every((f) => f.severity === 'soft')).toBe(true);
+  });
+
+  it('emits no finding for a custom name in a repo-root registry (no workspace)', () => {
+    const repoRoot = path.join(tmpDir, 'registry-custom');
+    writeNamedRegistry(repoRoot, '.claude-plugin/marketplace.json', {
+      name: 'acme-ai-plugins',
+      owner: { name: 'Acme Corp' },
+    });
+    expect(checkDefaultMarketplaceName(repoRoot, undefined)).toHaveLength(0);
+  });
+
+  it('emits nothing when no marketplace metadata is declared at all', () => {
+    // A bare `{ plugins: [] }` registry (or no registry) carries no identity — emit nothing.
+    const repoRoot = path.join(tmpDir, 'no-metadata');
+    write(repoRoot, '.claude-plugin/marketplace.json', { plugins: [] });
+    expect(checkDefaultMarketplaceName(repoRoot, undefined)).toHaveLength(0);
+    expect(checkDefaultMarketplaceName(path.join(tmpDir, 'nonexistent'), undefined)).toHaveLength(
+      0,
+    );
   });
 });

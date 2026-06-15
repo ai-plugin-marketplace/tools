@@ -50,6 +50,7 @@ Usage:
 
 Commands:
   init [dir]                    Scaffold a new plugin repo (default: cwd)
+  init --name <name> [dir]      Scaffold a new plugin repo with an explicit marketplace/package name
   init --refresh [dir]          Update toolkit-owned scaffold files in an existing repo
   build [path]                  Build plugin artifacts (default: cwd)
   validate [path]               Run validators on plugins (default: cwd)
@@ -60,6 +61,9 @@ Commands:
   list-targets                  List target IDs this toolkit knows about
 
 Options:
+  --name <name>                 With init: sets the new repo's marketplace name AND package name
+                                (default marketplace name: $USER-ai-plugins).
+                                Must be unique across marketplaces.
   --refresh                     With init: refresh an existing repo instead of creating one
   --force                       With init --refresh: overwrite locally-modified scaffold files
   --help, -h                    Show this help message
@@ -71,6 +75,37 @@ function toolkitVersion(): string {
   const pkgPath = path.join(path.dirname(fileURLToPath(import.meta.url)), '..', 'package.json');
   const pkg = JSON.parse(fs.readFileSync(pkgPath, 'utf-8')) as { version: string };
   return pkg.version;
+}
+
+/**
+ * Extract the value of a `--flag <value>` option from an argument list (supports both
+ * `--flag value` and `--flag=value`). Returns the value and the set of indices it consumed so the
+ * positional-argument finder can skip them. Returns `undefined` when the flag is absent or trailing
+ * with no value.
+ */
+function takeOptionValue(
+  args: readonly string[],
+  flag: string,
+): { value: string | undefined; consumed: Set<number> } {
+  const consumed = new Set<number>();
+  for (let i = 0; i < args.length; i++) {
+    const arg = args[i];
+    if (arg === undefined) continue;
+    if (arg === flag) {
+      consumed.add(i);
+      const next = args[i + 1];
+      if (next !== undefined && !next.startsWith('-')) {
+        consumed.add(i + 1);
+        return { value: next, consumed };
+      }
+      return { value: undefined, consumed };
+    }
+    if (arg.startsWith(`${flag}=`)) {
+      consumed.add(i);
+      return { value: arg.slice(flag.length + 1), consumed };
+    }
+  }
+  return { value: undefined, consumed };
 }
 
 /** Resolve a `<plugin>` CLI argument to a plugin directory: an explicit path, else `<cwd>/plugins/<arg>`. */
@@ -143,14 +178,23 @@ export async function run(argv: readonly string[], opts: RunOptions = {}): Promi
       case 'init': {
         const refresh = rest.includes('--refresh');
         const force = rest.includes('--force');
-        const dir = rest.find((arg) => !arg.startsWith('-')) ?? process.cwd();
+        const { value: nameOpt, consumed: nameConsumed } = takeOptionValue(rest, '--name');
+        // First non-flag argument that wasn't consumed as a `--name` value is the target dir.
+        const dir =
+          rest.find((arg, i) => !arg.startsWith('-') && !nameConsumed.has(i)) ?? process.cwd();
         if (refresh) {
           const outcomes = await refreshScaffold(dir, { force });
           reportRefresh(outcomes, out);
           // Conflicts are reported, not failures — keep exit 0 so this is script-safe.
           return 0;
         }
-        await init(dir, { cliVersion: toolkitVersion() });
+        // `--name` sets BOTH the package.json name and the marketplace name: the marketplace name
+        // is the identity that matters (must be unique across marketplaces), and tying the repo
+        // name to it reads cleanly for a freshly scaffolded repo.
+        await init(dir, {
+          cliVersion: toolkitVersion(),
+          ...(nameOpt !== undefined ? { name: nameOpt, marketplaceName: nameOpt } : {}),
+        });
         const created = path.resolve(dir);
         out.write(`Created plugin repo at ${created}.\n`);
         out.write('Next: run `pnpm install`, then `aipm scaffold <name>` to add a plugin.\n');

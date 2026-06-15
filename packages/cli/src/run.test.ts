@@ -133,6 +133,14 @@ describe('aipm init', () => {
     expect(fs.existsSync(path.join(target, 'package.json'))).toBe(true);
   });
 
+  it('init --name= (empty value) fails with exit 1 and writes nothing', async () => {
+    const target = path.join(tmpDir, 'empty-name');
+    const { code, err } = await invoke(['init', '--name=', target]);
+    expect(code).toBe(1);
+    expect(err).toContain('init failed');
+    expect(fs.existsSync(path.join(target, 'package.json'))).toBe(false);
+  });
+
   it('fails (exit 1) when the target directory is non-empty', async () => {
     const target = path.join(tmpDir, 'occupied');
     fs.mkdirSync(target);

@@ -50,7 +50,7 @@ Usage:
 
 Commands:
   init [dir]                    Scaffold a new plugin repo (default: cwd)
-  init --name <name> [dir]      Scaffold a new plugin repo with an explicit marketplace name
+  init --name <name> [dir]      Scaffold a new plugin repo with an explicit marketplace/package name
   init --refresh [dir]          Update toolkit-owned scaffold files in an existing repo
   build [path]                  Build plugin artifacts (default: cwd)
   validate [path]               Run validators on plugins (default: cwd)
@@ -61,8 +61,9 @@ Commands:
   list-targets                  List target IDs this toolkit knows about
 
 Options:
-  --name <name>                 With init: marketplace name for the new repo
-                                (default: $USER-ai-plugins). Must be unique across marketplaces.
+  --name <name>                 With init: sets the new repo's marketplace name AND package name
+                                (default marketplace name: $USER-ai-plugins).
+                                Must be unique across marketplaces.
   --refresh                     With init: refresh an existing repo instead of creating one
   --force                       With init --refresh: overwrite locally-modified scaffold files
   --help, -h                    Show this help message

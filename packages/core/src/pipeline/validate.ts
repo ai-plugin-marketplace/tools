@@ -247,7 +247,8 @@ interface MarketplaceIdentity {
  * authored `aipm.workspace.ts` (which `runValidate` already loaded) and falls back to reading a
  * committed repo-root registry's top-level `name`/`owner.name` (the hand-authored / `aipm init`
  * path, where no workspace exists). The first managed registry that parses and declares a `name`
- * wins; all generated registries carry the same marketplace identity, so any one is representative.
+ * OR an `owner.name` wins; all generated registries carry the same marketplace identity, so any
+ * one is representative.
  */
 function resolveMarketplaceIdentity(
   repoRoot: string,
@@ -266,8 +267,8 @@ function resolveMarketplaceIdentity(
     const parsed = registryMetadataSchema.safeParse(tryReadJson(registryPath));
     if (!parsed.success) continue;
     const { name, owner } = parsed.data;
-    // Only treat this registry as the identity source once it actually declares a name; an empty
-    // `{ "plugins": [] }` registry carries no identity, so keep scanning the others.
+    // Only treat this registry as the identity source once it declares a `name` or an `owner.name`;
+    // an empty `{ "plugins": [] }` registry carries no identity, so keep scanning the others.
     if (name === undefined && owner?.name === undefined) continue;
     return {
       ...(name !== undefined ? { name } : {}),
@@ -300,7 +301,7 @@ export function checkDefaultMarketplaceName(
       severity: 'soft',
       code: 'default-marketplace-name',
       message: `Marketplace name '${name}' is a template default. Two marketplaces registered under the same name collide on install — the later one shadows/strands the earlier one's plugins (including the upstream 'ai-plugin-marketplace').`,
-      hint: "Rename it to a unique value (convention: '<your-handle>-ai-plugins') in aipm.workspace.ts, or pass `aipm init --name <name>` when scaffolding.",
+      hint: "Rename it to a unique value (convention: '<your-handle>-ai-plugins'): set marketplace.name in aipm.workspace.ts, or the top-level `name` in the repo-root registries (.claude-plugin/.cursor-plugin/marketplace.json) when there is no workspace. New repos can pass `aipm init --name <name>`.",
     });
   }
 

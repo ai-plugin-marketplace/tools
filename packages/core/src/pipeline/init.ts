@@ -44,17 +44,37 @@ function coreVersion(): string {
 }
 
 /**
- * Resolve the default marketplace name from the environment: `${USER}-ai-plugins`. When `$USER` is
- * empty or unset (e.g. some CI runners), fall back to the `my-ai-plugins` placeholder — which
- * `aipm validate` deliberately flags via `default-marketplace-name`, nudging the author to pass an
- * explicit `--name`.
+ * Resolve the default marketplace name from the environment: `${USER}-ai-plugins`. Falls back to
+ * `$USERNAME` (set on Windows, where `$USER` is typically absent) before giving up and using the
+ * `my-ai-plugins` placeholder — which `aipm validate` deliberately flags via
+ * `default-marketplace-name`, nudging the author to pass an explicit `--name`.
  *
  * Resolved here in the I/O boundary (not in the pure `init-template.ts`) so the template stays a
  * pure function of its inputs (§: no env reads / clocks in `init-template.ts`).
  */
 function defaultMarketplaceName(): string {
-  const user = process.env['USER']?.trim();
-  return user !== undefined && user.length > 0 ? `${user}-ai-plugins` : 'my-ai-plugins';
+  // `$USER` on POSIX, `$USERNAME` on Windows. Treat empty/whitespace as absent so a blank env var
+  // falls through to the next candidate rather than producing a `-ai-plugins` name.
+  for (const candidate of [process.env['USER'], process.env['USERNAME']]) {
+    const trimmed = candidate?.trim();
+    if (trimmed !== undefined && trimmed.length > 0) return `${trimmed}-ai-plugins`;
+  }
+  return 'my-ai-plugins';
+}
+
+/**
+ * Normalize an explicitly-provided `name`/`marketplaceName` option: `undefined` (caller wants the
+ * default) passes through as `undefined`; a non-blank string is returned trimmed; a blank or
+ * whitespace-only string is rejected, since it would yield an invalid `package.json` name and an
+ * empty marketplace identity. `field` names the option in the error message.
+ */
+function resolveProvidedName(value: string | undefined, field: string): string | undefined {
+  if (value === undefined) return undefined;
+  const trimmed = value.trim();
+  if (trimmed.length === 0) {
+    throw new Error(`Invalid '${field}': must be a non-empty, non-whitespace string.`);
+  }
+  return trimmed;
 }
 
 /**
@@ -99,11 +119,16 @@ export async function runInit(targetDir: string, opts: InitOptions = {}): Promis
     );
   }
 
-  const name = opts.name ?? path.basename(resolved);
+  // Reject an explicitly-provided but blank `name`/`marketplaceName` at the I/O boundary: an empty
+  // or whitespace-only value would otherwise produce an invalid `package.json` name and an empty
+  // marketplace identity in the registries. The derived defaults (basename / env-resolved) are
+  // trusted and not re-validated here.
+  const name = resolveProvidedName(opts.name, 'name') ?? path.basename(resolved);
   // The marketplace name is the identity hosts register under and must be unique across
   // marketplaces (a shared name collides on install). Prefer an explicit `--name`, then the
   // env-derived `${USER}-ai-plugins`, resolved here so `buildInitFiles` stays pure.
-  const marketplaceName = opts.marketplaceName ?? defaultMarketplaceName();
+  const marketplaceName =
+    resolveProvidedName(opts.marketplaceName, 'marketplaceName') ?? defaultMarketplaceName();
   const core = coreVersion();
   const cli = opts.cliVersion ?? core;
   const files = buildInitFiles(name, marketplaceName, cli, core);

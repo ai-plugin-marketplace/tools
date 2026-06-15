@@ -134,6 +134,12 @@ export interface ValidationResult {
  * host software / the author). Generation refuses to overwrite it rather than clobber repo-root
  * state.
  *
+ * `default-marketplace-name` — the repo's effective marketplace `name` (or `owner.name`) is still
+ * a template placeholder (e.g. `ai-plugin-marketplace`, `my-ai-plugins`, `Your Name`). Two
+ * marketplaces registered under the same name collide on install — the later one shadows/strands
+ * the earlier one's plugins — so a placeholder must be renamed to a unique value. Always SOFT: a
+ * warning, never a build failure.
+ *
  * @public
  */
 export type FindingCode =
@@ -146,7 +152,8 @@ export type FindingCode =
   | 'marketplace-registration'
   | 'freshness'
   | 'single-artifact-host'
-  | 'root-artifact-collision';
+  | 'root-artifact-collision'
+  | 'default-marketplace-name';
 
 /**
  * A single validation finding.
@@ -193,6 +200,19 @@ export interface InitOptions {
    * directory.
    */
   name?: string;
+
+  /**
+   * Marketplace name written into the generated repo-root registries' top-level `name` (and used
+   * for the registries' `owner.name`). This is the identity host platforms register the
+   * marketplace under, and it MUST be unique across marketplaces — two marketplaces sharing a name
+   * collide on install, with the later one shadowing/stranding the earlier one's plugins.
+   *
+   * Distinct from {@link InitOptions.name} (the `package.json` name). When omitted, `runInit`
+   * resolves a default at the I/O boundary (`${USER}-ai-plugins`, falling back to `my-ai-plugins`
+   * when `USER` is unset). `init-template.ts` is a pure function of its inputs, so the resolved
+   * value is passed in rather than read from the environment there.
+   */
+  marketplaceName?: string;
 
   /**
    * Version of `@ai-plugin-marketplace/cli` to pin the generated `package.json`'s `cli`

@@ -91,7 +91,7 @@ export interface Finding {
 }
 
 // @public
-export type FindingCode = 'envelope-invalid' | 'repo-config-invalid' | 'envelope-adherence' | 'schema-invalid' | 'name-consistency' | 'mcp-key-sync' | 'marketplace-registration' | 'freshness' | 'single-artifact-host' | 'root-artifact-collision';
+export type FindingCode = 'envelope-invalid' | 'repo-config-invalid' | 'envelope-adherence' | 'schema-invalid' | 'name-consistency' | 'mcp-key-sync' | 'marketplace-registration' | 'freshness' | 'single-artifact-host' | 'root-artifact-collision' | 'default-marketplace-name';
 
 // @public
 export interface GeneratedFile {
@@ -106,6 +106,7 @@ export function init(targetDir: string, opts?: InitOptions): Promise<void>;
 // @public
 export interface InitOptions {
     cliVersion?: string;
+    marketplaceName?: string;
     name?: string;
 }
 

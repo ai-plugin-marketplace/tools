@@ -15,7 +15,6 @@
  * @see docs/specs/architecture.md §10.5 (freshness check the CI workflow runs)
  */
 
-const json = String.raw;
 const md = String.raw;
 const yaml = String.raw;
 
@@ -67,12 +66,21 @@ function renderPackageJson(name: string, cliVersion: string, coreVersion: string
   return `${JSON.stringify(pkg, null, 2)}\n`;
 }
 
-/** Empty marketplace registry: `{ "plugins": [] }`, 2-space JSON + trailing newline (§4.4). */
-function renderEmptyMarketplace(): string {
-  return json`{
-  "plugins": []
-}
-`;
+/**
+ * Empty, but NAMED, marketplace registry: `{ "name", "owner": { "name" }, "plugins": [] }`,
+ * 2-space JSON + trailing newline (§4.4). The top-level `name` is the identity host platforms
+ * register the marketplace under — it MUST be unique across marketplaces, since two marketplaces
+ * sharing a name collide on install (the later one shadows/strands the earlier's plugins). The
+ * Claude/Cursor marketplace schema is loose, so the extra `name`/`owner` fields are tolerated.
+ * The object is JSON-serialized so the marketplace name is safely escaped.
+ */
+function renderEmptyMarketplace(marketplaceName: string): string {
+  const registry = {
+    name: marketplaceName,
+    owner: { name: marketplaceName },
+    plugins: [],
+  };
+  return `${JSON.stringify(registry, null, 2)}\n`;
 }
 
 /** README pointing authors at the upgrade-via-`pnpm up` workflow (§11). */
@@ -221,21 +229,32 @@ export function buildManagedScaffoldFiles(): InitFile[] {
 }
 
 /**
- * Build the complete, deterministic seed file set for a consumer repo named `name`, pinning the
- * `cli`/`core` dev dependencies to carets of `cliVersion`/`coreVersion` respectively.
+ * Build the complete, deterministic seed file set for a consumer repo.
+ *
+ * - `name` — the `package.json` name (repo identity).
+ * - `marketplaceName` — the marketplace identity written into both repo-root registries' top-level
+ *   `name`/`owner.name`. MUST be unique across marketplaces (a shared name collides on install).
+ *   `runInit` resolves this default (`${USER}-ai-plugins`) at its I/O boundary and passes it in,
+ *   keeping this function a pure function of its inputs (no environment reads).
+ * - `cliVersion`/`coreVersion` — pinned as carets of the respective dev dependencies.
  *
  * The set mirrors §3.2: `package.json`, the seed-only `.gitignore`, the
  * {@link buildManagedScaffoldFiles managed scaffold files} (CI workflow), `README.md`, both
- * repo-root marketplace registries, and an empty `plugins/` (seeded with `.gitkeep` so the
+ * named repo-root marketplace registries, and an empty `plugins/` (seeded with `.gitkeep` so the
  * directory is tracked). Output is a pure function of the inputs — stable ordering, no timestamps.
  */
-export function buildInitFiles(name: string, cliVersion: string, coreVersion: string): InitFile[] {
+export function buildInitFiles(
+  name: string,
+  marketplaceName: string,
+  cliVersion: string,
+  coreVersion: string,
+): InitFile[] {
   return [
     { path: 'package.json', content: renderPackageJson(name, cliVersion, coreVersion) },
     { path: '.gitignore', content: renderGitignore() },
     { path: 'README.md', content: renderReadme(name) },
-    { path: '.claude-plugin/marketplace.json', content: renderEmptyMarketplace() },
-    { path: '.cursor-plugin/marketplace.json', content: renderEmptyMarketplace() },
+    { path: '.claude-plugin/marketplace.json', content: renderEmptyMarketplace(marketplaceName) },
+    { path: '.cursor-plugin/marketplace.json', content: renderEmptyMarketplace(marketplaceName) },
     { path: 'plugins/.gitkeep', content: '' },
     ...buildManagedScaffoldFiles(),
   ];

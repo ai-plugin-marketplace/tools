@@ -202,6 +202,121 @@ function hard(code: Finding['code'], plugin: string, message: string, hint?: str
 }
 
 // ---------------------------------------------------------------------------
+// Default / placeholder marketplace name check
+// ---------------------------------------------------------------------------
+
+/**
+ * Marketplace `name` values that are template placeholders, not a real identity. `ai-plugin-marketplace`
+ * is the upstream template repo's own name (a fork that never renamed collides with upstream);
+ * `my-ai-plugins` is the placeholder the template ships and the fallback `aipm init` writes when
+ * `$USER` is unset (intentionally flagged so the author is nudged to pass `--name`).
+ */
+const PLACEHOLDER_MARKETPLACE_NAMES: ReadonlySet<string> = new Set([
+  'ai-plugin-marketplace',
+  'my-ai-plugins',
+]);
+
+/**
+ * Marketplace `owner.name` values that are template placeholders rather than a real owner.
+ */
+const PLACEHOLDER_OWNER_NAMES: ReadonlySet<string> = new Set([
+  'AI Plugin Marketplace Template',
+  'Your Name',
+]);
+
+/** Schema for the marketplace metadata this check reads from a generated registry JSON. */
+const registryMetadataSchema = z
+  .object({
+    name: z.string().optional(),
+    owner: z.object({ name: z.string().optional() }).loose().optional(),
+  })
+  .loose();
+
+/**
+ * The repo's effective marketplace identity, however the repo declares it: from `aipm.workspace.ts`
+ * (registry generation opted in) or, failing that, from a committed repo-root registry's top-level
+ * `name`/`owner.name`. `undefined` fields mean "not declared" — the caller emits nothing for them.
+ */
+interface MarketplaceIdentity {
+  name?: string;
+  ownerName?: string;
+}
+
+/**
+ * Resolve the repo's effective marketplace identity for the default-name check. Prefers the
+ * authored `aipm.workspace.ts` (which `runValidate` already loaded) and falls back to reading a
+ * committed repo-root registry's top-level `name`/`owner.name` (the hand-authored / `aipm init`
+ * path, where no workspace exists). The first managed registry that parses and declares a `name`
+ * wins; all generated registries carry the same marketplace identity, so any one is representative.
+ */
+function resolveMarketplaceIdentity(
+  repoRoot: string,
+  workspace: AipmWorkspace | undefined,
+): MarketplaceIdentity {
+  if (workspace !== undefined) {
+    const { marketplace } = workspace;
+    return {
+      name: marketplace.name,
+      ...(marketplace.owner !== undefined ? { ownerName: marketplace.owner.name } : {}),
+    };
+  }
+
+  for (const registryPath of managedRegistryPaths(repoRoot)) {
+    if (!fs.existsSync(registryPath)) continue;
+    const parsed = registryMetadataSchema.safeParse(tryReadJson(registryPath));
+    if (!parsed.success) continue;
+    const { name, owner } = parsed.data;
+    // Only treat this registry as the identity source once it actually declares a name; an empty
+    // `{ "plugins": [] }` registry carries no identity, so keep scanning the others.
+    if (name === undefined && owner?.name === undefined) continue;
+    return {
+      ...(name !== undefined ? { name } : {}),
+      ...(owner?.name !== undefined ? { ownerName: owner.name } : {}),
+    };
+  }
+
+  return {};
+}
+
+/**
+ * Repo-level check: warn (SOFT) when the effective marketplace `name` or `owner.name` is still a
+ * template placeholder. A placeholder name collides with the upstream `ai-plugin-marketplace`
+ * marketplace (or any other fork that kept the default) — when two marketplaces register under the
+ * same name, the later install shadows/strands the earlier's plugins. Emitting nothing when no
+ * marketplace metadata is declared (an empty `aipm init` repo before any name is set).
+ *
+ * Always SOFT: this is advice the author should act on, never a reason to fail the build (it does
+ * not flip `passed`).
+ */
+export function checkDefaultMarketplaceName(
+  repoRoot: string,
+  workspace: AipmWorkspace | undefined,
+): Finding[] {
+  const { name, ownerName } = resolveMarketplaceIdentity(repoRoot, workspace);
+  const findings: Finding[] = [];
+
+  if (name !== undefined && PLACEHOLDER_MARKETPLACE_NAMES.has(name)) {
+    findings.push({
+      severity: 'soft',
+      code: 'default-marketplace-name',
+      message: `Marketplace name '${name}' is a template default. Two marketplaces registered under the same name collide on install — the later one shadows/strands the earlier one's plugins (including the upstream 'ai-plugin-marketplace').`,
+      hint: "Rename it to a unique value (convention: '<your-handle>-ai-plugins') in aipm.workspace.ts, or pass `aipm init --name <name>` when scaffolding.",
+    });
+  }
+
+  if (ownerName !== undefined && PLACEHOLDER_OWNER_NAMES.has(ownerName)) {
+    findings.push({
+      severity: 'soft',
+      code: 'default-marketplace-name',
+      message: `Marketplace owner name '${ownerName}' is a template default, not a real owner.`,
+      hint: 'Set marketplace.owner.name in aipm.workspace.ts (or the repo-root registries) to your name or organization.',
+    });
+  }
+
+  return findings;
+}
+
+// ---------------------------------------------------------------------------
 // validateEnvelopeShape
 // ---------------------------------------------------------------------------
 
@@ -1236,7 +1351,18 @@ export async function runValidate(
     }
   }
 
-  // ── 6. Repo-level generation checks (only when generation is opted in) ──────
+  // ── 6. Repo-level default/placeholder marketplace-name check (always SOFT) ──
+  // Marketplace identity is a REPO-level concern, so this runs only when validating a repo root
+  // (not a single plugin directory — that path stays scoped to the one plugin and short-circuits
+  // on envelope-invalid). Independent of registry generation: the effective name comes from
+  // `aipm.workspace.ts` when present, else from a committed repo-root registry's top-level
+  // `name`/`owner.name`. A placeholder name collides with the upstream marketplace and strands
+  // plugins, so warn — but never fail (soft, does not flip `passed`).
+  if (path.resolve(targetPath) === repoRoot) {
+    findings.push(...checkDefaultMarketplaceName(repoRoot, workspace));
+  }
+
+  // ── 7. Repo-level generation checks (only when generation is opted in) ──────
   // Registries AND single-artifact-host root artifacts are repo-scoped, so these run once per repo
   // against EVERY plugin under the repo root — not just the plugins in `pluginDirs` (length-1 for
   // single-plugin input). That mirrors how `runBuild` regenerates the repo-complete output, so a

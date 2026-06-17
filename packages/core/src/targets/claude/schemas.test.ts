@@ -84,6 +84,22 @@ describe('claudePluginManifestSchema', () => {
     expect(result.success).toBe(true);
   });
 
+  it('accepts mcpServers as a ./ path string', () => {
+    const result = claudePluginManifestSchema.safeParse({
+      ...minimalValid,
+      mcpServers: './.mcp.json',
+    });
+    expect(result.success).toBe(true);
+  });
+
+  it('accepts mcpServers as an inline record', () => {
+    const result = claudePluginManifestSchema.safeParse({
+      ...minimalValid,
+      mcpServers: { myserver: { command: 'node', args: ['server.js'] } },
+    });
+    expect(result.success).toBe(true);
+  });
+
   it('accepts an author with all optional fields', () => {
     const result = claudePluginManifestSchema.safeParse({
       ...minimalValid,
@@ -119,6 +135,14 @@ describe('claudePluginManifestSchema', () => {
 
   it('rejects a hooks path that does not start with ./', () => {
     expectInvalid(claudePluginManifestSchema, { name: 'my-plugin', hooks: 'hooks/claude.json' });
+  });
+
+  it('rejects an mcpServers path that does not start with ./', () => {
+    expectInvalid(claudePluginManifestSchema, { name: 'my-plugin', mcpServers: '.mcp.json' });
+  });
+
+  it('rejects an mcpServers path that is not a .json file', () => {
+    expectInvalid(claudePluginManifestSchema, { name: 'my-plugin', mcpServers: './mcp.txt' });
   });
 
   it('rejects an author with an unknown field (strict sub-object)', () => {

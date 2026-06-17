@@ -118,8 +118,14 @@ export const claudePluginManifestSchema = z
     /** Output style configuration. */
     outputStyles: z.record(z.string(), z.unknown()).optional(),
 
-    /** MCP server configuration. */
-    mcpServers: z.record(z.string(), z.unknown()).optional(),
+    /**
+     * MCP server configuration — a relative path string to a `.mcp.json` (the form Claude
+     * Code installs from) or an inline record of server configs. Mirrors the `hooks` field
+     * and the codex/cursor manifests, which already accept a path.
+     */
+    mcpServers: z
+      .union([z.string().regex(/^\.\/.+\.json$/), z.record(z.string(), z.unknown())])
+      .optional(),
 
     /** LSP server configuration. */
     lspServers: z.record(z.string(), z.unknown()).optional(),

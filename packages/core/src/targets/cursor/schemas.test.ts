@@ -68,7 +68,38 @@ describe('cursorPluginManifestSchema', () => {
     ).not.toThrow();
   });
 
+  it('accepts mcpServers as a ./ path string', () => {
+    expect(() =>
+      cursorPluginManifestSchema.parse({ name: 'my-plugin', mcpServers: './.mcp.json' }),
+    ).not.toThrow();
+  });
+
+  it('accepts mcpServers as an inline record', () => {
+    expect(() =>
+      cursorPluginManifestSchema.parse({
+        name: 'my-plugin',
+        mcpServers: { myserver: { command: 'node' } },
+      }),
+    ).not.toThrow();
+  });
+
   // Negative tests
+
+  it('rejects an mcpServers path that does not start with ./', () => {
+    const result = cursorPluginManifestSchema.safeParse({
+      name: 'my-plugin',
+      mcpServers: '.mcp.json',
+    });
+    expect(result.success).toBe(false);
+  });
+
+  it('rejects an mcpServers path that is not a .json file', () => {
+    const result = cursorPluginManifestSchema.safeParse({
+      name: 'my-plugin',
+      mcpServers: './mcp.txt',
+    });
+    expect(result.success).toBe(false);
+  });
 
   it('rejects a missing required name field', () => {
     const result = cursorPluginManifestSchema.safeParse({ version: '1.0.0' });

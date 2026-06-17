@@ -85,7 +85,13 @@ export const cursorPluginManifestSchema = z
      */
     skills: z.union([z.string().regex(/^\.\//), z.string().regex(/^\.\//).array()]).optional(),
     outputStyles: z.record(z.string(), z.unknown()).optional(),
-    mcpServers: z.record(z.string(), z.unknown()).optional(),
+    /**
+     * MCP server configuration — a relative path string to a `.mcp.json` or an inline record
+     * of server configs. Mirrors codex (and the `hooks` field), which already accept a path.
+     */
+    mcpServers: z
+      .union([z.string().regex(/^\.\/.+\.json$/), z.record(z.string(), z.unknown())])
+      .optional(),
     lspServers: z.record(z.string(), z.unknown()).optional(),
     settings: z.record(z.string(), z.unknown()).optional(),
     /**

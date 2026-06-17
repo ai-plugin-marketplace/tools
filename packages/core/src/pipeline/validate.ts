@@ -196,6 +196,103 @@ function tryParseFrontmatter(filePath: string): unknown {
   }
 }
 
+/**
+ * Matches a YAML frontmatter block, anchored to the **start of the file** (after an optional
+ * UTF-8 BOM). No `m` flag — so a `---` thematic break in the markdown body is never mistaken
+ * for frontmatter — and `\r?\n` so CRLF (Windows) checkouts are detected too. Group 1 is the
+ * YAML between the fences.
+ */
+const FRONTMATTER_RE = /^\uFEFF?---[ \t]*\r?\n([\s\S]*?)\r?\n---/;
+
+/**
+ * Strict-parse a file's YAML frontmatter, returning the parse-error message (first line,
+ * which carries the line/column) or undefined when it parses cleanly. A missing file or a
+ * file with no leading `---` frontmatter block is treated as "nothing to validate"
+ * (undefined) — the presence/shape of required fields is a separate concern handled elsewhere.
+ */
+function frontmatterParseError(filePath: string): string | undefined {
+  let content: string;
+  try {
+    content = fs.readFileSync(filePath, 'utf-8');
+  } catch {
+    return undefined;
+  }
+  const match = FRONTMATTER_RE.exec(content);
+  if (!match) return undefined;
+  try {
+    parseYaml(match[1] ?? '');
+    return undefined;
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    return message.split('\n')[0];
+  }
+}
+
+/**
+ * Validate that every frontmatter-bearing markdown file in a plugin parses as strict YAML.
+ *
+ * Hosts differ in how leniently they read skill/agent frontmatter: Claude Code's loader is
+ * forgiving, but strict YAML consumers — notably Codex's skill loader — reject anything that
+ * is not valid YAML and refuse to load the skill. The classic offender is an unquoted value
+ * containing a `": "` (colon-space), e.g. `description: ... acts as a liaison: it syncs ...`,
+ * which YAML reads as an illegal nested mapping. Such a file loads on a lenient host and
+ * fails on a strict one, so a lenient-host-only validator never catches it. We strict-parse
+ * here so the defect surfaces at validate time for every plugin, host-agnostically.
+ *
+ * Covers the plugin's `POWER.md`, every `skills/<name>/SKILL.md`, and each `agents/*.md` and
+ * `commands/*.md` file.
+ *
+ * @see https://yaml.org/spec/1.2.2/#732-block-mappings — why `": "` in a plain scalar parses as a mapping
+ */
+export function validateFrontmatterParses(pluginDir: string, pluginName: string): Finding[] {
+  const files: string[] = [path.join(pluginDir, 'POWER.md')];
+
+  // skills/<name>/SKILL.md — one directory level deep, mirroring discovery elsewhere.
+  const skillsDir = path.join(pluginDir, 'skills');
+  if (fs.existsSync(skillsDir)) {
+    let entries: fs.Dirent[] = [];
+    try {
+      entries = fs.readdirSync(skillsDir, { withFileTypes: true });
+    } catch {
+      entries = [];
+    }
+    for (const entry of entries) {
+      if (entry.isDirectory()) files.push(path.join(skillsDir, entry.name, 'SKILL.md'));
+    }
+  }
+
+  // agents/*.md and commands/*.md — flat directories of frontmatter-bearing markdown.
+  for (const sub of ['agents', 'commands'] as const) {
+    const dir = path.join(pluginDir, sub);
+    if (!fs.existsSync(dir)) continue;
+    let entries: fs.Dirent[] = [];
+    try {
+      entries = fs.readdirSync(dir, { withFileTypes: true });
+    } catch {
+      entries = [];
+    }
+    for (const entry of entries) {
+      if (entry.isFile() && entry.name.endsWith('.md')) files.push(path.join(dir, entry.name));
+    }
+  }
+
+  const findings: Finding[] = [];
+  for (const file of files) {
+    const error = frontmatterParseError(file);
+    if (error !== undefined) {
+      findings.push(
+        hard(
+          'frontmatter-invalid',
+          pluginName,
+          `Invalid YAML frontmatter in '${path.relative(pluginDir, file)}': ${error}`,
+          `Frontmatter must be valid YAML for strict hosts (e.g. Codex), not only Claude's lenient parser. A common cause is an unquoted ': ' (colon-space) inside a value such as 'description' — quote the value or rephrase to remove the colon.`,
+        ),
+      );
+    }
+  }
+  return findings;
+}
+
 /** Build a hard Finding. */
 function hard(code: Finding['code'], plugin: string, message: string, hint?: string): Finding {
   return { severity: 'hard', code, plugin, message, ...(hint !== undefined ? { hint } : {}) };
@@ -1334,6 +1431,11 @@ export async function runValidate(
 
     // ── 3. Envelope adherence ───────────────────────────────────────────────
     findings.push(...validateEnvelopeAdherence(pluginDir, envelope));
+
+    // ── 3b. Frontmatter validity ────────────────────────────────────────────
+    // Host-agnostic: invalid YAML frontmatter loads on lenient hosts (Claude) but fails on
+    // strict ones (Codex). Runs for every plugin regardless of target envelope.
+    findings.push(...validateFrontmatterParses(pluginDir, pluginName));
 
     // ── 4. Cross-target consistency (§10.1 step 4: multi-target only; §10.3: schema blocks) ──
     if (envelope.length > 1 && !hasBlockingSchemaError) {

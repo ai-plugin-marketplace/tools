@@ -153,7 +153,8 @@ export type FindingCode =
   | 'freshness'
   | 'single-artifact-host'
   | 'root-artifact-collision'
-  | 'default-marketplace-name';
+  | 'default-marketplace-name'
+  | 'frontmatter-invalid';
 
 /**
  * A single validation finding.

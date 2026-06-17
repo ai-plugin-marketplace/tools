@@ -1,5 +1,12 @@
 # @ai-plugin-marketplace/cli
 
+## 0.3.1
+
+### Patch Changes
+
+- Updated dependencies [[`0bfc191`](https://github.com/ai-plugin-marketplace/tools/commit/0bfc191e54cb76d5ca223bfec6f5efbd223fcbd9), [`8c7bef1`](https://github.com/ai-plugin-marketplace/tools/commit/8c7bef1d65a3614924775c643550d384d342d7a7)]:
+  - @ai-plugin-marketplace/core@0.5.0
+
 ## 0.3.0
 
 ### Minor Changes

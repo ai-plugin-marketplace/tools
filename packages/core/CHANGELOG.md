@@ -1,5 +1,15 @@
 # @ai-plugin-marketplace/core
 
+## 0.5.0
+
+### Minor Changes
+
+- [#23](https://github.com/ai-plugin-marketplace/tools/pull/23) [`8c7bef1`](https://github.com/ai-plugin-marketplace/tools/commit/8c7bef1d65a3614924775c643550d384d342d7a7) Thanks [@mike-north](https://github.com/mike-north)! - Validate that plugin frontmatter parses as strict YAML. `runValidate` now strict-parses the YAML frontmatter of every `skills/<name>/SKILL.md`, `agents/*.md`, `commands/*.md`, and `POWER.md`, emitting a hard `frontmatter-invalid` finding when it fails. This catches frontmatter that loads on a lenient host (Claude Code) but is rejected by a strict one (e.g. Codex's skill loader) — the classic case being an unquoted `": "` (colon-space) inside a `description` value, which YAML reads as an illegal nested mapping. Adds the `frontmatter-invalid` value to the `FindingCode` union.
+
+### Patch Changes
+
+- [#25](https://github.com/ai-plugin-marketplace/tools/pull/25) [`0bfc191`](https://github.com/ai-plugin-marketplace/tools/commit/0bfc191e54cb76d5ca223bfec6f5efbd223fcbd9) Thanks [@mike-north](https://github.com/mike-north)! - Accept a relative `./*.json` path string for `mcpServers` in the Claude and Cursor plugin manifest schemas (a union with the existing inline-record form), matching the Codex schema and the `hooks` field. Previously Claude/Cursor manifests that referenced their MCP config by path (e.g. `"mcpServers": "./.mcp.json"`) were rejected with `schema-invalid` even though that is the form Claude Code installs from.
+
 ## 0.4.0
 
 ### Minor Changes

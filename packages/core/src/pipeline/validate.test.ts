@@ -15,6 +15,7 @@ import {
   validateCrossTarget,
   validateEnvelopeAdherence,
   validateEnvelopeShape,
+  validateFrontmatterParses,
   validateMarketplaceRegistration,
   validateMcpKeySync,
   validateNameConsistency,
@@ -830,6 +831,137 @@ describe('checkDefaultMarketplaceName()', () => {
     expect(checkDefaultMarketplaceName(repoRoot, undefined)).toHaveLength(0);
     expect(checkDefaultMarketplaceName(path.join(tmpDir, 'nonexistent'), undefined)).toHaveLength(
       0,
+    );
+  });
+});
+
+// ---------------------------------------------------------------------------
+// validateFrontmatterParses
+// ---------------------------------------------------------------------------
+
+describe('validateFrontmatterParses()', () => {
+  // Frontmatter must be valid YAML for strict hosts (e.g. Codex's skill loader), not only
+  // Claude's lenient parser. @see https://yaml.org/spec/1.2.2/#732-block-mappings
+  let tmp: string;
+  beforeEach(() => {
+    tmp = makeTempDir();
+  });
+  afterEach(() => {
+    fs.rmSync(tmp, { recursive: true, force: true });
+  });
+
+  /** Create a plugin dir named 'demo' containing one file. Returns its absolute dir. */
+  function pluginWith(rel: string, content: string): string {
+    const dir = path.join(tmp, 'plugins', 'demo');
+    write(dir, rel, content);
+    return dir;
+  }
+
+  it('returns no findings when all frontmatter parses as YAML', () => {
+    const dir = pluginWith(
+      'skills/demo/SKILL.md',
+      frontmatter({ name: 'demo', description: 'Plain description with no colon' }),
+    );
+    expect(validateFrontmatterParses(dir, 'demo')).toEqual([]);
+  });
+
+  it('emits a hard frontmatter-invalid finding for an unquoted colon-space in a description', () => {
+    // The real defect: an unquoted `description: ... acts as a liaison: it syncs ...` —
+    // YAML reads the inner ': ' as an illegal nested mapping, so strict hosts fail to load it.
+    const dir = pluginWith(
+      'skills/liaison/SKILL.md',
+      frontmatter({
+        name: 'liaison',
+        description: 'A skill that acts as a liaison: it syncs docs',
+      }),
+    );
+    const findings = validateFrontmatterParses(dir, 'demo');
+    expect(findings).toHaveLength(1);
+    expect(findings[0]).toMatchObject({
+      severity: 'hard',
+      code: 'frontmatter-invalid',
+      plugin: 'demo',
+    });
+    // Message names the offending file so the author can find it.
+    expect(findings[0]?.message).toContain(path.join('skills', 'liaison', 'SKILL.md'));
+    expect(findings[0]?.hint).toBeDefined();
+  });
+
+  it('accepts the same value once it is quoted (the fix)', () => {
+    const dir = pluginWith(
+      'skills/liaison/SKILL.md',
+      frontmatter({
+        name: 'liaison',
+        description: '"A skill that acts as a liaison: it syncs docs"',
+      }),
+    );
+    expect(validateFrontmatterParses(dir, 'demo')).toEqual([]);
+  });
+
+  it('checks POWER.md frontmatter', () => {
+    const dir = pluginWith(
+      'POWER.md',
+      frontmatter({ name: 'demo', description: 'bad: nested mapping here' }),
+    );
+    const findings = validateFrontmatterParses(dir, 'demo');
+    expect(findings).toHaveLength(1);
+    expect(findings[0]?.message).toContain('POWER.md');
+  });
+
+  it('checks agents/*.md frontmatter', () => {
+    const dir = pluginWith(
+      'agents/reviewer.md',
+      frontmatter({ name: 'reviewer', description: 'agent that does: a thing' }),
+    );
+    const findings = validateFrontmatterParses(dir, 'demo');
+    expect(findings).toHaveLength(1);
+    expect(findings[0]?.message).toContain(path.join('agents', 'reviewer.md'));
+  });
+
+  it('ignores a markdown file that has no frontmatter block', () => {
+    const dir = pluginWith('skills/demo/SKILL.md', '# Just a heading, no frontmatter\n');
+    expect(validateFrontmatterParses(dir, 'demo')).toEqual([]);
+  });
+
+  it('returns no findings for a plugin with no frontmatter-bearing files', () => {
+    const dir = path.join(tmp, 'plugins', 'demo');
+    fs.mkdirSync(dir, { recursive: true });
+    expect(validateFrontmatterParses(dir, 'demo')).toEqual([]);
+  });
+
+  it('does not mistake a body --- thematic break for frontmatter', () => {
+    // No leading frontmatter; the body just uses --- as a horizontal rule. The matcher is
+    // anchored to the start of the file, so this must not be parsed as YAML (no false positive).
+    const dir = pluginWith(
+      'skills/demo/SKILL.md',
+      '# Title\n\nIntro.\n\n---\n\nkey: value: not actually frontmatter\n\n---\n\nMore.\n',
+    );
+    expect(validateFrontmatterParses(dir, 'demo')).toEqual([]);
+  });
+
+  it('detects and parses CRLF-delimited frontmatter (Windows checkouts)', () => {
+    const dir = pluginWith(
+      'skills/ok/SKILL.md',
+      '---\r\nname: ok\r\ndescription: fine\r\n---\r\n\r\n# Body\r\n',
+    );
+    expect(validateFrontmatterParses(dir, 'demo')).toEqual([]);
+    // A CRLF frontmatter with a colon-space defect is still detected and reported.
+    write(dir, 'skills/bad/SKILL.md', '---\r\nname: bad\r\ndescription: broken: here\r\n---\r\n');
+    const findings = validateFrontmatterParses(dir, 'demo');
+    expect(findings).toHaveLength(1);
+    expect(findings[0]?.message).toContain(path.join('skills', 'bad', 'SKILL.md'));
+  });
+
+  it('reports every malformed file without short-circuiting', () => {
+    const dir = pluginWith(
+      'skills/a/SKILL.md',
+      frontmatter({ name: 'a', description: 'broken: here' }),
+    );
+    write(dir, 'skills/b/SKILL.md', frontmatter({ name: 'b', description: 'also broken: here' }));
+    const findings = validateFrontmatterParses(dir, 'demo');
+    expect(findings).toHaveLength(2);
+    expect(findings.every((f) => f.code === 'frontmatter-invalid' && f.severity === 'hard')).toBe(
+      true,
     );
   });
 });

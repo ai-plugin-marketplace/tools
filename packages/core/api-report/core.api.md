@@ -91,7 +91,7 @@ export interface Finding {
 }
 
 // @public
-export type FindingCode = 'envelope-invalid' | 'repo-config-invalid' | 'envelope-adherence' | 'schema-invalid' | 'name-consistency' | 'mcp-key-sync' | 'marketplace-registration' | 'freshness' | 'single-artifact-host' | 'root-artifact-collision' | 'default-marketplace-name';
+export type FindingCode = 'envelope-invalid' | 'repo-config-invalid' | 'envelope-adherence' | 'schema-invalid' | 'name-consistency' | 'mcp-key-sync' | 'marketplace-registration' | 'freshness' | 'single-artifact-host' | 'root-artifact-collision' | 'default-marketplace-name' | 'frontmatter-invalid';
 
 // @public
 export interface GeneratedFile {

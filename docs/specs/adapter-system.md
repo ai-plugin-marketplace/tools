@@ -1,8 +1,8 @@
 # ai-plugin-marketplace — Adapter System Specification
 
 **Status:** Draft
-**Spec version:** 0.2.0
-**Supersedes:** 0.1.0 (first draft — corrected after verifying every per-target claim against each harness's primary docs; the v0.1.0 premise that Codex is frontmatter-strict and must graduate to emitted-install was wrong)
+**Spec version:** 0.2.1
+**Supersedes:** 0.2.0 (added §4.5 agent/subagent adapter — verified subagent contracts for Claude/Cursor/Codex from primary docs; the **context-isolation invariant** D11; the companion-skill-bridges-explicit-only-activation model D12); 0.1.0 (first draft — corrected after verifying every per-target claim against each harness's primary docs; the v0.1.0 premise that Codex is frontmatter-strict and must graduate to emitted-install was wrong)
 **Last updated:** 2026-06-17
 **Scope:** A per-target adaptation layer for **shared authored content** (skills, agents, hook sources) in `@ai-plugin-marketplace/core`. Companion to `architecture.md` (§2 principles, §6 envelope, §7 mechanical transformations) and `dogfood-marketplace-and-native-install.md` (the single-artifact-host gate and the shelved `aggregate` opt-in this spec fills in).
 
@@ -51,6 +51,7 @@ A bounded **adapter layer**: pure, lookup/rule-driven functions that, from **sha
 | --- | --- | --- |
 | `skills/**/SKILL.md` frontmatter | once (shared) | **Located/lifted** — invocation policy & hooks lifted to host-native sidecars (§4.1); the body and lenient frontmatter pass through unchanged |
 | `hooks/claude.yaml` (plugin-level hook source) | once (shared) | **Yes** — per-host hook sidecar (§4.2) |
+| `agents/*.md` (Claude-native subagents) | once (shared) | **Yes** — format/field transform + companion skill on explicit-only hosts (§4.5); context isolation is invariant (D11) |
 | native manifests (`.claude-plugin/…`, `.cursor-plugin/…`, `.codex-plugin/…`, `gemini-extension.json`, `POWER.md`) | per-target (P1) | **No** — hand-authored, never synthesized |
 
 ### 2.2 Adaptation stays "mechanical" (extends §7.1)
@@ -128,6 +129,37 @@ Fills the seam `dogfood-marketplace-and-native-install.md` reserves (*"Merging N
 
 Per-host rewriting of `SKILL.md` frontmatter (stripping to an allowlist, escaping `<`/`>`) is **not built and not needed** for claude/cursor/codex (all lenient). It is reserved for a future host whose **runtime** loader enforces a strict allowlist or character ban. If such a host is targeted, D3 promotes it to emitted-installed and this adapter rewrites its `dist/<host>/` copy — keeping the source untouched for lenient hosts. Until then, the only frontmatter rule that runs is the existing **validate-time** `frontmatter-invalid` gate on the source.
 
+### 4.5 Agent (subagent) adapter
+
+Subagents (`agents/*.md`, Claude-native) are shared authored content, but they port with **heavier, lossier** adaptation than skills — under one hard invariant.
+
+**Verified per-target subagent contract** (each row from the harness's own docs):
+
+| | Claude `agents/*.md` ([src](https://code.claude.com/docs/en/sub-agents)) | Cursor `.cursor/agents/*.md` ([src](https://cursor.com/docs/context/subagents)) | Codex `.codex/agents/*.toml` ([src](https://developers.openai.com/codex/subagents)) |
+| --- | --- | --- | --- |
+| Format | MD + YAML frontmatter | MD + YAML frontmatter | **TOML**; prompt in `developer_instructions` (no MD body) |
+| Required | name, description | description | name, description, developer_instructions |
+| Model tier | sonnet/opus/haiku/fable/id/inherit | inherit/fast/id | model + model_reasoning_effort |
+| Tool scoping | `tools` + `disallowedTools` (PascalCase) | none (only `readonly`) | none (governed by `sandbox_mode` + `mcp_servers`) |
+| Invocation | auto-delegate by description + explicit | auto-delegate + `/name` | **explicit only** |
+| Context isolation | ✅ own window | ✅ own window | ✅ own session |
+| Plugin-bundled | ✅ plugin `agents/` | bundles "Agents" (**verify T5**) | **no** — filesystem `.codex/agents/` only |
+
+> Claude caveat: `permissionMode`, `mcpServers`, and `hooks` are **ignored for plugin subagents** (per Claude's doc) — so they need no adaptation in our context.
+
+**Four gaps (verified):**
+
+1. **Format transform, not field-mapping.** Claude/Cursor MD+YAML → Codex **TOML** with the prompt as a `developer_instructions` string (an `md→toml` + body-into-field transform).
+2. **Tool scoping doesn't survive.** Claude's fine-grained `tools`/`disallowedTools` maps only coarsely: `disallowedTools: Write, Edit` → Cursor `readonly: true` / Codex `sandbox_mode = "read-only"`; an arbitrary subset (Read+Grep, no Bash) is **inexpressible** → soft `agent-tools-unscoped`.
+3. **Invocation differs.** Codex subagents are **explicit-only** — auto-delegation by description does not exist (see D12).
+4. **Codex agents are not plugin-bundled** — they live only in `.codex/agents/`, so a plugin-distributed subagent has a **placement** problem (**verify T4**).
+
+> **D11 (normative) — context isolation is definitional.** A subagent MUST be represented only by a target primitive that provides a **separate context window**. A companion skill MAY *add* activation atop an isolated subagent; it MUST NOT *stand in for* one. If a target has **no** context-isolated subagent primitive, the adapter emits a **hard `agent-not-representable`** finding — it never downgrades the agent to an inline skill. (All three shipped targets satisfy this — verified above; each gives the subagent its own context window/session, model tier, and sandbox.)
+
+> **D12 (normative) — companion skill bridges explicit-only activation.** For a host whose subagents are explicit-only (Codex), the adapter emits the real isolated subagent **plus** a plugin-bundled **companion skill** whose `description` carries the delegation trigger and whose body instructs the main agent to spawn that subagent. The skill recovers description-based activation **without touching** the subagent's context window, model tier, or sandbox; it also carries the `## Initial setup` placement note for `.codex/agents/` (gap 4). Soft `agent-activation-via-companion-skill`. Claude/Cursor auto-delegate natively and need no companion.
+
+**Adaptation summary:** Claude → passthrough; Cursor → field-adapt (`{name, description, model, readonly←disallowedTools, is_background}`); Codex → `md→TOML` + `sandbox_mode` mapping + companion skill. Given the fidelity cost and that few plugins ship agents, this is a **lower-priority, well-flagged** adapter class.
+
 ---
 
 ## 5. Honesty and diagnostics (preserves P5)
@@ -142,6 +174,9 @@ Per-host rewriting of `SKILL.md` frontmatter (stripping to an allowlist, escapin
 | `hook-scope-widened` | soft | a skill-scoped frontmatter hook promoted to plugin-wide on `<target>` |
 | `unifier-collision` | hard | two plugins' names collide under the namespacing rule |
 | `frontmatter-adapted` | soft | (reserved, §4.4) a key/char rewritten for a runtime-strict host |
+| `agent-tools-unscoped` | soft | a subagent's `tools`/`disallowedTools` can't be expressed on `<target>` (only coarse `readonly`/`sandbox_mode`) |
+| `agent-activation-via-companion-skill` | soft | a companion skill supplies description-activation for an explicit-only subagent host (§4.5 D12) |
+| `agent-not-representable` | hard | `<target>` has no context-isolated subagent primitive (§4.5 D11) — the agent is **not** downgraded to an inline skill |
 
 ---
 
@@ -162,6 +197,8 @@ Per-host rewriting of `SKILL.md` frontmatter (stripping to an allowlist, escapin
   - **T1** — Cursor's plugin-bundled **hook** declaration file/field and whether it auto-activates (doc-ambiguous).
   - **T2** — Confirm the toolkit's `codex` target emits `agents/openai.yaml`; today it emits `hooks/codex.json` only.
   - **T3** — Codex plugin-hook **trust** UX wording for plugin docs.
+  - **T4** — Codex subagent **placement**: `.codex/agents/` is not plugin-bundled — how a plugin-distributed `.toml` lands there (companion-skill `## Initial setup`? symlink?).
+  - **T5** — Whether a Cursor **plugin** auto-bundles subagents, or they must land in `.cursor/agents/` (the Cursor plugins doc says plugins bundle "Agents"; the subagents doc is silent — the two are ambiguous together).
 
 ---
 

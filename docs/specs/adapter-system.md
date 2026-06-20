@@ -1,8 +1,8 @@
 # ai-plugin-marketplace — Adapter System Specification
 
 **Status:** Draft
-**Spec version:** 0.2.1
-**Supersedes:** 0.2.0 (added §4.5 agent/subagent adapter — verified subagent contracts for Claude/Cursor/Codex from primary docs; the **context-isolation invariant** D11; the companion-skill-bridges-explicit-only-activation model D12); 0.1.0 (first draft — corrected after verifying every per-target claim against each harness's primary docs; the v0.1.0 premise that Codex is frontmatter-strict and must graduate to emitted-install was wrong)
+**Spec version:** 0.3.0
+**Supersedes:** 0.2.1 (expanded §4.2 hooks adapter — primary-verified the hook *handler contract* across all three live targets along three axes (event names / stdin envelope / stdout control + exit-code default); established the **observer-vs-controller** tiering; **D6a** Codex identity-passthrough; **D6b** the fail-closed Cursor translation shim for controller hooks; resolved the "is author-once true for hooks?" verify-task — yes for Codex, no for Cursor controllers); 0.2.0 (added §4.5 agent/subagent adapter — verified subagent contracts for Claude/Cursor/Codex from primary docs; the **context-isolation invariant** D11; the companion-skill-bridges-explicit-only-activation model D12); 0.1.0 (first draft — corrected after verifying every per-target claim against each harness's primary docs; the v0.1.0 premise that Codex is frontmatter-strict and must graduate to emitted-install was wrong)
 **Last updated:** 2026-06-17
 **Scope:** A per-target adaptation layer for **shared authored content** (skills, agents, hook sources) in `@ai-plugin-marketplace/core`. Companion to `architecture.md` (§2 principles, §6 envelope, §7 mechanical transformations) and `dogfood-marketplace-and-native-install.md` (the single-artifact-host gate and the shelved `aggregate` opt-in this spec fills in).
 
@@ -108,13 +108,36 @@ The agent-vs-user invocation controls do **not** live in the same place across h
 
 **Verified:** both Codex and Cursor carry hooks **in the plugin construct** (Codex `developers.openai.com/codex/plugins/build.md`: `hooks/hooks.json` or the `hooks` manifest field, but **non-managed — Codex skips them until the user reviews & trusts**; Cursor `cursor.com/docs/plugins`: a plugin may bundle Hooks). So **no global/project agent-install is needed**, and the `## Initial setup` agent-as-runtime polyfill is **reserved** for a genuinely hookless host — we have none.
 
+#### 4.2.1 The hook *contract* is portable for Claude→Codex, divergent for Cursor (primary-verified)
+
+"Author a hook once" splits along the **handler contract**, not the event key. The naive view — rename event keys and reuse the JSON — is correct for Codex and **wrong for Cursor**. Three axes, each cited to the harness's own hook doc ([Claude](https://code.claude.com/docs/en/hooks), [Codex](https://developers.openai.com/codex/hooks), [Cursor](https://cursor.com/docs/hooks)):
+
+| Axis | Claude (source) | Codex | Cursor |
+| --- | --- | --- | --- |
+| Event names | `PreToolUse` / `PostToolUse` / `UserPromptSubmit` / `Stop` / `SessionStart` / `PreCompact` (**PascalCase**) | **same names** (subset) → **identity** | `preToolUse` / `beforeSubmitPrompt` / `stop` / `sessionStart` (**camelCase**) → rename |
+| Stdin envelope | `session_id`, `transcript_path`, `cwd`, `hook_event_name`, `tool_name`, `tool_input`, `tool_output` | **same** + `turn_id`/`model`; `tool_response` for output | **`conversation_id`** (not `session_id`), `generation_id`, `workspace_roots`; shell events use `command`/`output` |
+| Stdout control | `decision:"block"`+`reason`; `hookSpecificOutput.permissionDecision` (allow/deny/ask); `continue`; `additionalContext` | **identical** structure | flat **`permission`** (allow/ask/deny), `continue`, `agent_message`, `additional_context` (snake_case, **not** nested) |
+| Exit-code default | `2` = blocking error (fail-safe) | `2` = failure (same) | `2` = deny; **other = fail-OPEN** unless `failClosed:true` |
+
+> **Governing distinction — tier by hook *intent*, not by host.**
+> - **Observer hook** (side-effect only — log / notify / format-on-save; emits no control JSON, reads at most the common fields): portable to **all three** with **event-rename only**.
+> - **Controller hook** (returns `block` / `permission` / `updatedInput`): portable **Claude↔Codex unchanged**; on Cursor the **handler shape itself differs** (different stdin envelope + different stdout control + opposite failure default) — a key rename is not enough.
+
+> **D6a (normative) — Codex is identity-passthrough.** Codex shares Claude's event names, stdin field names (modulo `tool_output`→`tool_response`), stdout control protocol, and exit codes. The adapter emits Codex hooks by **copying the Claude JSON unchanged**, except events with no Codex equivalent (`SessionEnd`, `Notification`) which are **omitted with a `hook-adapted` finding** (never remapped). No handler-code change is required. Committed map: identity over `{SessionStart, SubagentStart, PreToolUse, PermissionRequest, PostToolUse, PreCompact, PostCompact, UserPromptSubmit, SubagentStop, Stop}`; omit `{SessionEnd, Notification}`.
+
+> **D6b (normative) — Cursor controller hooks are served by a generated translation shim.** Because the Cursor handler contract diverges on every axis, the adapter wraps each Claude **controller** hook in a **shim command** that (1) reads Cursor stdin and rewrites it to the Claude envelope (`conversation_id`→`session_id`; for shell events synthesize `tool_name:"Bash"`, `tool_input.command`←`command`; camelCase→PascalCase event); (2) invokes the original Claude handler; (3) translates the Claude control output back to Cursor's (`permissionDecision`→`permission`, `decision:"block"`→`permission:"deny"`/`continue:false`, `updatedInput`→`updated_input`, `additionalContext`→`additional_context`). **Three non-negotiable safety mandates** — Cursor fails open by default and [silently allows on malformed JSON](https://forum.cursor.com/t/beforeshellexecution-hook-malformed-json-response-silently-allows-command-instead-of-blocking/152669): the shim's Cursor hook entry MUST set **`failClosed: true`**; the shim MUST **always emit syntactically valid JSON**; and on any error / missing field / non-zero handler exit the shim MUST emit **`{"permission":"deny"}` and exit `2`** (fail-safe, inverting Cursor's default). Soft `hook-controller-shimmed-cursor`. **Observer** hooks take the event-rename path with no shim.
+
+> Committed Claude→Cursor event map: `PreToolUse→preToolUse`, `PostToolUse→postToolUse`, `UserPromptSubmit→beforeSubmitPrompt`, `Stop→stop`, `SessionStart→sessionStart`, `SessionEnd→sessionEnd`, `PreCompact→preCompact`, `SubagentStart→subagentStart`, `SubagentStop→subagentStop`; omit `Notification`.
+
+> **Cursor cloud/CLI caveat (verified).** Cursor's cloud agents do **not** deliver `sessionStart` / `sessionEnd` / `beforeSubmitPrompt` / `stop` (no VM at those points; some "not yet wired"). A shimmed controller bound to those events **will not fire** on a Cursor cloud agent → soft `hook-event-unsupported-cursor-cli`.
+
 > **D7 (normative).** **Skill-frontmatter hooks** (Claude's `hooks:` block inside a `SKILL.md`, skill-*scoped*) are an **opt-in** authoring path, not the default:
 > - **Claude → passthrough** (native skill-scoping preserved).
 > - **Codex/Cursor → promote** to the plugin hook artifact (no skill-scoping on those hosts) and emit a soft **`hook-scope-widened`** finding: *"skill-scoped hook `<name>` becomes plugin-wide (always-on) on `<target>`; if it is a blocking/deny gate it will fire outside this skill — confirm intended."*
 >
 > No hard gate, no `promote:` flag: activation scope is a decision the Claude author already owns; the warning surfaces the footgun and trusts them.
 
-**Two documented gaps to carry (not bypass):** (a) Codex's **trust prompt** for plugin-bundled hooks — a security model; surface it in plugin docs. (b) Cursor's plugin-hook **declaration/activation mechanism** is doc-ambiguous — **verify task T1** before emitting a Cursor hook sidecar.
+**Documented gaps to carry (not bypass):** (a) Codex's **trust prompt** for plugin-bundled hooks — a security model; surface it in plugin docs. (b) Cursor's plugin-hook **declaration/activation mechanism** is doc-ambiguous — **verify task T1**. (c) whether Cursor honors **`failClosed` in cloud agents** — **T6** (the shim's fail-safe depends on it). (d) shell-event ↔ `Bash`-tool stdin **synthesis fidelity** — **T7**.
 
 ### 4.3 Structural unifier (the `aggregate` opt-in)
 
@@ -170,8 +193,10 @@ Subagents (`agents/*.md`, Claude-native) are shared authored content, but they p
 | --- | --- | --- |
 | `invocation-relocated` | soft | invocation policy lifted to a host-native sidecar (e.g. Codex `agents/openai.yaml`) |
 | `invocation-widened` | soft | `user-invocable: false` cannot be honored on `<target>` |
-| `hook-adapted` | soft | an event/matcher was dropped for a target |
+| `hook-adapted` | soft | an event/matcher was dropped for a target (e.g. `SessionEnd`/`Notification` on Codex — §4.2.1 D6a) |
 | `hook-scope-widened` | soft | a skill-scoped frontmatter hook promoted to plugin-wide on `<target>` |
+| `hook-controller-shimmed-cursor` | soft | a Cursor controller hook is served by a generated fail-closed translation shim (§4.2.1 D6b) — verify control semantics |
+| `hook-event-unsupported-cursor-cli` | soft | a shimmed event is not delivered by Cursor cloud/CLI agents (`sessionStart`/`sessionEnd`/`beforeSubmitPrompt`/`stop`) — the hook will not fire there |
 | `unifier-collision` | hard | two plugins' names collide under the namespacing rule |
 | `frontmatter-adapted` | soft | (reserved, §4.4) a key/char rewritten for a runtime-strict host |
 | `agent-tools-unscoped` | soft | a subagent's `tools`/`disallowedTools` can't be expressed on `<target>` (only coarse `readonly`/`sandbox_mode`) |
@@ -199,6 +224,10 @@ Subagents (`agents/*.md`, Claude-native) are shared authored content, but they p
   - **T3** — Codex plugin-hook **trust** UX wording for plugin docs.
   - **T4** — Codex subagent **placement**: `.codex/agents/` is not plugin-bundled — how a plugin-distributed `.toml` lands there (companion-skill `## Initial setup`? symlink?).
   - **T5** — Whether a Cursor **plugin** auto-bundles subagents, or they must land in `.cursor/agents/` (the Cursor plugins doc says plugins bundle "Agents"; the subagents doc is silent — the two are ambiguous together).
+  - **T6** — Whether Cursor honors **`failClosed: true` in cloud/CLI agents** (the §4.2.1 D6b shim's fail-safe depends on it; the fail-open default + malformed-JSON-allows bug make this the shim's load-bearing assumption — test on a real Cursor cloud agent).
+  - **T7** — **Shell-event ↔ `Bash`-tool stdin synthesis fidelity**: confirm a Claude handler keyed on `tool_name:"Bash"` / `tool_input.command` behaves correctly when fed from Cursor's `beforeShellExecution` `command`/`cwd`/`sandbox` payload (and that `afterShellExecution`'s `output` maps cleanly to `tool_output`).
+
+  > **Resolved this revision (T-payload/return):** the cross-harness **stdin payload and stdout control contract** is now primary-verified for all three live targets (§4.2.1 tables) — Claude↔Codex are contract-identical (modulo `tool_output`→`tool_response`); Cursor diverges on all three axes, which is why D6b mandates a shim rather than a rename. This closes the "is author-once even true for hooks?" question: **yes for Codex, no for Cursor controllers.**
 
 ---
 

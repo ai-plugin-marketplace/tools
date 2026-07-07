@@ -183,3 +183,64 @@ describe('validateCodexPlugin — manifest file-ref failures', () => {
     expect(findings).toHaveLength(0);
   });
 });
+
+// ---------------------------------------------------------------------------
+// Open Plugins conformance advisories (spec §7 / OP-D10) — always SOFT
+// ---------------------------------------------------------------------------
+
+describe('validateCodexPlugin — open-plugins-conformance advisories', () => {
+  it('emits a SOFT advisory for a Codex-legal but Open-Plugins-illegal name (a--b)', () => {
+    writeManifest({ name: 'a--b' });
+    const findings = validateCodexPlugin(tmpDir);
+    const adv = findings.filter((f) => f.code === 'open-plugins-conformance');
+    expect(adv).toHaveLength(1);
+    expect(adv[0]?.severity).toBe('soft');
+    expect(findings.every((f) => f.severity === 'soft')).toBe(true);
+  });
+
+  it('emits a SOFT metadata-dir advisory for a stray file in .codex-plugin/', () => {
+    writeManifest();
+    writeFile('.codex-plugin/notes.md', 'stray');
+    const adv = validateCodexPlugin(tmpDir).filter((f) => f.code === 'open-plugins-conformance');
+    expect(adv).toHaveLength(1);
+    expect(adv[0]?.message).toContain('notes.md');
+  });
+
+  it('emits NO advisory for a native-valid, Open-Plugins-conformant plugin', () => {
+    writeManifest();
+    expect(
+      validateCodexPlugin(tmpDir).filter((f) => f.code === 'open-plugins-conformance'),
+    ).toEqual([]);
+  });
+
+  it('does NOT double-report: a Codex-INVALID name draws a hard finding but no soft drift advisory', () => {
+    writeFile('.codex-plugin/plugin.json', JSON.stringify({ name: 'Bad Name' }));
+    const findings = validateCodexPlugin(tmpDir);
+    expect(findings.filter((f) => f.code === 'open-plugins-conformance')).toEqual([]);
+    expect(findings.filter((f) => f.code === 'schema-invalid')).toHaveLength(1);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Path-traversal hardening (spec §7 item 1 / traversal audit) — mcpServers/apps/hooks
+// ---------------------------------------------------------------------------
+
+describe('validateCodexPlugin — config-path traversal', () => {
+  it('emits a HARD schema-invalid when mcpServers contains a ".." segment', () => {
+    writeManifest({ mcpServers: './a/../b.json' });
+    const hard = validateCodexPlugin(tmpDir).filter((f) => f.code === 'schema-invalid');
+    expect(hard).toHaveLength(1);
+    expect(hard[0]?.message).toMatch(/mcpServers.*"\.\."/);
+  });
+
+  it('emits a HARD schema-invalid when apps contains a ".." segment', () => {
+    writeManifest({ apps: './a/../b' });
+    const hard = validateCodexPlugin(tmpDir).filter((f) => f.code === 'schema-invalid');
+    expect(hard.some((f) => /apps.*"\.\."/.test(f.message))).toBe(true);
+  });
+
+  it('accepts a traversal-free mcpServers config path', () => {
+    writeManifest({ mcpServers: './.mcp.json' });
+    expect(validateCodexPlugin(tmpDir).filter((f) => f.code === 'schema-invalid')).toEqual([]);
+  });
+});

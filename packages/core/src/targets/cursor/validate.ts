@@ -24,6 +24,10 @@ import * as path from 'node:path';
 import { parse as parseYaml } from 'yaml';
 
 import type { Finding } from '../../pipeline/types.js';
+import {
+  metadataDirConformanceFindings,
+  nameGrammarConformanceFindings,
+} from '../open-plugins-conformance.js';
 import { cursorPluginManifestSchema, cursorRuleFrontmatterSchema } from './schemas.js';
 
 // ---------------------------------------------------------------------------
@@ -157,7 +161,30 @@ function validateManifestFileRefs(pluginDir: string, pluginName: string): Findin
     }
   }
 
+  // hooks/mcpServers config-path strings are NOT existence-checked (they name a config file, not a
+  // component tree), but a `..` parent-traversal in them must still be rejected hard (spec §7 item 1).
+  for (const field of ['hooks', 'mcpServers'] as const) {
+    const finding = rejectPathTraversal(pluginName, field, manifest[field]);
+    if (finding !== null) findings.push(finding);
+  }
+
   return findings;
+}
+
+/**
+ * Reject (HARD `schema-invalid`) a `..` parent-traversal segment in a string config-path field not
+ * covered by the existence-based ref checks above. Returns `null` for non-string values (inline
+ * records) and traversal-free paths.
+ */
+function rejectPathTraversal(pluginName: string, field: string, value: unknown): Finding | null {
+  if (typeof value === 'string' && value.includes('..')) {
+    return makeInvalid(
+      pluginName,
+      `.cursor-plugin/plugin.json: ${field} path must not contain "..": ${value}`,
+      'Use a path relative to the plugin root without ".." traversal.',
+    );
+  }
+  return null;
 }
 
 // ---------------------------------------------------------------------------
@@ -248,5 +275,40 @@ export function validateCursorPlugin(pluginDir: string): Finding[] {
   return [
     ...validateManifestFileRefs(pluginDir, pluginName),
     ...validateCursorRules(pluginDir, pluginName),
+    ...validateOpenPluginsConformance(pluginDir, pluginName),
   ];
+}
+
+/**
+ * SOFT Open Plugins conformance advisories for a Cursor plugin (spec §7 / OP-D10): name-grammar
+ * drift and vendor metadata-dir isolation. Never fails the plugin.
+ *
+ * The name-grammar advisory fires only for a NATIVE-VALID manifest (a Cursor-invalid name already
+ * draws a hard finding); the metadata-dir advisory is filesystem-only.
+ */
+function validateOpenPluginsConformance(pluginDir: string, pluginName: string): Finding[] {
+  const vendorDir = '.cursor-plugin';
+  const findings: Finding[] = [];
+
+  const manifestPath = path.join(pluginDir, vendorDir, 'plugin.json');
+  if (fs.existsSync(manifestPath)) {
+    try {
+      const raw: unknown = JSON.parse(fs.readFileSync(manifestPath, 'utf-8'));
+      const parsed = cursorPluginManifestSchema.safeParse(raw);
+      if (parsed.success) {
+        findings.push(
+          ...nameGrammarConformanceFindings(
+            pluginName,
+            `${vendorDir}/plugin.json`,
+            parsed.data.name,
+          ),
+        );
+      }
+    } catch {
+      // Malformed JSON is handled by the hard validators; no advisory here.
+    }
+  }
+
+  findings.push(...metadataDirConformanceFindings(pluginDir, vendorDir, pluginName));
+  return findings;
 }

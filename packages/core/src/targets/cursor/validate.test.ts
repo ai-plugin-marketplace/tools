@@ -258,3 +258,58 @@ describe.skipIf(!TEMPLATE_REPO_AVAILABLE)('validateCursorPlugin — skill-evalua
     expect(findings).toHaveLength(0);
   });
 });
+
+// ---------------------------------------------------------------------------
+// Open Plugins conformance advisories (spec §7 / OP-D10) — always SOFT
+// ---------------------------------------------------------------------------
+
+describe('validateCursorPlugin — open-plugins-conformance advisories', () => {
+  it('emits a SOFT advisory for a Cursor-legal but Open-Plugins-illegal name (a--b)', () => {
+    writeManifest({ name: 'a--b' });
+    const findings = validateCursorPlugin(tmpDir);
+    const adv = findings.filter((f) => f.code === 'open-plugins-conformance');
+    expect(adv).toHaveLength(1);
+    expect(adv[0]?.severity).toBe('soft');
+    expect(findings.every((f) => f.severity === 'soft')).toBe(true);
+  });
+
+  it('emits a SOFT metadata-dir advisory for a stray file in .cursor-plugin/', () => {
+    writeManifest();
+    writeFile('.cursor-plugin/notes.md', 'stray');
+    const adv = validateCursorPlugin(tmpDir).filter((f) => f.code === 'open-plugins-conformance');
+    expect(adv).toHaveLength(1);
+    expect(adv[0]?.message).toContain('notes.md');
+  });
+
+  it('emits NO advisory for a native-valid, Open-Plugins-conformant plugin', () => {
+    writeManifest();
+    expect(
+      validateCursorPlugin(tmpDir).filter((f) => f.code === 'open-plugins-conformance'),
+    ).toEqual([]);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Path-traversal hardening (spec §7 item 1 / traversal audit) — hooks/mcpServers
+// ---------------------------------------------------------------------------
+
+describe('validateCursorPlugin — config-path traversal', () => {
+  it('emits a HARD schema-invalid when mcpServers contains a ".." segment', () => {
+    writeManifest({ mcpServers: './a/../b.json' });
+    const hard = validateCursorPlugin(tmpDir).filter((f) => f.code === 'schema-invalid');
+    expect(hard).toHaveLength(1);
+    expect(hard[0]?.severity).toBe('hard');
+    expect(hard[0]?.message).toMatch(/mcpServers.*"\.\."/);
+  });
+
+  it('emits a HARD schema-invalid when hooks contains a ".." segment', () => {
+    writeManifest({ hooks: './a/../b.json' });
+    const hard = validateCursorPlugin(tmpDir).filter((f) => f.code === 'schema-invalid');
+    expect(hard.some((f) => /hooks.*"\.\."/.test(f.message))).toBe(true);
+  });
+
+  it('accepts a traversal-free mcpServers config path', () => {
+    writeManifest({ mcpServers: './.mcp.json' });
+    expect(validateCursorPlugin(tmpDir).filter((f) => f.code === 'schema-invalid')).toEqual([]);
+  });
+});

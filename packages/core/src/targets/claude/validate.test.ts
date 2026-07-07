@@ -576,3 +576,93 @@ describe('validateClaudePlugin', () => {
     });
   });
 });
+
+// ---------------------------------------------------------------------------
+// Open Plugins conformance advisories (spec §7 / OP-D10) — always SOFT
+// ---------------------------------------------------------------------------
+
+describe('validateClaudePlugin — open-plugins-conformance advisories', () => {
+  let tmpDir: string;
+  beforeEach(() => {
+    tmpDir = makeTempDir();
+  });
+  afterEach(() => {
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  });
+
+  const advisories = (findings: Finding[]): Finding[] =>
+    findings.filter((f) => f.code === 'open-plugins-conformance');
+
+  it('emits a SOFT advisory for a Claude-legal but Open-Plugins-illegal name (a--b)', () => {
+    // `a--b` passes the Claude name regex (^[a-z][a-z0-9-]*$) but Open Plugins forbids "--".
+    writeFile(
+      tmpDir,
+      '.claude-plugin/plugin.json',
+      JSON.stringify({ name: 'a--b', version: '0.1.0' }),
+    );
+    const findings = validateClaudePlugin(tmpDir);
+    const adv = advisories(findings);
+    expect(adv).toHaveLength(1);
+    expect(adv[0]?.severity).toBe('soft');
+    // The advisory never contributes a hard finding.
+    expect(findings.every((f) => f.severity === 'soft')).toBe(true);
+  });
+
+  it('emits a SOFT metadata-dir advisory for a stray file in .claude-plugin/', () => {
+    writeFile(tmpDir, '.claude-plugin/plugin.json', MINIMAL_MANIFEST);
+    writeFile(tmpDir, '.claude-plugin/notes.md', 'stray');
+    const adv = advisories(validateClaudePlugin(tmpDir));
+    expect(adv).toHaveLength(1);
+    expect(adv[0]?.severity).toBe('soft');
+    expect(adv[0]?.message).toContain('notes.md');
+  });
+
+  it('emits NO advisory for a native-valid, Open-Plugins-conformant plugin', () => {
+    writeFile(tmpDir, '.claude-plugin/plugin.json', MINIMAL_MANIFEST);
+    expect(advisories(validateClaudePlugin(tmpDir))).toEqual([]);
+  });
+
+  it('does NOT double-report: a Claude-INVALID name draws no soft drift advisory', () => {
+    // `Bad Name` fails the Claude schema; the drift advisory is reserved for native-VALID names, so
+    // it must stay silent here (no piling a soft advisory onto an already-broken manifest).
+    writeFile(tmpDir, '.claude-plugin/plugin.json', JSON.stringify({ name: 'Bad Name' }));
+    expect(advisories(validateClaudePlugin(tmpDir))).toEqual([]);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Path-traversal hardening (spec §7 item 1 / traversal audit) — mcpServers
+// ---------------------------------------------------------------------------
+
+describe('validateClaudePlugin — mcpServers path traversal', () => {
+  let tmpDir: string;
+  beforeEach(() => {
+    tmpDir = makeTempDir();
+  });
+  afterEach(() => {
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  });
+
+  it('emits a HARD schema-invalid when mcpServers contains a ".." segment', () => {
+    // `./a/../b.json` passes the "./…json" regex but is a path-traversal escape — reject it hard.
+    writeFile(
+      tmpDir,
+      '.claude-plugin/plugin.json',
+      JSON.stringify({ name: 'test-plugin', mcpServers: './a/../b.json' }),
+    );
+    const findings = validateClaudePlugin(tmpDir);
+    const hard = findings.filter((f) => f.code === 'schema-invalid');
+    expect(hard).toHaveLength(1);
+    expect(hard[0]?.severity).toBe('hard');
+    expect(hard[0]?.message).toMatch(/mcpServers.*"\.\."/);
+  });
+
+  it('accepts a traversal-free mcpServers config path', () => {
+    writeFile(
+      tmpDir,
+      '.claude-plugin/plugin.json',
+      JSON.stringify({ name: 'test-plugin', mcpServers: './.mcp.json' }),
+    );
+    expect(validateClaudePlugin(tmpDir).filter((f) => f.code === 'schema-invalid')).toEqual([]);
+  });
+});

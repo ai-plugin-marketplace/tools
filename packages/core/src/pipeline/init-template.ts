@@ -15,6 +15,8 @@
  * @see docs/specs/architecture.md §10.5 (freshness check the CI workflow runs)
  */
 
+import { serializeRootManifest } from './build.js';
+
 const md = String.raw;
 const yaml = String.raw;
 
@@ -245,12 +247,14 @@ export function buildManagedScaffoldFiles(): InitFile[] {
  * so the directory is tracked). Output is a pure function of the inputs — stable ordering, no
  * timestamps.
  *
- * The Open Plugins registry is seeded as a plain hand-authored empty registry, exactly like the
- * Claude/Cursor seeds: `aipm init` produces a NON-workspace repo (no `aipm.workspace.ts`), so the
- * generated-root collision guard — which only runs in workspace mode — never applies here and no
- * `.aipm/generated-root.json` sidecar tracking is needed. Once the author scaffolds a plugin that
- * declares `open-plugins`, the entry is written into this file (and, in workspace mode, regenerated
- * by `aipm build`).
+ * The Open Plugins registry seed is accompanied by a `.aipm/generated-root.json` sidecar entry
+ * tracking `marketplace.json` as toolkit-generated. `aipm init` produces a NON-workspace repo (no
+ * `aipm.workspace.ts`), where the sidecar is inert — but if the author later adopts workspace mode,
+ * the generated-root collision guard consults the sidecar, and WITHOUT the entry it would flag the
+ * toolkit's own seed as a foreign root file (`root-artifact-collision`) and suppress registry
+ * emission. Seeding the tracking up front means workspace adoption regenerates the file cleanly.
+ * The Claude/Cursor vendor-dir seeds need no tracking — vendor registries are managed by path, not
+ * by the sidecar.
  */
 export function buildInitFiles(
   name: string,
@@ -265,6 +269,7 @@ export function buildInitFiles(
     { path: '.claude-plugin/marketplace.json', content: renderEmptyMarketplace(marketplaceName) },
     { path: '.cursor-plugin/marketplace.json', content: renderEmptyMarketplace(marketplaceName) },
     { path: 'marketplace.json', content: renderEmptyMarketplace(marketplaceName) },
+    { path: '.aipm/generated-root.json', content: serializeRootManifest(['marketplace.json']) },
     { path: 'plugins/.gitkeep', content: '' },
     ...buildManagedScaffoldFiles(),
   ];

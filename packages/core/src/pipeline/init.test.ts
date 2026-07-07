@@ -90,12 +90,27 @@ describe('runInit', () => {
       '.claude-plugin/marketplace.json',
       '.cursor-plugin/marketplace.json',
       'marketplace.json',
+      '.aipm/generated-root.json',
       'plugins/.gitkeep',
       '.github/workflows/ci.yml',
       '.aipm/scaffold.json',
     ]) {
       expect(fs.existsSync(path.join(repoDir, rel)), `${rel} should exist`).toBe(true);
     }
+  });
+
+  // Regression (PR #28 review): the root marketplace.json seed must be pre-tracked as
+  // toolkit-generated, or a later workspace-mode adoption would flag the toolkit's own seed as a
+  // foreign root file (root-artifact-collision) and suppress the open-plugins registry.
+  it('seeds .aipm/generated-root.json tracking the root marketplace.json seed', async () => {
+    const repoDir = path.join(tmpDir, 'root-sidecar');
+    await runInit(repoDir);
+    const sidecar = JSON.parse(read(repoDir, '.aipm/generated-root.json')) as {
+      version?: number;
+      paths?: string[];
+    };
+    expect(sidecar.version).toBe(1);
+    expect(sidecar.paths).toEqual(['marketplace.json']);
   });
 
   it('derives the repo name from the target directory basename', async () => {

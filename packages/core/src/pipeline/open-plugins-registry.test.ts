@@ -28,7 +28,7 @@ import * as path from 'node:path';
 
 import { afterEach, describe, expect, it } from 'vitest';
 
-import { runBuild } from './build.js';
+import { runBuild, serializeRootManifest } from './build.js';
 import { runValidate } from './validate.js';
 import { synthRegistryRepo } from '../test-support/synth-plugin.js';
 import type { SynthRegistryPlugin, SynthRegistryRepo } from '../test-support/synth-plugin.js';
@@ -244,6 +244,32 @@ describe('open-plugins registry — collision guard (OP-D5 / VT-4)', () => {
     await runBuild(repo.repoRoot);
     await runBuild(repo.repoRoot);
     expect(fs.readFileSync(path.join(repo.repoRoot, ROOT_MARKETPLACE), 'utf-8')).toBe(FOREIGN);
+  });
+
+  // Regression (PR #28 review): an `aipm init`-seeded repo has a root marketplace.json on disk.
+  // Without the seed being pre-tracked in the sidecar, later adopting workspace mode would raise
+  // root-artifact-collision against the toolkit's OWN seed and suppress the registry. init now
+  // seeds `.aipm/generated-root.json` tracking `marketplace.json`, so adoption regenerates cleanly.
+  it('an init-seeded root marketplace.json (pre-tracked in the sidecar) is adopted, not a collision', async () => {
+    const SEED = '{\n  "name": "seeded",\n  "plugins": []\n}\n';
+    repo = synthRegistryRepo([openPluginsPlugin('alpha')], WORKSPACE);
+    // Simulate the `aipm init` seed state: root registry on disk + sidecar tracking it.
+    fs.writeFileSync(path.join(repo.repoRoot, ROOT_MARKETPLACE), SEED, 'utf-8');
+    fs.mkdirSync(path.join(repo.repoRoot, '.aipm'), { recursive: true });
+    fs.writeFileSync(
+      path.join(repo.repoRoot, ...SIDECAR_REL),
+      serializeRootManifest([ROOT_MARKETPLACE]),
+      'utf-8',
+    );
+
+    await runBuild(repo.repoRoot);
+
+    // The seed was regenerated (adopted), not preserved as foreign, and nothing collided.
+    const registry = readJson(repo.repoRoot, ROOT_MARKETPLACE) as { plugins: { name: string }[] };
+    expect(registry.plugins.map((p) => p.name)).toStrictEqual(['alpha']);
+    const result = await runValidate(repo.repoRoot, { ci: true });
+    expect(ofCode(result.findings, 'root-artifact-collision')).toStrictEqual([]);
+    expect(result.passed).toBe(true);
   });
 });
 

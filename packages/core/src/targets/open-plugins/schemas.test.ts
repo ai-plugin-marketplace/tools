@@ -124,6 +124,21 @@ describe('openPluginsManifestSchema — component paths', () => {
     expect(withCommands({ paths: ['./ok'], bogus: true }).success).toBe(false);
   });
 
+  // Regression (PR #28 review): a "/"-only split let Windows-style backslash traversal through —
+  // `./a\..\b` has no "/"-delimited ".." segment. Backslashes are now rejected outright.
+
+  it('rejects a backslash-separated traversal path: "./a\\..\\b"', () => {
+    expect(withCommands('./a\\..\\b').success).toBe(false);
+  });
+
+  it('rejects any backslash in an otherwise valid path: "./a\\b"', () => {
+    expect(withCommands('./a\\b').success).toBe(false);
+  });
+
+  it('rejects a backslash path inside the { paths } object form', () => {
+    expect(withCommands({ paths: ['./a\\..\\b'] }).success).toBe(false);
+  });
+
   it('accepts every component field name (commands/agents/skills/rules/hooks/mcpServers/lspServers/outputStyles)', () => {
     const manifest = {
       name: 'my-plugin',

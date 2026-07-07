@@ -16,7 +16,7 @@ import * as path from 'node:path';
 
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
-import { validateOpenPluginsPlugin } from './validate.js';
+import { resolveContainedPath, validateOpenPluginsPlugin } from './validate.js';
 
 // ---------------------------------------------------------------------------
 // Test helpers
@@ -174,5 +174,53 @@ describe('validateOpenPluginsPlugin — metadata-dir isolation', () => {
   it('does NOT emit metadata-dir-isolation when .plugin/ is absent', () => {
     const findings = validateOpenPluginsPlugin(tmpDir);
     expect(findings.filter((f) => f.code === 'metadata-dir-isolation')).toHaveLength(0);
+  });
+
+  // Regression (PR #28 review): a readdir failure was swallowed, so `.plugin` existing as a FILE
+  // (ENOTDIR) silently passed the isolation check instead of being reported.
+  it('emits metadata-dir-isolation when .plugin exists but is a file, not a directory', () => {
+    writeFile('.plugin', '{"name": "not-a-dir"}');
+    const findings = validateOpenPluginsPlugin(tmpDir);
+    const isolation = findings.filter((f) => f.code === 'metadata-dir-isolation');
+    expect(isolation).toHaveLength(1);
+    expect(isolation[0]).toMatchObject({ severity: 'hard' });
+    expect(isolation[0]?.message).toMatch(/not a directory/);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// resolveContainedPath — defense-in-depth containment (PR #28 review)
+// ---------------------------------------------------------------------------
+
+// The manifest schema already rejects these shapes; the validator re-verifies containment at the
+// filesystem boundary so the two layers cannot drift. Exercised directly with hostile inputs.
+describe('resolveContainedPath', () => {
+  it('resolves a well-formed "./"-relative path inside the plugin dir', () => {
+    expect(resolveContainedPath(tmpDir, './commands')).toBe(path.join(tmpDir, 'commands'));
+  });
+
+  it('returns undefined for parent traversal: "./.."', () => {
+    expect(resolveContainedPath(tmpDir, './..')).toBeUndefined();
+  });
+
+  it('returns undefined for nested traversal escaping the root: "./a/../../b"', () => {
+    expect(resolveContainedPath(tmpDir, './a/../../b')).toBeUndefined();
+  });
+
+  it('returns undefined for backslash-separated traversal: "./a\\..\\b"', () => {
+    expect(resolveContainedPath(tmpDir, './a\\..\\b')).toBeUndefined();
+  });
+
+  it('returns undefined for an absolute path', () => {
+    expect(resolveContainedPath(tmpDir, os.tmpdir())).toBeUndefined();
+  });
+
+  it('does not treat a sibling directory sharing the prefix as contained', () => {
+    // `<tmpDir>-evil` starts with the same characters as `<tmpDir>` but is outside it.
+    expect(resolveContainedPath(tmpDir, `../${path.basename(tmpDir)}-evil`)).toBeUndefined();
+  });
+
+  it('resolves "." to the plugin root itself', () => {
+    expect(resolveContainedPath(tmpDir, '.')).toBe(path.resolve(tmpDir));
   });
 });

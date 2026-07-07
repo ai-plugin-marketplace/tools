@@ -61,6 +61,25 @@ const COMPONENT_FIELDS = [
   'outputStyles',
 ] as const;
 
+/**
+ * Resolve a manifest component path against the plugin root, returning `undefined` when the
+ * resolved path would escape the plugin directory (spec §2.1: "A plugin MUST NOT reference files
+ * outside its own directory"). Defense-in-depth: {@link openPluginsManifestSchema} already rejects
+ * non-`./`, backslash, and `..`-segment paths, but this validator touches the filesystem with the
+ * resolved path, so it independently confirms containment rather than trusting the schema layer
+ * (the two are separately maintained). Lexical only — symlink escapes are a host-install concern,
+ * not a manifest-shape concern.
+ *
+ * Exported for direct unit testing with hostile inputs the schema would normally reject.
+ */
+export function resolveContainedPath(pluginDir: string, refPath: string): string | undefined {
+  if (refPath.includes('\\')) return undefined;
+  const resolved = path.resolve(pluginDir, refPath);
+  const root = path.resolve(pluginDir);
+  if (resolved !== root && !resolved.startsWith(root + path.sep)) return undefined;
+  return resolved;
+}
+
 // ---------------------------------------------------------------------------
 // Manifest schema + file-ref validation
 // ---------------------------------------------------------------------------
@@ -97,12 +116,23 @@ function validateManifest(pluginDir: string, pluginName: string): Finding[] {
   const manifest = parsed.data;
   const findings: Finding[] = [];
 
-  // Every declared component path must resolve on disk. The schema already guarantees each path is
-  // `./`-relative with no `..`, so we only check existence here.
+  // Every declared component path must stay inside the plugin directory and resolve on disk.
+  // Containment is re-verified here (not just trusted from the schema) because this is the layer
+  // that touches the filesystem with the resolved path — see {@link resolveContainedPath}.
   for (const field of COMPONENT_FIELDS) {
     const refPaths = normalisePathField(manifest[field] as ComponentPathValue);
     for (const refPath of refPaths) {
-      const resolved = path.join(pluginDir, refPath.slice(2));
+      const resolved = resolveContainedPath(pluginDir, refPath);
+      if (resolved === undefined) {
+        findings.push(
+          makeInvalid(
+            pluginName,
+            `.plugin/plugin.json: ${field} path escapes the plugin directory: ${refPath}`,
+            'Component paths must be "./"-relative, POSIX-separated, and stay within the plugin root.',
+          ),
+        );
+        continue;
+      }
       if (!fs.existsSync(resolved)) {
         findings.push(
           makeInvalid(
@@ -132,11 +162,27 @@ function validateMetadataDirIsolation(pluginDir: string, pluginName: string): Fi
   const metaDir = path.join(pluginDir, '.plugin');
   if (!fs.existsSync(metaDir)) return [];
 
+  // A readdir failure is itself a violation, not a pass: `.plugin` existing as a FILE (ENOTDIR)
+  // means the metadata directory shape is wrong, and an unreadable directory cannot be shown to
+  // satisfy the isolation rule — either way, report rather than silently skipping the check.
   let entries: string[];
   try {
     entries = fs.readdirSync(metaDir);
-  } catch {
-    return [];
+  } catch (err) {
+    const isNotDir = (err as NodeJS.ErrnoException).code === 'ENOTDIR';
+    return [
+      {
+        severity: 'hard',
+        code: 'metadata-dir-isolation',
+        plugin: pluginName,
+        message: isNotDir
+          ? `.plugin exists but is not a directory — the Open Plugins metadata directory must be a directory containing only plugin.json.`
+          : `.plugin/ could not be read (${(err as NodeJS.ErrnoException).code ?? 'unknown error'}) — its isolation cannot be verified.`,
+        hint: isNotDir
+          ? 'Replace the .plugin file with a .plugin/ directory holding plugin.json.'
+          : 'Fix the directory permissions so .plugin/ is readable.',
+      },
+    ];
   }
 
   const extras = entries.filter((e) => e !== 'plugin.json').sort();

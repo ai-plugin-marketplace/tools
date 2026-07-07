@@ -50,14 +50,16 @@ const openPluginsNameSchema = z
   .refine((v) => !v.includes('..'), 'name must not contain consecutive periods ("..")');
 
 /**
- * A single component/source path (spec §2.1): MUST be `./`-relative with no parent traversal. The
- * refine rejects any path that does not start with `./` or that contains a `..` segment.
+ * A single component/source path (spec §2.1): MUST be `./`-relative with no parent traversal.
+ * Backslashes are rejected outright — manifest paths are POSIX-separated, and allowing `\` would
+ * let a Windows-style `..\` segment slip past a `/`-only split (e.g. `./a\..\b`). The refine
+ * rejects any path that contains a backslash, does not start with `./`, or contains a `..` segment.
  */
 const relativePathSchema = z
   .string()
   .refine(
-    (p) => p.startsWith('./') && !p.split('/').includes('..'),
-    'path must be "./"-relative with no ".." parent-traversal segments',
+    (p) => !p.includes('\\') && p.startsWith('./') && !p.split('/').includes('..'),
+    'path must be "./"-relative, POSIX-separated (no "\\"), with no ".." parent-traversal segments',
   );
 
 /**

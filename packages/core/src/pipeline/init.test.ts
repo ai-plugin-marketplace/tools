@@ -89,6 +89,7 @@ describe('runInit', () => {
       'README.md',
       '.claude-plugin/marketplace.json',
       '.cursor-plugin/marketplace.json',
+      'marketplace.json',
       'plugins/.gitkeep',
       '.github/workflows/ci.yml',
       '.aipm/scaffold.json',

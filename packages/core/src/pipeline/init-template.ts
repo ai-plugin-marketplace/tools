@@ -239,9 +239,18 @@ export function buildManagedScaffoldFiles(): InitFile[] {
  * - `cliVersion`/`coreVersion` — pinned as carets of the respective dev dependencies.
  *
  * The set mirrors §3.2: `package.json`, the seed-only `.gitignore`, the
- * {@link buildManagedScaffoldFiles managed scaffold files} (CI workflow), `README.md`, both
- * named repo-root marketplace registries, and an empty `plugins/` (seeded with `.gitkeep` so the
- * directory is tracked). Output is a pure function of the inputs — stable ordering, no timestamps.
+ * {@link buildManagedScaffoldFiles managed scaffold files} (CI workflow), `README.md`, all three
+ * named repo-root marketplace registries (Claude/Cursor vendor dirs plus the Open Plugins repo-root
+ * `marketplace.json`, spec §2.4 lookup position 1), and an empty `plugins/` (seeded with `.gitkeep`
+ * so the directory is tracked). Output is a pure function of the inputs — stable ordering, no
+ * timestamps.
+ *
+ * The Open Plugins registry is seeded as a plain hand-authored empty registry, exactly like the
+ * Claude/Cursor seeds: `aipm init` produces a NON-workspace repo (no `aipm.workspace.ts`), so the
+ * generated-root collision guard — which only runs in workspace mode — never applies here and no
+ * `.aipm/generated-root.json` sidecar tracking is needed. Once the author scaffolds a plugin that
+ * declares `open-plugins`, the entry is written into this file (and, in workspace mode, regenerated
+ * by `aipm build`).
  */
 export function buildInitFiles(
   name: string,
@@ -255,6 +264,7 @@ export function buildInitFiles(
     { path: 'README.md', content: renderReadme(name) },
     { path: '.claude-plugin/marketplace.json', content: renderEmptyMarketplace(marketplaceName) },
     { path: '.cursor-plugin/marketplace.json', content: renderEmptyMarketplace(marketplaceName) },
+    { path: 'marketplace.json', content: renderEmptyMarketplace(marketplaceName) },
     { path: 'plugins/.gitkeep', content: '' },
     ...buildManagedScaffoldFiles(),
   ];

@@ -216,12 +216,33 @@ export interface RegistryArtifact {
   expectedContent: string;
 }
 
+/** The registry-backed targets, ordered. Open Plugins' registry lives at the **repo root** (spec
+ *  §2.4 lookup position 1); the native targets' registries live in vendor subdirectories. */
+const REGISTRY_TARGETS = ['claude', 'cursor', 'codex', 'open-plugins'] as const;
+type RegistryTarget = (typeof REGISTRY_TARGETS)[number];
+
 /** Where each registry-backed target's `marketplace.json` lives, relative to the repo root. */
-const REGISTRY_REL_PATHS: Record<'claude' | 'cursor' | 'codex', readonly string[]> = {
+const REGISTRY_REL_PATHS: Record<RegistryTarget, readonly string[]> = {
   claude: ['.claude-plugin', 'marketplace.json'],
   cursor: ['.cursor-plugin', 'marketplace.json'],
   codex: ['.agents', 'plugins', 'marketplace.json'],
+  'open-plugins': ['marketplace.json'],
 };
+
+/**
+ * Registry-backed targets whose `marketplace.json` sits at the **repo root** rather than in a
+ * vendor subdirectory. A repo-root registry is a repo-root path the toolkit writes, so — unlike the
+ * vendor-dir registries — it is collision-guarded via the generated-root sidecar (OP-D5, VT-4): a
+ * pre-existing foreign root `marketplace.json` must never be overwritten or orphan-removed. Routing
+ * these through {@link detectRootCollisions} / the sidecar (option (a)) unifies "repo-root files the
+ * toolkit owns" under one tracked set.
+ */
+const ROOT_REGISTRY_TARGETS = ['open-plugins'] as const satisfies readonly RegistryTarget[];
+
+/** Whether a registry-backed target's `marketplace.json` lives at the repo root (collision-guarded). */
+export function isRootRegistryTarget(target: TargetId): boolean {
+  return (ROOT_REGISTRY_TARGETS as readonly TargetId[]).includes(target);
+}
 
 /**
  * Absolute paths of every registry the toolkit MANAGES under a repo root (one per registry-backed
@@ -229,9 +250,21 @@ const REGISTRY_REL_PATHS: Record<'claude' | 'cursor' | 'codex', readonly string[
  * registries — a committed `marketplace.json` for a target no longer declared by any plugin —
  * which `runBuild` removes and the validator flags as stale. Shared so build and validate agree
  * on exactly which files generation owns (and never touch anything else).
+ *
+ * NOTE: the repo-root registries ({@link ROOT_REGISTRY_TARGETS}) are included here for
+ * identity/discovery uses, but their orphan removal and collision protection run through the
+ * generated-root sidecar path, NOT the blanket vendor-registry orphan sweep — callers that
+ * orphan-remove must skip {@link isRootRegistryTarget} paths.
  */
 export function managedRegistryPaths(repoRoot: string): string[] {
   return Object.values(REGISTRY_REL_PATHS).map((rel) => path.join(repoRoot, ...rel));
+}
+
+/** Absolute paths of the vendor-subdirectory registries only (excludes repo-root registries). */
+export function managedVendorRegistryPaths(repoRoot: string): string[] {
+  return REGISTRY_TARGETS.filter((t) => !isRootRegistryTarget(t)).map((t) =>
+    path.join(repoRoot, ...REGISTRY_REL_PATHS[t]),
+  );
 }
 
 /** Default Codex plugin category when none is otherwise specified (design spec §"Codex"). */
@@ -296,14 +329,43 @@ function buildCodexRegistry(
 }
 
 /**
+ * Build the Open Plugins (string-source) repo-root registry object (spec §2.4). Entry shape:
+ * `{ name, source, description?, keywords? }` — note the Open Plugins spec field is `keywords`, NOT
+ * the Claude/Cursor `tags`. Carries the workspace `name` and optional `owner`; `metadata.pluginRoot`
+ * stays at its default `"."` (omitted) because each entry's `source` is the full repo-root-relative
+ * path (OP-D4).
+ */
+function buildOpenPluginsRegistry(
+  workspace: AipmWorkspace,
+  plugins: readonly RegistryPluginInfo[],
+): Record<string, unknown> {
+  const { marketplace } = workspace;
+  const registry: Record<string, unknown> = { name: marketplace.name };
+  if (marketplace.owner !== undefined) {
+    registry['owner'] = marketplace.owner;
+  }
+  registry['plugins'] = plugins.map((p) => {
+    const entry: Record<string, unknown> = { name: p.name, source: p.source };
+    if (p.description !== undefined) entry['description'] = p.description;
+    if (p.keywords !== undefined) entry['keywords'] = [...p.keywords];
+    return entry;
+  });
+  return registry;
+}
+
+/**
  * Compute the generated marketplace registries for a repo, **without writing**. The single source
  * of truth shared by `runBuild` (which writes `expectedContent`) and the freshness check (which
  * compares the on-disk bytes against it).
  *
  * A registry file is produced for each registry-backed target (`claude` → `.claude-plugin/`,
- * `cursor` → `.cursor-plugin/`, `codex` → `.agents/plugins/`) that appears in **at least one**
- * plugin's envelope. Each registry lists exactly the plugins whose envelope includes that target,
- * in the order given (callers pass plugins sorted by discovery). Registries are sentinel-less.
+ * `cursor` → `.cursor-plugin/`, `codex` → `.agents/plugins/`, `open-plugins` → repo-root
+ * `marketplace.json`) that appears in **at least one** plugin's envelope. Each registry lists
+ * exactly the plugins whose envelope includes that target, in the order given (callers pass plugins
+ * sorted by discovery). Registries are sentinel-less.
+ *
+ * The repo-root Open Plugins registry is byte-computed here like any other, but its WRITING is
+ * routed through the collision-guarded generated-root sidecar path (OP-D5/VT-4) by the callers.
  *
  * @param repoRoot - Absolute repo root (where the registries live).
  * @param plugins - Discovered plugins with name/source/envelope/description/keywords.
@@ -316,14 +378,16 @@ export function computeRegistryArtifacts(
 ): RegistryArtifact[] {
   const artifacts: RegistryArtifact[] = [];
 
-  for (const target of ['claude', 'cursor', 'codex'] as const) {
+  for (const target of REGISTRY_TARGETS) {
     const members = plugins.filter((p) => p.envelope.includes(target));
     if (members.length === 0) continue; // no plugin declares this target → no registry file
 
     const obj =
       target === 'codex'
         ? buildCodexRegistry(workspace, members)
-        : buildStringSourceRegistry(workspace, members);
+        : target === 'open-plugins'
+          ? buildOpenPluginsRegistry(workspace, members)
+          : buildStringSourceRegistry(workspace, members);
 
     artifacts.push({
       target,
@@ -403,14 +467,16 @@ function bundleHostToTemp(host: SingleArtifactHost, pluginDir: string): string {
 }
 
 /**
- * A single repo-root file the toolkit generates for a single-artifact host. `relPath` is the path
- * relative to the repo root (POSIX-separated, the tracked-set form); `content` is the exact bytes.
+ * A single repo-root file the toolkit generates. `relPath` is the path relative to the repo root
+ * (POSIX-separated, the tracked-set form); `content` is the exact bytes. `owner` is the target the
+ * file belongs to — a single-artifact host (`gemini`/`kiro`) or a repo-root registry target
+ * (`open-plugins`). Collision suppression and sidecar attribution key on `owner`.
  */
 interface RootArtifactFile {
-  /** Repo-root-relative POSIX path (e.g. `gemini-extension.json`, `commands/foo.toml`). */
+  /** Repo-root-relative POSIX path (e.g. `gemini-extension.json`, `commands/foo.toml`, `marketplace.json`). */
   relPath: string;
-  /** The host whose bundle produced this file. */
-  host: SingleArtifactHost;
+  /** The target this file belongs to (a single-artifact host or a repo-root registry target). */
+  owner: TargetId;
   /** Exact bytes to write at the repo root. */
   content: Buffer;
 }
@@ -428,6 +494,41 @@ export interface RootArtifacts {
   trackedPaths: string[];
   /** Hard `single-artifact-host` findings — one per host declared by more than one plugin. */
   findings: Finding[];
+}
+
+/**
+ * Derive the repo-root registry files ({@link ROOT_REGISTRY_TARGETS}) from already-computed registry
+ * artifacts, as {@link RootArtifactFile}s. These flow through the same collision-guarded sidecar
+ * path as the single-artifact-host root files (OP-D5/VT-4), so a pre-existing foreign root
+ * `marketplace.json` raises `root-artifact-collision` and is never overwritten or orphan-removed.
+ */
+export function rootRegistryArtifactFiles(
+  repoRoot: string,
+  registries: readonly RegistryArtifact[],
+): RootArtifactFile[] {
+  return registries
+    .filter((r) => isRootRegistryTarget(r.target))
+    .map((r) => ({
+      relPath: path.relative(repoRoot, r.absPath).split(path.sep).join('/'),
+      owner: r.target,
+      content: Buffer.from(r.expectedContent, 'utf-8'),
+    }));
+}
+
+/**
+ * Merge the single-artifact-host root artifacts with the repo-root registry files into one
+ * {@link RootArtifacts}, so a single collision guard / sidecar tracked-set / orphan sweep covers
+ * every repo-root file the toolkit owns (OP-D5/VT-4, option (a)).
+ */
+export function mergeRootArtifacts(
+  base: RootArtifacts,
+  registryFiles: readonly RootArtifactFile[],
+): RootArtifacts {
+  const files = [...base.files, ...registryFiles];
+  const trackedPaths = [
+    ...new Set([...base.trackedPaths, ...registryFiles.map((f) => f.relPath)]),
+  ].sort();
+  return { files, trackedPaths, findings: base.findings };
 }
 
 /**
@@ -509,7 +610,7 @@ export function computeRootArtifacts(
         trackedPaths.add(relPosix);
         files.push({
           relPath: relPosix,
-          host,
+          owner: host,
           content: fs.readFileSync(path.join(tempDir, rel)),
         });
       }
@@ -526,14 +627,15 @@ export function computeRootArtifacts(
 /**
  * Build a hard `root-artifact-collision` finding for a repo-root path the toolkit would generate
  * but which is already occupied by a file it does NOT track as previously-generated (so the file
- * belongs to the host software / the author). Repo-scoped — names the offending path.
+ * belongs to the host software / the author). Repo-scoped — names the offending path and its owning
+ * target (a single-artifact host or a repo-root registry target such as `open-plugins`).
  */
-function rootCollisionFinding(host: SingleArtifactHost, relPath: string): Finding {
+function rootCollisionFinding(owner: TargetId, relPath: string): Finding {
   return {
     severity: 'hard',
     code: 'root-artifact-collision',
     message:
-      `Cannot emit the repo-root '${host}' artifact: '${relPath}' already exists and is not toolkit-generated. ` +
+      `Cannot emit the repo-root '${owner}' artifact: '${relPath}' already exists and is not toolkit-generated. ` +
       `Generation refuses to overwrite repo-root state it does not own.`,
     hint: `Move or remove '${relPath}' (or, if it is stale toolkit output, add it to ${ROOT_MANIFEST_REL.join('/')}) and re-run \`aipm build\`.`,
   };
@@ -544,31 +646,31 @@ function rootCollisionFinding(host: SingleArtifactHost, relPath: string): Findin
  * tracked set. A file collides when it exists on disk AND its repo-root-relative path is NOT in the
  * prior tracked set — i.e. it is not something the toolkit previously created, so it belongs to the
  * host/author and must not be clobbered (safety guard 3). A clean repo (no pre-existing root files)
- * never collides. Collision is evaluated PER HOST: if any of a host's files collide, that host is
- * suppressed entirely (no partial writes) and a single finding names the first offending path.
+ * never collides. Collision is evaluated PER OWNER: if any of an owner's files collide, that owner
+ * is suppressed entirely (no partial writes) and a single finding names the first offending path.
  *
- * Returns the collision findings plus the set of hosts that collided (so the caller can skip
+ * Returns the collision findings plus the set of owners that collided (so the caller can skip
  * writing/tracking their files). Pure — no I/O beyond `existsSync`.
  */
 export function detectRootCollisions(
   repoRoot: string,
   artifacts: RootArtifacts,
   priorTracked: readonly string[],
-): { findings: Finding[]; collidedHosts: Set<SingleArtifactHost> } {
+): { findings: Finding[]; collidedOwners: Set<TargetId> } {
   const priorSet = new Set(priorTracked);
   const findings: Finding[] = [];
-  const collidedHosts = new Set<SingleArtifactHost>();
+  const collidedOwners = new Set<TargetId>();
 
   for (const file of artifacts.files) {
-    if (collidedHosts.has(file.host)) continue; // already flagged this host's first collision
+    if (collidedOwners.has(file.owner)) continue; // already flagged this owner's first collision
     const abs = path.join(repoRoot, ...file.relPath.split('/'));
     if (fs.existsSync(abs) && !priorSet.has(file.relPath)) {
-      findings.push(rootCollisionFinding(file.host, file.relPath));
-      collidedHosts.add(file.host);
+      findings.push(rootCollisionFinding(file.owner, file.relPath));
+      collidedOwners.add(file.owner);
     }
   }
 
-  return { findings, collidedHosts };
+  return { findings, collidedOwners };
 }
 
 /**
@@ -734,51 +836,60 @@ export async function runBuild(targetPath: string, opts?: BuildOptions): Promise
     const allPluginDirs = isRepoRoot ? pluginDirs : (await discoverPlugins(repoRoot)).pluginDirs;
     const registryPlugins = await collectRegistryPlugins(repoRoot, allPluginDirs, configCache);
     const registries = computeRegistryArtifacts(repoRoot, registryPlugins, workspace);
-    const expectedPaths = new Set(registries.map((r) => r.absPath));
-    for (const registry of registries) {
+    // Split vendor-subdirectory registries (written + orphan-swept here, unchanged) from repo-root
+    // registries (open-plugins), whose writing/orphan-removal is collision-guarded via the
+    // generated-root sidecar below (OP-D5/VT-4) so a foreign root marketplace.json is never touched.
+    const vendorRegistries = registries.filter((r) => !isRootRegistryTarget(r.target));
+    const rootRegistries = registries.filter((r) => isRootRegistryTarget(r.target));
+    const vendorExpectedPaths = new Set(vendorRegistries.map((r) => r.absPath));
+    for (const registry of vendorRegistries) {
       writeFileEnsuringDir(registry.absPath, registry.expectedContent);
     }
-    // Remove ORPHANED registries: a managed `marketplace.json` for a target no longer declared by
-    // any plugin (e.g. the last `claude` plugin was dropped). Without this, a stale generated
-    // registry would linger in the working tree and stay committed. Only the toolkit-managed
-    // registry paths are ever touched.
-    for (const orphan of managedRegistryPaths(repoRoot)) {
-      if (!expectedPaths.has(orphan) && fs.existsSync(orphan)) {
+    // Remove ORPHANED vendor registries: a managed vendor `marketplace.json` for a target no longer
+    // declared by any plugin (e.g. the last `claude` plugin was dropped). Only the toolkit-managed
+    // vendor registry paths are ever touched — repo-root registries are handled by the sidecar path.
+    for (const orphan of managedVendorRegistryPaths(repoRoot)) {
+      if (!vendorExpectedPaths.has(orphan) && fs.existsSync(orphan)) {
         fs.rmSync(orphan);
       }
     }
-    // Record the generated registries as repo-level artifacts on every built plugin's result so
-    // they surface in BuildResult regardless of which plugin a single-plugin build targeted.
+    // Record the generated vendor registries as repo-level artifacts on every built plugin's result
+    // so they surface in BuildResult regardless of which plugin a single-plugin build targeted.
+    // (Root registries are recorded below, once the collision guard confirms they were emitted.)
     for (const result of results) {
-      for (const registry of registries) {
+      for (const registry of vendorRegistries) {
         result.artifacts.push({ path: registry.absPath, target: registry.target });
       }
     }
 
-    // ── Single-artifact-host repo-root native emission (gemini / kiro) ──────────
-    // These hosts install ONE extension/power per repo from the repo ROOT and have no marketplace
-    // concept, so the artifact is emitted at the repo root (not under dist/). Like registries, this
-    // is repo-level and computed from EVERY plugin so the N=1 gate sees the whole repo. The emit is
-    // safety-guarded: bundling happens in temp (never against repoRoot), a collision guard refuses
-    // to overwrite non-generated root files, and orphan removal is bounded to the prior tracked set
-    // recorded in the committed sidecar manifest.
+    // ── Repo-root native emission (gemini / kiro + repo-root registries) ────────
+    // Single-artifact hosts install ONE extension/power per repo from the repo ROOT; repo-root
+    // registries (open-plugins) put their `marketplace.json` at the root too. Both are repo-level and
+    // computed from EVERY plugin (the N=1 gate / registry membership sees the whole repo). The emit is
+    // safety-guarded: bundling happens in temp (never against repoRoot), a single collision guard
+    // refuses to overwrite non-generated root files (OP-D5), and orphan removal is bounded to the
+    // prior tracked set recorded in the committed sidecar manifest. Merging the root registries into
+    // the same tracked set (option (a)) unifies every repo-root file the toolkit owns.
     const priorTracked = readRootManifestPaths(repoRoot);
-    const root = computeRootArtifacts(repoRoot, registryPlugins, workspace);
-    const { collidedHosts } = detectRootCollisions(repoRoot, root, priorTracked);
+    const root = mergeRootArtifacts(
+      computeRootArtifacts(repoRoot, registryPlugins, workspace),
+      rootRegistryArtifactFiles(repoRoot, rootRegistries),
+    );
+    const { collidedOwners } = detectRootCollisions(repoRoot, root, priorTracked);
 
-    // The tracked set is only the paths we actually WRITE — files of a collided (suppressed) host
-    // are neither written nor tracked, so orphan removal can never delete a host-owned collider.
+    // The tracked set is only the paths we actually WRITE — files of a collided (suppressed) owner
+    // are neither written nor tracked, so orphan removal can never delete an author-owned collider.
     const writtenTracked = new Set<string>();
-    const emittedHosts = new Set<SingleArtifactHost>();
+    const emittedOwners = new Set<TargetId>();
     for (const file of root.files) {
-      if (collidedHosts.has(file.host)) continue;
+      if (collidedOwners.has(file.owner)) continue;
       const abs = path.join(repoRoot, ...file.relPath.split('/'));
       fs.mkdirSync(path.dirname(abs), { recursive: true });
       fs.writeFileSync(abs, file.content);
       writtenTracked.add(file.relPath);
-      emittedHosts.add(file.host);
+      emittedOwners.add(file.owner);
       for (const result of results) {
-        result.artifacts.push({ path: abs, target: file.host });
+        result.artifacts.push({ path: abs, target: file.owner });
       }
     }
 
@@ -799,14 +910,16 @@ export async function runBuild(targetPath: string, opts?: BuildOptions): Promise
     const trackedSorted = [...writtenTracked].sort();
     if (trackedSorted.length > 0 || fs.existsSync(manifestAbs)) {
       writeFileEnsuringDir(manifestAbs, serializeRootManifest(trackedSorted));
-      // The sidecar spans hosts but `GeneratedFile.target` is singular; attribute it to an
-      // actually-emitted host (deterministic order), and only when something was emitted this run.
-      // When the manifest is being emptied via orphan removal, no host produced it — don't record
-      // it as a host artifact.
-      const sidecarHost = (['gemini', 'kiro'] as const).find((h) => emittedHosts.has(h));
-      if (sidecarHost !== undefined) {
+      // The sidecar spans owners but `GeneratedFile.target` is singular; attribute it to an
+      // actually-emitted owner (deterministic order), and only when something was emitted this run.
+      // When the manifest is being emptied via orphan removal, no owner produced it — don't record
+      // it as an artifact.
+      const sidecarOwner = (['gemini', 'kiro', 'open-plugins'] as const).find((o) =>
+        emittedOwners.has(o),
+      );
+      if (sidecarOwner !== undefined) {
         for (const result of results) {
-          result.artifacts.push({ path: manifestAbs, target: sidecarHost });
+          result.artifacts.push({ path: manifestAbs, target: sidecarOwner });
         }
       }
     }

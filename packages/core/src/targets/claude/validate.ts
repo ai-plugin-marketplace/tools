@@ -22,6 +22,7 @@ import {
   metadataDirConformanceFindings,
   nameGrammarConformanceFindings,
 } from '../open-plugins-conformance.js';
+import { hasTraversalSegment } from '../path-safety.js';
 import {
   claudeAgentFrontmatterSchema,
   claudeHooksFileSchema,
@@ -141,7 +142,7 @@ function validateManifestFileRefs(pluginDir: string, pluginName: string): Findin
  * `null` for non-string values (inline records) and traversal-free paths.
  */
 function rejectPathTraversal(pluginName: string, field: string, value: unknown): Finding | null {
-  if (typeof value === 'string' && value.includes('..')) {
+  if (typeof value === 'string' && hasTraversalSegment(value)) {
     return hardFinding(
       pluginName,
       `.claude-plugin/plugin.json ${field} path must not contain "..": ${value}`,
@@ -170,7 +171,7 @@ function checkRef(
     );
   }
 
-  if (ref.includes('..')) {
+  if (hasTraversalSegment(ref)) {
     return hardFinding(
       pluginName,
       `.claude-plugin/plugin.json ${field} path must not contain "..": ${ref}`,

@@ -665,4 +665,26 @@ describe('validateClaudePlugin — mcpServers path traversal', () => {
     );
     expect(validateClaudePlugin(tmpDir).filter((f) => f.code === 'schema-invalid')).toEqual([]);
   });
+
+  // Regression (PR #30 review): a substring `includes('..')` check falsely rejected filenames that
+  // merely contain consecutive dots. Only a whole `..` SEGMENT is traversal.
+  it('accepts an mcpServers filename containing consecutive dots (./my..config.json)', () => {
+    writeFile(
+      tmpDir,
+      '.claude-plugin/plugin.json',
+      JSON.stringify({ name: 'test-plugin', mcpServers: './my..config.json' }),
+    );
+    expect(validateClaudePlugin(tmpDir).filter((f) => f.code === 'schema-invalid')).toEqual([]);
+  });
+
+  it('rejects a backslash-separated ".." segment in mcpServers (./a\\..\\b.json)', () => {
+    writeFile(
+      tmpDir,
+      '.claude-plugin/plugin.json',
+      JSON.stringify({ name: 'test-plugin', mcpServers: './a\\..\\b.json' }),
+    );
+    const hard = validateClaudePlugin(tmpDir).filter((f) => f.code === 'schema-invalid');
+    expect(hard).toHaveLength(1);
+    expect(hard[0]?.severity).toBe('hard');
+  });
 });

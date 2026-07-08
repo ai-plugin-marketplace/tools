@@ -28,6 +28,7 @@ import {
   metadataDirConformanceFindings,
   nameGrammarConformanceFindings,
 } from '../open-plugins-conformance.js';
+import { hasTraversalSegment } from '../path-safety.js';
 import { cursorPluginManifestSchema, cursorRuleFrontmatterSchema } from './schemas.js';
 
 // ---------------------------------------------------------------------------
@@ -115,7 +116,7 @@ function validateManifestFileRefs(pluginDir: string, pluginName: string): Findin
       }
 
       // Paths must not contain ".." segments (path traversal guard)
-      if (refPath.includes('..')) {
+      if (hasTraversalSegment(refPath)) {
         findings.push(
           makeInvalid(
             pluginName,
@@ -177,7 +178,7 @@ function validateManifestFileRefs(pluginDir: string, pluginName: string): Findin
  * records) and traversal-free paths.
  */
 function rejectPathTraversal(pluginName: string, field: string, value: unknown): Finding | null {
-  if (typeof value === 'string' && value.includes('..')) {
+  if (typeof value === 'string' && hasTraversalSegment(value)) {
     return makeInvalid(
       pluginName,
       `.cursor-plugin/plugin.json: ${field} path must not contain "..": ${value}`,

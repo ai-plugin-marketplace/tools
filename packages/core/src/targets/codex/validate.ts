@@ -23,6 +23,7 @@ import {
   metadataDirConformanceFindings,
   nameGrammarConformanceFindings,
 } from '../open-plugins-conformance.js';
+import { hasTraversalSegment } from '../path-safety.js';
 import { codexPluginManifestSchema } from './schemas.js';
 
 // ---------------------------------------------------------------------------
@@ -109,7 +110,7 @@ function validateManifestFileRefs(pluginDir: string, pluginName: string): Findin
       }
 
       // Paths must not contain ".." segments (path traversal guard)
-      if (refPath.includes('..')) {
+      if (hasTraversalSegment(refPath)) {
         findings.push(
           makeInvalid(
             pluginName,
@@ -160,7 +161,7 @@ function validateManifestFileRefs(pluginDir: string, pluginName: string): Findin
   // traversal in them must still be rejected hard (spec §7 item 1).
   for (const field of ['hooks', 'mcpServers', 'apps'] as const) {
     const value = manifest[field];
-    if (typeof value === 'string' && value.includes('..')) {
+    if (typeof value === 'string' && hasTraversalSegment(value)) {
       findings.push(
         makeInvalid(
           pluginName,

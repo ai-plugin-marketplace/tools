@@ -20,6 +20,8 @@ Or, cross-tool via the universal [`plugins`](https://github.com/vercel-labs/plug
 npx plugins add ai-plugin-marketplace/tools
 ```
 
+The toolkit also emits a vendor-neutral **[Open Plugins](https://open-plugins.com)** target: a repo built with `aipm` that declares `open-plugins` publishes a repo-root `marketplace.json` (Open Plugins lookup position 1) alongside the native `.plugin/plugin.json` manifests, so it is installable by **any Open-Plugins-conformant host** rather than only the hosts listed above.
+
 Then ask your agent to _"add AI plugin marketplace support to this repo"_ and the skill walks it through the rest.
 
 ## Packages

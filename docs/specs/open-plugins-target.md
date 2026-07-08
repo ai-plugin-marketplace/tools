@@ -347,6 +347,19 @@ the Claude manifest is broken. `open-plugins-conformance` says precisely what it
 for your declared targets, and here is what Open Plugins would additionally want." (api-semantics:
 name by meaning, not by the nearest already-wired mechanism.)
 
+> **Implementation amendment (conformance PR).** OP-D10's **first** advisory — a non-`./`-prefixed
+> component/manifest path — **shipped vacuous and was dropped.** The premise above (that a non-`./`
+> path is "valid Claude") does not hold against the shipped `claude`/`cursor`/`codex` manifest
+> schemas: every path field already **requires** the `./` prefix via regex, so a bare path is a
+> **hard `schema-invalid`**, leaving the soft advisory an empty domain (nothing native-valid to
+> advise on). Rather than relax the native schemas to manufacture a case for it, the conformance PR
+> **omitted** this advisory. Its real intent — rejecting unsafe paths — is instead served by
+> **hardening `..` parent-traversal rejection**: a `..` segment in the `mcpServers` (and Codex
+> `apps`/`hooks`) config-path fields, previously unchecked because those paths are not
+> existence-validated, is now a hard `schema-invalid` across all three native targets. OP-D10's other
+> two advisories (metadata-dir isolation and name-grammar drift) shipped as written and are always
+> soft.
+
 ---
 
 ## 8. Reconciliation with the unmerged adapter-system draft
@@ -431,9 +444,12 @@ repo-root `marketplace.json`.
   decisions rest on host binaries observed on 2026-07-07. Re-verify against the current Claude Code
   and Cursor builds **before** flipping any env-var or registry decision. Treat the "Host behavior
   verified" date in the header as the freshness stamp.
-- **VT-4 — Close the root-registry collision seam.** Confirm (and implement, §3.3) that the root
-  `marketplace.json` is covered by the generated-root sidecar tracking so `root-artifact-collision`
-  actually protects it — today the sidecar tracks only single-artifact-host files.
+- **VT-4 — Close the root-registry collision seam. ✅ CLOSED (implemented in the target PR).** The
+  repo-root `marketplace.json` is now routed through the generated-root sidecar tracking — spec §3.3
+  option (a) — so `root-artifact-collision` protects it: a pre-existing foreign root `marketplace.json`
+  raises a hard finding and is never overwritten or orphan-removed, and the vendor-dir registries keep
+  their prior behavior. The single-artifact-host root files and the root registry now share one tracked
+  set. Verified by dedicated build/registry tests (foreign-file collision + orphan removal).
 
 ### 10.2 Open questions
 

@@ -119,6 +119,9 @@ template/
 │   └── marketplace.json       # Claude Code marketplace registry (see §4.4)
 ├── .cursor-plugin/
 │   └── marketplace.json       # Cursor marketplace registry (see §4.4)
+├── .agents/plugins/
+│   └── marketplace.json       # Codex marketplace registry (see §4.4)
+├── marketplace.json           # Open Plugins repo-root registry (see §4.4)
 ├── plugins/
 │   └── <plugin-name>/         # Per-plugin directory — see §4
 ├── dist/                      # Generated standalone bundles (committed)
@@ -237,7 +240,7 @@ The freshness check (§10.5) rejects any generated file whose content doesn't ma
 
 ### 4.4 Marketplace registry
 
-`.claude-plugin/marketplace.json` and `.cursor-plugin/marketplace.json` live at the **template repo root**, not in any single plugin. They are template-level registries listing every plugin by name and source path. Each plugin contributes an entry; the registries themselves are owned and validated at the template level. Consistency between plugins and their registry entries is checked by §10.1.4.
+The toolkit generates **four** repo-root marketplace registries, one per registry-backed target (each emitted only when at least one plugin declares that target): `.claude-plugin/marketplace.json` (Claude), `.cursor-plugin/marketplace.json` (Cursor), `.agents/plugins/marketplace.json` (Codex), and — as the 4th — a repo-root `marketplace.json` (Open Plugins, at the spec's lookup position 1; see `open-plugins-target.md` OP-D3). All live at the **template repo root**, not in any single plugin. They are template-level registries listing every plugin by name and source path. Each plugin contributes an entry; the registries themselves are owned and validated at the template level. Consistency between plugins and their registry entries is checked by §10.1.4. The repo-root `marketplace.json` is additionally collision-guarded via the generated-root sidecar (a pre-existing foreign file raises a hard `root-artifact-collision`).
 
 ---
 
@@ -388,7 +391,14 @@ export function addTarget(pluginDir: string, target: TargetId): Promise<void>;
 export function listTargets(): TargetId[];
 
 // Types
-export type TargetId = 'claude' | 'cursor' | 'gemini' | 'kiro' | 'vercel';
+export type TargetId =
+  | 'claude'
+  | 'codex'
+  | 'cursor'
+  | 'gemini'
+  | 'kiro'
+  | 'open-plugins' // vendor-neutral Open Plugins standard (open-plugins.com); see open-plugins-target.md
+  | 'vercel';
 
 export interface BuildResult {
   plugin: string; // plugin name
@@ -412,12 +422,19 @@ export interface ValidationResult {
 // removing or renaming a code is MAJOR. Consumers SHOULD handle unknown codes gracefully.
 export type FindingCode =
   | 'envelope-invalid' // aipm.config.ts is malformed
+  | 'repo-config-invalid' // aipm.repo.ts is malformed
   | 'envelope-adherence' // file exists for a target outside the envelope
   | 'schema-invalid' // target manifest failed Zod validation
   | 'name-consistency' // plugin name mismatch across manifests
   | 'mcp-key-sync' // .mcp.json vs mcp.json server keys diverge
   | 'marketplace-registration' // plugin-to-registry projection is wrong
-  | 'freshness'; // generated file drifted from what `aipm build` would produce
+  | 'freshness' // generated file drifted from what `aipm build` would produce
+  | 'single-artifact-host' // a single-artifact host (gemini/kiro) is declared by >1 plugin
+  | 'root-artifact-collision' // a generated repo-root path is occupied by a non-toolkit file
+  | 'default-marketplace-name' // marketplace name/owner is still a template placeholder (always soft)
+  | 'frontmatter-invalid' // a skill/agent/command/POWER.md frontmatter is not strict YAML
+  | 'metadata-dir-isolation' // the Open Plugins `.plugin/` dir holds more than plugin.json (hard, open-plugins target)
+  | 'open-plugins-conformance'; // soft advisory: native plugin is not Open-Plugins-portable (arrives with the conformance PR)
 
 export interface Finding {
   severity: 'hard' | 'soft';
@@ -723,7 +740,7 @@ Three phases.
 
 Proposals that require these will be rejected unless accompanied by a replacement spec.
 
-- **A unified manifest format.** P1.
+- **A unified manifest format.** P1. Note this forbids the toolkit **inventing** a unified authoring format that authors write into and the toolkit fans out from; adopting an **externally standardized** host format (Open Plugins, open-plugins.com) as one more target — projected from the same authored source as every other target — is P1-conformant, not a violation (see `open-plugins-target.md` OP-D1).
 - **Automatic cross-target adaptation.** P2, §7.3.
 - **Runtime execution of plugins.** Build-time only.
 - **Lowest-common-denominator fallback as a toolkit responsibility.** Vercel Skills CLI support is authored explicitly, like any other target.

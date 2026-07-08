@@ -19,6 +19,7 @@ import { validateCodexPlugin } from '../targets/codex/validate.js';
 import { validateCursorPlugin } from '../targets/cursor/validate.js';
 import { validateGeminiPlugin } from '../targets/gemini/validate.js';
 import { validateKiroPlugin } from '../targets/kiro/validate.js';
+import { validateOpenPluginsPlugin } from '../targets/open-plugins/validate.js';
 import { validateVercelPlugin } from '../targets/vercel/validate.js';
 import {
   collectFilesRelative,
@@ -28,10 +29,14 @@ import {
   computeRegistryArtifacts,
   computeRootArtifacts,
   detectRootCollisions,
+  isRootRegistryTarget,
   managedRegistryPaths,
+  managedVendorRegistryPaths,
+  mergeRootArtifacts,
   readRootManifestPaths,
   regenerateBundleToTemp,
   rootManifestPath,
+  rootRegistryArtifactFiles,
   serializeRootManifest,
 } from './build.js';
 import type { RegistryArtifact } from './build.js';
@@ -66,6 +71,7 @@ const TARGET_OWNED_ARTIFACTS: Record<TargetId, string[]> = {
   cursor: ['.cursor-plugin/plugin.json', '.cursor-plugin'],
   gemini: ['gemini-extension.json', 'GEMINI.md'],
   kiro: ['POWER.md', 'mcp.json'],
+  'open-plugins': ['.plugin/plugin.json', '.plugin'],
   vercel: [],
 };
 
@@ -74,7 +80,7 @@ const TARGET_OWNED_ARTIFACTS: Record<TargetId, string[]> = {
  * `.mcp.json` is the Claude/Cursor/Codex MCP config format, shared between those targets.
  */
 const SHARED_ARTIFACTS: { file: string; anyOf: TargetId[] }[] = [
-  { file: '.mcp.json', anyOf: ['claude', 'codex', 'cursor'] },
+  { file: '.mcp.json', anyOf: ['claude', 'codex', 'cursor', 'open-plugins'] },
 ];
 
 /**
@@ -88,6 +94,7 @@ export const TARGET_MIN_REQUIRED: Record<TargetId, string[]> = {
   cursor: ['.cursor-plugin/plugin.json'],
   gemini: ['gemini-extension.json'],
   kiro: ['POWER.md'],
+  'open-plugins': ['.plugin/plugin.json'],
   vercel: [],
 };
 
@@ -661,6 +668,23 @@ export function validateNameConsistency(
         }
         break;
       }
+      case 'open-plugins': {
+        const manifestPath = path.join(pluginDir, '.plugin/plugin.json');
+        if (!fs.existsSync(manifestPath)) break;
+        const manifest = tryReadJson(manifestPath);
+        const parsed = z.object({ name: z.string().optional() }).loose().safeParse(manifest);
+        if (!parsed.success || parsed.data.name === undefined) break;
+        if (parsed.data.name !== expectedName) {
+          findings.push(
+            hard(
+              'name-consistency',
+              expectedName,
+              `'.plugin/plugin.json' has name '${parsed.data.name}' but plugin directory is '${expectedName}'.`,
+            ),
+          );
+        }
+        break;
+      }
       case 'vercel': {
         // Vercel has no top-level plugin name field — skip
         break;
@@ -761,6 +785,11 @@ const MARKETPLACE_REGISTRY_CHECKS: MarketplaceRegistryDescriptor[] = [
     target: 'codex',
     marketplaceRel: ['.agents', 'plugins', 'marketplace.json'],
     extractSource: extractCodexSource,
+  },
+  {
+    target: 'open-plugins',
+    marketplaceRel: ['marketplace.json'],
+    extractSource: extractStringSource,
   },
 ];
 
@@ -938,6 +967,7 @@ const TARGET_VALIDATORS: Record<TargetId, (pluginDir: string) => Finding[]> = {
   cursor: validateCursorPlugin,
   gemini: validateGeminiPlugin,
   kiro: validateKiroPlugin,
+  'open-plugins': validateOpenPluginsPlugin,
   vercel: validateVercelPlugin,
 };
 
@@ -1092,7 +1122,12 @@ async function checkRegistryFreshness(
   let expected: RegistryArtifact[];
   try {
     const registryPlugins = await collectRegistryPlugins(repoRoot, pluginDirs, cache);
-    expected = computeRegistryArtifacts(repoRoot, registryPlugins, workspace);
+    // Repo-root registries (open-plugins) are collision-guarded and freshness-checked via the
+    // generated-root sidecar path (checkRootArtifactFreshness); exclude them here so their
+    // missing/stale/orphan state is reported once, not double-counted.
+    expected = computeRegistryArtifacts(repoRoot, registryPlugins, workspace).filter(
+      (r) => !isRootRegistryTarget(r.target),
+    );
   } catch (err) {
     // A plugin config that won't load is reported per-plugin as envelope-invalid elsewhere; here
     // we surface the inability to compute the registry oracle as repo-scoped freshness drift.
@@ -1138,7 +1173,7 @@ async function checkRegistryFreshness(
   // `expected`, so the loop above can't see it. Flag any managed registry path that exists on disk
   // but isn't expected — `aipm build` removes these, so its presence means the tree is stale.
   const expectedPaths = new Set(expected.map((r) => r.absPath));
-  for (const orphan of managedRegistryPaths(repoRoot)) {
+  for (const orphan of managedVendorRegistryPaths(repoRoot)) {
     if (!expectedPaths.has(orphan) && fs.existsSync(orphan)) {
       const rel = path.relative(repoRoot, orphan);
       findings.push(
@@ -1187,7 +1222,17 @@ async function checkRootArtifactFreshness(
   let root: ReturnType<typeof computeRootArtifacts>;
   try {
     const plugins = await collectRegistryPlugins(repoRoot, pluginDirs, cache);
-    root = computeRootArtifacts(repoRoot, plugins, workspace);
+    // Merge the repo-root registries (open-plugins) into the root-artifact set so ONE collision
+    // guard, sidecar tracked-set, and orphan sweep cover every repo-root file the toolkit owns
+    // (OP-D5/VT-4, option (a)). A foreign root marketplace.json therefore raises
+    // `root-artifact-collision` and is never overwritten or orphan-removed.
+    const rootRegistries = computeRegistryArtifacts(repoRoot, plugins, workspace).filter((r) =>
+      isRootRegistryTarget(r.target),
+    );
+    root = mergeRootArtifacts(
+      computeRootArtifacts(repoRoot, plugins, workspace),
+      rootRegistryArtifactFiles(repoRoot, rootRegistries),
+    );
   } catch (err) {
     // A plugin config that won't load is reported per-plugin as envelope-invalid elsewhere; only
     // surface the inability to compute the root oracle as freshness drift when freshness is checked.
@@ -1213,7 +1258,7 @@ async function checkRootArtifactFreshness(
   // Also surfaced regardless of `skipFreshness` — a collision is a structural refusal, not drift.
   const priorTracked = readRootManifestPaths(repoRoot);
   const collisions = detectRootCollisions(repoRoot, root, priorTracked);
-  const { collidedHosts } = collisions;
+  const { collidedOwners } = collisions;
   findings.push(...collisions.findings);
 
   // The freshness-coded checks (missing/stale/orphan/sidecar) are skipped after a fresh build.
@@ -1223,7 +1268,7 @@ async function checkRootArtifactFreshness(
   // the canonical expected tracked set the sidecar must match.
   const expectedTracked: string[] = [];
   for (const file of root.files) {
-    if (collidedHosts.has(file.host)) continue;
+    if (collidedOwners.has(file.owner)) continue;
     const rel = file.relPath;
     expectedTracked.push(rel);
     const abs = path.join(repoRoot, ...rel.split('/'));

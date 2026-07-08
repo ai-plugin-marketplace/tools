@@ -79,6 +79,7 @@ describe('aipm list-targets', () => {
       'cursor',
       'gemini',
       'kiro',
+      'open-plugins',
       'vercel',
     ]);
   });

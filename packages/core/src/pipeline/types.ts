@@ -13,7 +13,14 @@
  *
  * @public
  */
-export type TargetId = 'claude' | 'codex' | 'cursor' | 'gemini' | 'kiro' | 'vercel';
+export type TargetId =
+  | 'claude'
+  | 'codex'
+  | 'cursor'
+  | 'gemini'
+  | 'kiro'
+  | 'open-plugins'
+  | 'vercel';
 
 /**
  * Canonical list of target IDs known to this toolkit version. Runtime-exposed so
@@ -36,6 +43,7 @@ export const TARGET_IDS = [
   'cursor',
   'gemini',
   'kiro',
+  'open-plugins',
   'vercel',
 ] as const satisfies readonly TargetId[];
 
@@ -140,6 +148,13 @@ export interface ValidationResult {
  * the earlier one's plugins — so a placeholder must be renamed to a unique value. Always SOFT: a
  * warning, never a build failure.
  *
+ * `metadata-dir-isolation` — the Open Plugins metadata directory (`.plugin/`) contains an entry
+ * other than `plugin.json`. The Open Plugins v1.0.0 spec requires the metadata directory to contain
+ * ONLY `plugin.json`; any sibling file/dir violates that MUST. Fires HARD, and only for the
+ * `open-plugins` target — the native vendor dirs (`.claude-plugin/`, `.cursor-plugin/`) are allowed
+ * to hold a `marketplace.json`, so this check is scoped to `.plugin/` specifically.
+ * @see https://open-plugins.com/plugin-builders/specification.md
+ *
  * @public
  */
 export type FindingCode =
@@ -154,7 +169,8 @@ export type FindingCode =
   | 'single-artifact-host'
   | 'root-artifact-collision'
   | 'default-marketplace-name'
-  | 'frontmatter-invalid';
+  | 'frontmatter-invalid'
+  | 'metadata-dir-isolation';
 
 /**
  * A single validation finding.

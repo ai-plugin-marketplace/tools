@@ -155,6 +155,17 @@ export interface ValidationResult {
  * to hold a `marketplace.json`, so this check is scoped to `.plugin/` specifically.
  * @see https://open-plugins.com/plugin-builders/specification.md
  *
+ * `open-plugins-conformance` — a SOFT, advisory-only portability nudge emitted on native
+ * `claude`/`cursor`/`codex` plugins (whether or not `open-plugins` is in the envelope) when the
+ * plugin is native-valid but would need a change to be Open-Plugins-conformant: a plugin `name`
+ * that is legal for the native target but violates the Open Plugins name grammar (grammar drift),
+ * or a stray non-`plugin.json` file in the plugin's vendor metadata dir (`.claude-plugin/` etc.,
+ * which Open Plugins requires to be isolated). ALWAYS SOFT — it never flips
+ * `ValidationResult.passed`; the identical rules apply HARD only inside the `open-plugins` target
+ * (spec §7 / OP-D10). A distinct code (not `schema-invalid`) because the manifest is not broken for
+ * its declared targets — this says "fine as-is; here is what Open Plugins would additionally want".
+ * @see docs/specs/open-plugins-target.md §7
+ *
  * @public
  */
 export type FindingCode =
@@ -170,7 +181,8 @@ export type FindingCode =
   | 'root-artifact-collision'
   | 'default-marketplace-name'
   | 'frontmatter-invalid'
-  | 'metadata-dir-isolation';
+  | 'metadata-dir-isolation'
+  | 'open-plugins-conformance';
 
 /**
  * A single validation finding.

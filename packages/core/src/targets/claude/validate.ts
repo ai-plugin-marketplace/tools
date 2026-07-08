@@ -19,6 +19,11 @@ import { parse as parseYaml } from 'yaml';
 
 import type { Finding } from '../../pipeline/types.js';
 import {
+  metadataDirConformanceFindings,
+  nameGrammarConformanceFindings,
+} from '../open-plugins-conformance.js';
+import { hasTraversalSegment } from '../path-safety.js';
+import {
   claudeAgentFrontmatterSchema,
   claudeHooksFileSchema,
   claudePluginManifestSchema,
@@ -123,7 +128,28 @@ function validateManifestFileRefs(pluginDir: string, pluginName: string): Findin
     if (finding !== null) findings.push(finding);
   }
 
+  // mcpServers: a config-path string is NOT existence-checked (it names a `.mcp.json` config, not a
+  // component tree), but a `..` parent-traversal in it must still be rejected hard (spec §7 item 1).
+  const mcpTraversal = rejectPathTraversal(pluginName, 'mcpServers', manifest.mcpServers);
+  if (mcpTraversal !== null) findings.push(mcpTraversal);
+
   return findings;
+}
+
+/**
+ * Reject (HARD `schema-invalid`) a `..` parent-traversal segment in a string config-path field that
+ * is not covered by {@link checkRef}'s existence-based validation (e.g. `mcpServers`). Returns
+ * `null` for non-string values (inline records) and traversal-free paths.
+ */
+function rejectPathTraversal(pluginName: string, field: string, value: unknown): Finding | null {
+  if (typeof value === 'string' && hasTraversalSegment(value)) {
+    return hardFinding(
+      pluginName,
+      `.claude-plugin/plugin.json ${field} path must not contain "..": ${value}`,
+      `remove parent-directory traversal segments from the path`,
+    );
+  }
+  return null;
 }
 
 type RefKind = 'directory' | 'md-file' | 'json-file' | 'any';
@@ -145,7 +171,7 @@ function checkRef(
     );
   }
 
-  if (ref.includes('..')) {
+  if (hasTraversalSegment(ref)) {
     return hardFinding(
       pluginName,
       `.claude-plugin/plugin.json ${field} path must not contain "..": ${ref}`,
@@ -365,5 +391,43 @@ export function validateClaudePlugin(pluginDir: string): Finding[] {
     ...validateManifestFileRefs(pluginDir, pluginName),
     ...validateAgentFrontmatter(pluginDir, pluginName),
     ...validateHooksFile(pluginDir, pluginName),
+    ...validateOpenPluginsConformance(pluginDir, pluginName),
   ];
+}
+
+/**
+ * SOFT Open Plugins conformance advisories for a Claude plugin (spec §7 / OP-D10): name-grammar
+ * drift and vendor metadata-dir isolation. These never fail the plugin — they only surface what
+ * Open Plugins would additionally want.
+ *
+ * The name-grammar advisory fires only for a NATIVE-VALID manifest: a name that is invalid for
+ * Claude already draws a hard finding, so the soft advisory is reserved for genuine drift (a name
+ * Claude accepts but Open Plugins rejects, e.g. `a--b`). The metadata-dir advisory is filesystem-
+ * only, independent of manifest validity.
+ */
+function validateOpenPluginsConformance(pluginDir: string, pluginName: string): Finding[] {
+  const vendorDir = '.claude-plugin';
+  const findings: Finding[] = [];
+
+  const manifestPath = path.join(pluginDir, vendorDir, 'plugin.json');
+  if (fs.existsSync(manifestPath)) {
+    try {
+      const raw: unknown = JSON.parse(fs.readFileSync(manifestPath, 'utf-8'));
+      const parsed = claudePluginManifestSchema.safeParse(raw);
+      if (parsed.success) {
+        findings.push(
+          ...nameGrammarConformanceFindings(
+            pluginName,
+            `${vendorDir}/plugin.json`,
+            parsed.data.name,
+          ),
+        );
+      }
+    } catch {
+      // Malformed JSON is reported by the hard validators; no advisory here.
+    }
+  }
+
+  findings.push(...metadataDirConformanceFindings(pluginDir, vendorDir, pluginName));
+  return findings;
 }

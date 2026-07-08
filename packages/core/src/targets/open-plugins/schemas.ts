@@ -27,27 +27,16 @@
 
 import { z } from 'zod';
 
+import { openPluginsNameSchema } from '../open-plugins-conformance.js';
+
 // ---------------------------------------------------------------------------
 // Shared sub-schemas
 // ---------------------------------------------------------------------------
 
-/**
- * Open Plugins `name` grammar (spec §2.1): 1–64 chars, lowercase alphanumeric plus `-` and `.`,
- * alphanumeric start AND end, no consecutive `--`, no consecutive `..`. The char-class/anchor
- * regex equals Cursor's installed runtime regex `^[a-z0-9]([a-z0-9.-]*[a-z0-9])?$` (empirical
- * §5.2), and the two `refine`s add the spec's "no `--` / no `..`" MUSTs. A single character is
- * legal (the optional inner+trailing group).
- */
-const openPluginsNameSchema = z
-  .string()
-  .min(1, 'name must be at least 1 character')
-  .max(64, 'name must be at most 64 characters')
-  .regex(
-    /^[a-z0-9]([a-z0-9.-]*[a-z0-9])?$/,
-    'name must be lowercase alphanumeric with hyphens/periods, starting and ending alphanumeric',
-  )
-  .refine((v) => !v.includes('--'), 'name must not contain consecutive hyphens ("--")')
-  .refine((v) => !v.includes('..'), 'name must not contain consecutive periods ("..")');
+// The Open Plugins `name` grammar (spec §2.1) lives in the shared `open-plugins-conformance` module
+// (`openPluginsNameSchema`) — the single source of truth shared with the SOFT conformance advisories
+// that apply the identical grammar to native targets (spec §7). Imported here so a violation is HARD
+// inside the `open-plugins` target while staying a SOFT advisory elsewhere, with no rule duplication.
 
 /**
  * A single component/source path (spec §2.1): MUST be `./`-relative with no parent traversal.

@@ -22,7 +22,7 @@ export default defineRepoConfig({
 
 Both paths are **repo-root-relative** and must stay within the repo (no absolute paths, no `..`) — host platforms resolve a plugin's `source` relative to the repo root, so an escaping root would be unrepresentable. An invalid `aipm.repo.ts` surfaces as a `repo-config-invalid` validation finding rather than a crash.
 
-What stays fixed are the things host platforms read by exact name: the per-target plugin manifests (`.claude-plugin/plugin.json`, `.codex-plugin/plugin.json`, …) and the marketplace registries at the repo root (`.claude-plugin/marketplace.json`, `.cursor-plugin/marketplace.json`, `.agents/plugins/marketplace.json`). `aipm.repo.ts` moves only _where your plugin sources live on disk_; the registry `source` entries are rewritten to point at the relocated root automatically.
+What stays fixed are the things host platforms read by exact name: the per-target plugin manifests (`.claude-plugin/plugin.json`, `.codex-plugin/plugin.json`, `.plugin/plugin.json`, …) and the marketplace registries at the repo root (`.claude-plugin/marketplace.json`, `.cursor-plugin/marketplace.json`, `.agents/plugins/marketplace.json`, and the repo-root `marketplace.json` that Open Plugins hosts read). `aipm.repo.ts` moves only _where your plugin sources live on disk_; the registry `source` entries are rewritten to point at the relocated root automatically.
 
 ## Steps
 
@@ -138,6 +138,7 @@ unraid-cli/
 ├── .claude-plugin/marketplace.json   # registry (repo root)
 ├── .cursor-plugin/marketplace.json   # registry (repo root)
 ├── .agents/plugins/marketplace.json  # Codex registry (repo root)
+├── marketplace.json                  # Open Plugins registry (repo root)
 └── agent-plugins/                    # relocated plugins root
     ├── unraid-diagnostics/
     │   ├── aipm.config.ts

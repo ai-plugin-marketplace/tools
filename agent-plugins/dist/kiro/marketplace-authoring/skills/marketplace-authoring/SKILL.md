@@ -14,7 +14,9 @@ version together — using the `@ai-plugin-marketplace` toolkit (the `aipm` CLI)
 
 - **Author once per target, install natively.** Each host platform gets its own native surface;
   `aipm` does not invent a universal manifest. The targets are `claude`, `codex`, `cursor`,
-  `gemini`, `kiro`, and `vercel` (the universal agentskills/open-plugin surface).
+  `gemini`, `kiro`, `open-plugins` (the vendor-neutral [Open Plugins](https://open-plugins.com)
+  standard — an external spec `aipm` emits to, not a format it invents), and `vercel` (the
+  [agentskills.io](https://agentskills.io) skills-only surface).
 - **Marketplace hosts vs. single-artifact hosts.** Claude Code, Cursor, and Codex support a
   **multi-plugin marketplace** from a git repo (a generated `marketplace.json` at the repo root).
   **Gemini and Kiro have no marketplace concept** — they install one extension/power per repo from

@@ -133,11 +133,16 @@ export function adaptMatcherBlockToCursorEntries(block: ClaudeHookMatcherBlock):
       : undefined;
 
   const entries = block.hooks ?? [];
-  return entries.map((entry) => {
-    const cursorEntry: CursorHookEntry = { command: entry.command ?? '' };
+  return entries.flatMap((entry) => {
+    // Drop structurally-odd entries with a missing/empty command rather than inventing an empty
+    // string: emitting a Cursor hook with `command: ''` would be a silently-broken hook. Dropping
+    // keeps the transform total over malformed input, consistent with the "unsupported event is
+    // dropped" rule.
+    if (typeof entry.command !== 'string' || entry.command.trim() === '') return [];
+    const cursorEntry: CursorHookEntry = { command: entry.command };
     if (entry.type !== undefined) cursorEntry.type = entry.type;
     if (translatedMatcher !== undefined) cursorEntry.matcher = translatedMatcher;
-    return cursorEntry;
+    return [cursorEntry];
   });
 }
 

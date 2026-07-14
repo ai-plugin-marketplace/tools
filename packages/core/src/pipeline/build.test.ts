@@ -285,10 +285,12 @@ describeMaybe('runBuild — post-build validation (§5.4)', () => {
 // ---------------------------------------------------------------------------
 
 describe('computePluginHookArtifacts — cursor branch', () => {
-  let pluginDir: string;
+  let pluginDir: string | undefined;
 
   afterEach(() => {
-    if (fs.existsSync(pluginDir)) fs.rmSync(pluginDir, { recursive: true });
+    // Guard the cleanup: if a test fails before `pluginDir` is assigned, an unguarded
+    // `fs.existsSync(undefined)` throws `path must be a string` and masks the real failure.
+    if (pluginDir && fs.existsSync(pluginDir)) fs.rmSync(pluginDir, { recursive: true });
   });
 
   /** Write a plugin dir containing hooks/claude.yaml and return its absolute path. */

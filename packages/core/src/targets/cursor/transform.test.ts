@@ -133,6 +133,23 @@ describe('adaptMatcherBlockToCursorEntries', () => {
   it('returns an empty array for a block with no hooks[]', () => {
     expect(adaptMatcherBlockToCursorEntries({ matcher: 'Read' })).toStrictEqual([]);
   });
+
+  it('drops entries whose command is missing or empty, keeping valid siblings in the same block', () => {
+    // Malformed source YAML can yield a hooks[] element with no `command` (or an empty/whitespace
+    // one). Emitting `{ command: '' }` would be a silently-broken Cursor hook, so such entries are
+    // dropped — while a valid sibling in the same block is still emitted (spec §3.1: keep the
+    // transform total over structurally-odd input).
+    const entries = adaptMatcherBlockToCursorEntries({
+      matcher: 'Bash',
+      hooks: [
+        { type: 'command' }, // missing command → dropped
+        { type: 'command', command: '   ' }, // whitespace-only command → dropped
+        { type: 'command', command: '' }, // empty command → dropped
+        { type: 'command', command: './valid.sh' }, // valid sibling → kept
+      ],
+    });
+    expect(entries).toStrictEqual([{ command: './valid.sh', type: 'command', matcher: 'Shell' }]);
+  });
 });
 
 // ---------------------------------------------------------------------------

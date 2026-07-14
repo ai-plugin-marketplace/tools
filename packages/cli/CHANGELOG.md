@@ -1,5 +1,26 @@
 # @ai-plugin-marketplace/cli
 
+## 0.4.0
+
+### Minor Changes
+
+- [#28](https://github.com/ai-plugin-marketplace/tools/pull/28) [`38e53a7`](https://github.com/ai-plugin-marketplace/tools/commit/38e53a7bebfae7f4423d21907e52f36a3039ea38) Thanks [@mike-north](https://github.com/mike-north)! - Recognize the new `open-plugins` target across the CLI. `aipm list-targets` now lists
+  `open-plugins`, `aipm scaffold` includes it in the default envelope (emitting `.plugin/plugin.json`
+  and a repo-root `marketplace.json`), and `aipm add-target <plugin> open-plugins`, `aipm build`, and
+  `aipm validate` handle it like any other host target.
+
+### Patch Changes
+
+- Updated dependencies [[`0f4eece`](https://github.com/ai-plugin-marketplace/tools/commit/0f4eecea4ced472e6723a1bfa37016496cdb88b1), [`a560f7c`](https://github.com/ai-plugin-marketplace/tools/commit/a560f7c239bca0b5c1264240ec41739846fe5cfa), [`38e53a7`](https://github.com/ai-plugin-marketplace/tools/commit/38e53a7bebfae7f4423d21907e52f36a3039ea38)]:
+  - @ai-plugin-marketplace/core@0.6.0
+
+## 0.3.1
+
+### Patch Changes
+
+- Updated dependencies [[`0bfc191`](https://github.com/ai-plugin-marketplace/tools/commit/0bfc191e54cb76d5ca223bfec6f5efbd223fcbd9), [`8c7bef1`](https://github.com/ai-plugin-marketplace/tools/commit/8c7bef1d65a3614924775c643550d384d342d7a7)]:
+  - @ai-plugin-marketplace/core@0.5.0
+
 ## 0.3.0
 
 ### Minor Changes

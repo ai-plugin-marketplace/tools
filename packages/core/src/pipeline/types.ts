@@ -13,7 +13,14 @@
  *
  * @public
  */
-export type TargetId = 'claude' | 'codex' | 'cursor' | 'gemini' | 'kiro' | 'vercel';
+export type TargetId =
+  | 'claude'
+  | 'codex'
+  | 'cursor'
+  | 'gemini'
+  | 'kiro'
+  | 'open-plugins'
+  | 'vercel';
 
 /**
  * Canonical list of target IDs known to this toolkit version. Runtime-exposed so
@@ -36,6 +43,7 @@ export const TARGET_IDS = [
   'cursor',
   'gemini',
   'kiro',
+  'open-plugins',
   'vercel',
 ] as const satisfies readonly TargetId[];
 
@@ -140,6 +148,24 @@ export interface ValidationResult {
  * the earlier one's plugins — so a placeholder must be renamed to a unique value. Always SOFT: a
  * warning, never a build failure.
  *
+ * `metadata-dir-isolation` — the Open Plugins metadata directory (`.plugin/`) contains an entry
+ * other than `plugin.json`. The Open Plugins v1.0.0 spec requires the metadata directory to contain
+ * ONLY `plugin.json`; any sibling file/dir violates that MUST. Fires HARD, and only for the
+ * `open-plugins` target — the native vendor dirs (`.claude-plugin/`, `.cursor-plugin/`) are allowed
+ * to hold a `marketplace.json`, so this check is scoped to `.plugin/` specifically.
+ * @see https://open-plugins.com/plugin-builders/specification.md
+ *
+ * `open-plugins-conformance` — a SOFT, advisory-only portability nudge emitted on native
+ * `claude`/`cursor`/`codex` plugins (whether or not `open-plugins` is in the envelope) when the
+ * plugin is native-valid but would need a change to be Open-Plugins-conformant: a plugin `name`
+ * that is legal for the native target but violates the Open Plugins name grammar (grammar drift),
+ * or a stray non-`plugin.json` file in the plugin's vendor metadata dir (`.claude-plugin/` etc.,
+ * which Open Plugins requires to be isolated). ALWAYS SOFT — it never flips
+ * `ValidationResult.passed`; the identical rules apply HARD only inside the `open-plugins` target
+ * (spec §7 / OP-D10). A distinct code (not `schema-invalid`) because the manifest is not broken for
+ * its declared targets — this says "fine as-is; here is what Open Plugins would additionally want".
+ * @see docs/specs/open-plugins-target.md §7
+ *
  * @public
  */
 export type FindingCode =
@@ -154,7 +180,9 @@ export type FindingCode =
   | 'single-artifact-host'
   | 'root-artifact-collision'
   | 'default-marketplace-name'
-  | 'frontmatter-invalid';
+  | 'frontmatter-invalid'
+  | 'metadata-dir-isolation'
+  | 'open-plugins-conformance';
 
 /**
  * A single validation finding.

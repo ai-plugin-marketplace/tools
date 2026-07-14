@@ -91,7 +91,7 @@ export interface Finding {
 }
 
 // @public
-export type FindingCode = 'envelope-invalid' | 'repo-config-invalid' | 'envelope-adherence' | 'schema-invalid' | 'name-consistency' | 'mcp-key-sync' | 'marketplace-registration' | 'freshness' | 'single-artifact-host' | 'root-artifact-collision' | 'default-marketplace-name' | 'frontmatter-invalid';
+export type FindingCode = 'envelope-invalid' | 'repo-config-invalid' | 'envelope-adherence' | 'schema-invalid' | 'name-consistency' | 'mcp-key-sync' | 'marketplace-registration' | 'freshness' | 'single-artifact-host' | 'root-artifact-collision' | 'default-marketplace-name' | 'frontmatter-invalid' | 'metadata-dir-isolation' | 'open-plugins-conformance';
 
 // @public
 export interface GeneratedFile {
@@ -167,7 +167,7 @@ export interface SupportReport {
 }
 
 // @public
-export type TargetId = 'claude' | 'codex' | 'cursor' | 'gemini' | 'kiro' | 'vercel';
+export type TargetId = 'claude' | 'codex' | 'cursor' | 'gemini' | 'kiro' | 'open-plugins' | 'vercel';
 
 // @public
 export function validate(targetPath: string, opts?: ValidateOptions): Promise<ValidationResult>;

@@ -33,6 +33,7 @@ import { scaffoldCodexFiles } from '../targets/codex/scaffold.js';
 import { scaffoldCursorFiles } from '../targets/cursor/scaffold.js';
 import { scaffoldGeminiFiles } from '../targets/gemini/scaffold.js';
 import { scaffoldKiroFiles } from '../targets/kiro/scaffold.js';
+import { scaffoldOpenPluginsFiles } from '../targets/open-plugins/scaffold.js';
 import { scaffoldVercelFiles } from '../targets/vercel/scaffold.js';
 import type { ScaffoldedFile, TargetScaffoldOptions } from '../targets/scaffold-kit.js';
 import { SCHEMA_VERSION } from '../targets/scaffold-kit.js';
@@ -54,6 +55,7 @@ const TARGET_SCAFFOLDERS: Record<
   cursor: scaffoldCursorFiles,
   gemini: scaffoldGeminiFiles,
   kiro: scaffoldKiroFiles,
+  'open-plugins': scaffoldOpenPluginsFiles,
   vercel: scaffoldVercelFiles,
 };
 
@@ -214,6 +216,15 @@ const MARKETPLACE_REGISTRIES: MarketplaceRegistryDescriptor[] = [
       policy: { installation: 'AVAILABLE', authentication: 'ON_INSTALL' },
       category: 'Productivity',
     }),
+  },
+  {
+    // Open Plugins: string-source entry `{ name, source }` at the repo-root marketplace.json (spec
+    // §2.4 lookup position 1). Note the spec's plugin-entry override field is `keywords`, not the
+    // Claude/Cursor `tags`; the scaffolder emits only `{ name, source }`, deferring richer metadata
+    // to the generated registry (`buildOpenPluginsRegistry`).
+    target: 'open-plugins',
+    marketplaceRel: ['marketplace.json'],
+    makeEntry: (name, source) => ({ name, source }),
   },
 ];
 

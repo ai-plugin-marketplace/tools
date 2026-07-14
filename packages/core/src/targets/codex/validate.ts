@@ -19,6 +19,11 @@ import * as fs from 'node:fs';
 import * as path from 'node:path';
 
 import type { Finding } from '../../pipeline/types.js';
+import {
+  metadataDirConformanceFindings,
+  nameGrammarConformanceFindings,
+} from '../open-plugins-conformance.js';
+import { hasTraversalSegment } from '../path-safety.js';
 import { codexPluginManifestSchema } from './schemas.js';
 
 // ---------------------------------------------------------------------------
@@ -105,7 +110,7 @@ function validateManifestFileRefs(pluginDir: string, pluginName: string): Findin
       }
 
       // Paths must not contain ".." segments (path traversal guard)
-      if (refPath.includes('..')) {
+      if (hasTraversalSegment(refPath)) {
         findings.push(
           makeInvalid(
             pluginName,
@@ -151,6 +156,22 @@ function validateManifestFileRefs(pluginDir: string, pluginName: string): Findin
     }
   }
 
+  // hooks/mcpServers/apps config-path strings are NOT existence-checked (Codex hook/app generation
+  // is out of scope for v0.1.0, and mcpServers names a shared `.mcp.json`), but a `..` parent-
+  // traversal in them must still be rejected hard (spec §7 item 1).
+  for (const field of ['hooks', 'mcpServers', 'apps'] as const) {
+    const value = manifest[field];
+    if (typeof value === 'string' && hasTraversalSegment(value)) {
+      findings.push(
+        makeInvalid(
+          pluginName,
+          `.codex-plugin/plugin.json: ${field} path must not contain "..": ${value}`,
+          'Use a path relative to the plugin root without ".." traversal.',
+        ),
+      );
+    }
+  }
+
   return findings;
 }
 
@@ -166,5 +187,42 @@ function validateManifestFileRefs(pluginDir: string, pluginName: string): Findin
  */
 export function validateCodexPlugin(pluginDir: string): Finding[] {
   const pluginName = path.basename(pluginDir);
-  return [...validateManifestFileRefs(pluginDir, pluginName)];
+  return [
+    ...validateManifestFileRefs(pluginDir, pluginName),
+    ...validateOpenPluginsConformance(pluginDir, pluginName),
+  ];
+}
+
+/**
+ * SOFT Open Plugins conformance advisories for a Codex plugin (spec §7 / OP-D10): name-grammar
+ * drift and vendor metadata-dir isolation. Never fails the plugin.
+ *
+ * The name-grammar advisory fires only for a NATIVE-VALID manifest (a Codex-invalid name already
+ * draws a hard finding); the metadata-dir advisory is filesystem-only.
+ */
+function validateOpenPluginsConformance(pluginDir: string, pluginName: string): Finding[] {
+  const vendorDir = '.codex-plugin';
+  const findings: Finding[] = [];
+
+  const manifestPath = path.join(pluginDir, vendorDir, 'plugin.json');
+  if (fs.existsSync(manifestPath)) {
+    try {
+      const raw: unknown = JSON.parse(fs.readFileSync(manifestPath, 'utf-8'));
+      const parsed = codexPluginManifestSchema.safeParse(raw);
+      if (parsed.success) {
+        findings.push(
+          ...nameGrammarConformanceFindings(
+            pluginName,
+            `${vendorDir}/plugin.json`,
+            parsed.data.name,
+          ),
+        );
+      }
+    } catch {
+      // Malformed JSON is reported by validateManifestFileRefs; no advisory here.
+    }
+  }
+
+  findings.push(...metadataDirConformanceFindings(pluginDir, vendorDir, pluginName));
+  return findings;
 }

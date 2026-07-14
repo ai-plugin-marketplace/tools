@@ -15,6 +15,8 @@
  * @see docs/specs/architecture.md §10.5 (freshness check the CI workflow runs)
  */
 
+import { serializeRootManifest } from './build.js';
+
 const md = String.raw;
 const yaml = String.raw;
 
@@ -239,9 +241,20 @@ export function buildManagedScaffoldFiles(): InitFile[] {
  * - `cliVersion`/`coreVersion` — pinned as carets of the respective dev dependencies.
  *
  * The set mirrors §3.2: `package.json`, the seed-only `.gitignore`, the
- * {@link buildManagedScaffoldFiles managed scaffold files} (CI workflow), `README.md`, both
- * named repo-root marketplace registries, and an empty `plugins/` (seeded with `.gitkeep` so the
- * directory is tracked). Output is a pure function of the inputs — stable ordering, no timestamps.
+ * {@link buildManagedScaffoldFiles managed scaffold files} (CI workflow), `README.md`, all three
+ * named repo-root marketplace registries (Claude/Cursor vendor dirs plus the Open Plugins repo-root
+ * `marketplace.json`, spec §2.4 lookup position 1), and an empty `plugins/` (seeded with `.gitkeep`
+ * so the directory is tracked). Output is a pure function of the inputs — stable ordering, no
+ * timestamps.
+ *
+ * The Open Plugins registry seed is accompanied by a `.aipm/generated-root.json` sidecar entry
+ * tracking `marketplace.json` as toolkit-generated. `aipm init` produces a NON-workspace repo (no
+ * `aipm.workspace.ts`), where the sidecar is inert — but if the author later adopts workspace mode,
+ * the generated-root collision guard consults the sidecar, and WITHOUT the entry it would flag the
+ * toolkit's own seed as a foreign root file (`root-artifact-collision`) and suppress registry
+ * emission. Seeding the tracking up front means workspace adoption regenerates the file cleanly.
+ * The Claude/Cursor vendor-dir seeds need no tracking — vendor registries are managed by path, not
+ * by the sidecar.
  */
 export function buildInitFiles(
   name: string,
@@ -255,6 +268,8 @@ export function buildInitFiles(
     { path: 'README.md', content: renderReadme(name) },
     { path: '.claude-plugin/marketplace.json', content: renderEmptyMarketplace(marketplaceName) },
     { path: '.cursor-plugin/marketplace.json', content: renderEmptyMarketplace(marketplaceName) },
+    { path: 'marketplace.json', content: renderEmptyMarketplace(marketplaceName) },
+    { path: '.aipm/generated-root.json', content: serializeRootManifest(['marketplace.json']) },
     { path: 'plugins/.gitkeep', content: '' },
     ...buildManagedScaffoldFiles(),
   ];

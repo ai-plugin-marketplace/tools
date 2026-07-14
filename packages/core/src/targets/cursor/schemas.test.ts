@@ -11,6 +11,7 @@
 
 import { describe, expect, it } from 'vitest';
 import {
+  cursorHooksFileSchema,
   cursorMcpConfigSchema,
   cursorPluginManifestSchema,
   cursorRuleFrontmatterSchema,
@@ -238,5 +239,87 @@ describe('cursorRuleFrontmatterSchema', () => {
   it('rejects globs containing a non-string element', () => {
     const result = cursorRuleFrontmatterSchema.safeParse({ globs: [1, 2, 3] });
     expect(result.success).toBe(false);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// cursorHooksFileSchema (spec docs/specs/cursor-hooks-target.md §3.4)
+//
+// Strict schema for the toolkit-generated hooks/cursor.json: { version: 1, hooks: … } with the
+// four emitted camelCase events and flat command entries.
+// @see https://cursor.com/docs/hooks.md — Cursor hook format
+// ---------------------------------------------------------------------------
+
+describe('cursorHooksFileSchema — positive', () => {
+  it('parses a valid Cursor hooks document', () => {
+    const doc = {
+      version: 1,
+      hooks: {
+        preToolUse: [{ command: './guard.sh', type: 'command', matcher: 'Shell' }],
+        beforeSubmitPrompt: [{ command: './prompt.sh' }],
+      },
+    };
+    expect(cursorHooksFileSchema.safeParse(doc).success).toBe(true);
+  });
+
+  it('accepts all four emitted event keys', () => {
+    const doc = {
+      version: 1,
+      hooks: {
+        preToolUse: [{ command: './a.sh' }],
+        postToolUse: [{ command: './b.sh' }],
+        stop: [{ command: './c.sh' }],
+        beforeSubmitPrompt: [{ command: './d.sh' }],
+      },
+    };
+    expect(cursorHooksFileSchema.safeParse(doc).success).toBe(true);
+  });
+
+  it('accepts an optional schemaVersion (accepted-not-validated)', () => {
+    const doc = { schemaVersion: '0.1.0', version: 1, hooks: { stop: [{ command: './c.sh' }] } };
+    expect(cursorHooksFileSchema.safeParse(doc).success).toBe(true);
+  });
+
+  it('accepts an entry with no matcher and no type', () => {
+    const doc = { version: 1, hooks: { stop: [{ command: './c.sh' }] } };
+    expect(cursorHooksFileSchema.safeParse(doc).success).toBe(true);
+  });
+});
+
+describe('cursorHooksFileSchema — negative', () => {
+  it('rejects a missing version', () => {
+    expect(
+      cursorHooksFileSchema.safeParse({ hooks: { stop: [{ command: './c.sh' }] } }).success,
+    ).toBe(false);
+  });
+
+  it('rejects a wrong version (2 instead of literal 1)', () => {
+    const doc = { version: 2, hooks: { stop: [{ command: './c.sh' }] } };
+    expect(cursorHooksFileSchema.safeParse(doc).success).toBe(false);
+  });
+
+  it('rejects an unknown event key', () => {
+    const doc = { version: 1, hooks: { beforeShellExecution: [{ command: './c.sh' }] } };
+    expect(cursorHooksFileSchema.safeParse(doc).success).toBe(false);
+  });
+
+  it('rejects an entry missing command', () => {
+    const doc = { version: 1, hooks: { stop: [{ type: 'command', matcher: 'Shell' }] } };
+    expect(cursorHooksFileSchema.safeParse(doc).success).toBe(false);
+  });
+
+  it('rejects an entry with an unknown extra field (strict)', () => {
+    const doc = { version: 1, hooks: { stop: [{ command: './c.sh', timeout: 5 }] } };
+    expect(cursorHooksFileSchema.safeParse(doc).success).toBe(false);
+  });
+
+  it('rejects an unknown top-level field (strict)', () => {
+    const doc = { version: 1, hooks: { stop: [{ command: './c.sh' }] }, extra: true };
+    expect(cursorHooksFileSchema.safeParse(doc).success).toBe(false);
+  });
+
+  it('rejects a wrong type literal on an entry', () => {
+    const doc = { version: 1, hooks: { stop: [{ command: './c.sh', type: 'shell' }] } };
+    expect(cursorHooksFileSchema.safeParse(doc).success).toBe(false);
   });
 });

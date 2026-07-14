@@ -1,5 +1,75 @@
 # @ai-plugin-marketplace/core
 
+## 0.6.0
+
+### Minor Changes
+
+- [#35](https://github.com/ai-plugin-marketplace/tools/pull/35) [`0f4eece`](https://github.com/ai-plugin-marketplace/tools/commit/0f4eecea4ced472e6723a1bfa37016496cdb88b1) Thanks [@mike-north](https://github.com/mike-north)! - Add a Cursor hooks build target. When a plugin's envelope includes `cursor` and it ships a
+  `hooks/claude.yaml` source, `aipm build` now emits a Cursor-format `hooks/cursor.json` derived
+  mechanically from that source — parallel to the existing `claude` → `hooks/claude.json` and
+  `gemini` → `hooks/hooks.json` fan-out.
+
+  The transform renames Claude events to Cursor's camelCase vocabulary (`PreToolUse` → `preToolUse`,
+  `PostToolUse` → `postToolUse`, `Stop` → `stop`, `UserPromptSubmit` → `beforeSubmitPrompt`),
+  translates matcher tool names (`Bash` → `Shell`; `Read`/`Write`/`Edit`/`Grep` identity; unmapped
+  matchers pass through), and reshapes Claude's nested matcher blocks into Cursor's flat
+  `{ command, type?, matcher? }` entries under a `{ version: 1, hooks: … }` envelope. Source events
+  with no Cursor equivalent are dropped. The generated file carries the standard `_generated`
+  sentinel and is freshness-checked like the other hook JSONs.
+
+  `aipm validate` now validates a present `hooks/cursor.json` against a strict schema (HARD
+  `schema-invalid` on failure), and the Cursor manifest guidance points the `hooks` field at
+  `./hooks/cursor.json` instead of the Claude-format `hooks/claude.json`.
+
+- [#30](https://github.com/ai-plugin-marketplace/tools/pull/30) [`a560f7c`](https://github.com/ai-plugin-marketplace/tools/commit/a560f7c239bca0b5c1264240ec41739846fe5cfa) Thanks [@mike-north](https://github.com/mike-north)! - Add soft Open Plugins conformance advisories on the native `claude`/`cursor`/`codex` targets.
+
+  `aipm validate` now surfaces a new **soft** `open-plugins-conformance` finding (added to the
+  `FindingCode` union) that nudges native plugins toward Open Plugins portability without ever failing
+  them — it never flips `ValidationResult.passed`. Two advisories fire today:
+  - **Name-grammar drift** — a plugin `name` that is valid for the native target but violates the Open
+    Plugins name grammar (e.g. `a--b` or a trailing hyphen, which the native scaffold-slug regex
+    accepts but Open Plugins rejects). It fires only for otherwise-native-valid manifests, so a broken
+    name still gets its usual hard finding without a duplicate advisory.
+  - **Metadata-dir isolation** — a non-`plugin.json` entry in a plugin's vendor metadata directory
+    (`.claude-plugin/` / `.cursor-plugin/` / `.codex-plugin/`), which Open Plugins requires to hold
+    only `plugin.json`.
+
+  Also hardens path-traversal rejection: a `..` segment in the `mcpServers` (and Codex `apps`/`hooks`)
+  config-path fields — previously unchecked because those paths are not existence-validated — is now a
+  hard `schema-invalid` across all three targets, matching the existing rejection on component paths.
+
+  The Open Plugins `name` grammar is now a single shared source of truth
+  (`targets/open-plugins-conformance.ts`) consumed by both the `open-plugins` target schema (where a
+  violation is hard) and these advisories (where it is soft).
+
+- [#28](https://github.com/ai-plugin-marketplace/tools/pull/28) [`38e53a7`](https://github.com/ai-plugin-marketplace/tools/commit/38e53a7bebfae7f4423d21907e52f36a3039ea38) Thanks [@mike-north](https://github.com/mike-north)! - Add Open Plugins as a 7th host target (`open-plugins`).
+
+  Open Plugins ([open-plugins.com](https://open-plugins.com), v1.0.0) is a vendor-neutral external
+  standard for the on-disk shape of an AI-assistant plugin. Declaring `'open-plugins'` in a plugin's
+  envelope now emits an Open-Plugins-conformant `.plugin/plugin.json` manifest and a repo-root
+  `marketplace.json` registry (the 4th generated registry, at Open Plugins lookup position 1),
+  projected from the same authored source that feeds every other target.
+
+  The target validates the manifest against the Open Plugins name grammar and component-path rules
+  (each path must be `./`-relative with no `..`), checks that declared component paths resolve on
+  disk, and enforces metadata-directory isolation via a new hard `metadata-dir-isolation` finding
+  (the `.plugin/` directory must contain only `plugin.json`). Adds `'open-plugins'` to the `TargetId`
+  union and `'metadata-dir-isolation'` to the `FindingCode` union (both additive).
+
+  The repo-root `marketplace.json` is protected by the generated-root collision guard: a pre-existing
+  `marketplace.json` the toolkit did not generate raises a hard `root-artifact-collision` and is never
+  overwritten or orphan-removed.
+
+## 0.5.0
+
+### Minor Changes
+
+- [#23](https://github.com/ai-plugin-marketplace/tools/pull/23) [`8c7bef1`](https://github.com/ai-plugin-marketplace/tools/commit/8c7bef1d65a3614924775c643550d384d342d7a7) Thanks [@mike-north](https://github.com/mike-north)! - Validate that plugin frontmatter parses as strict YAML. `runValidate` now strict-parses the YAML frontmatter of every `skills/<name>/SKILL.md`, `agents/*.md`, `commands/*.md`, and `POWER.md`, emitting a hard `frontmatter-invalid` finding when it fails. This catches frontmatter that loads on a lenient host (Claude Code) but is rejected by a strict one (e.g. Codex's skill loader) — the classic case being an unquoted `": "` (colon-space) inside a `description` value, which YAML reads as an illegal nested mapping. Adds the `frontmatter-invalid` value to the `FindingCode` union.
+
+### Patch Changes
+
+- [#25](https://github.com/ai-plugin-marketplace/tools/pull/25) [`0bfc191`](https://github.com/ai-plugin-marketplace/tools/commit/0bfc191e54cb76d5ca223bfec6f5efbd223fcbd9) Thanks [@mike-north](https://github.com/mike-north)! - Accept a relative `./*.json` path string for `mcpServers` in the Claude and Cursor plugin manifest schemas (a union with the existing inline-record form), matching the Codex schema and the `hooks` field. Previously Claude/Cursor manifests that referenced their MCP config by path (e.g. `"mcpServers": "./.mcp.json"`) were rejected with `schema-invalid` even though that is the form Claude Code installs from.
+
 ## 0.4.0
 
 ### Minor Changes

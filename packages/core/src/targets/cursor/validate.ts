@@ -5,11 +5,13 @@
  *   1. Manifest file refs resolve — checks that paths in .cursor-plugin/plugin.json
  *      exist on disk with the correct type (directory for skills, .md for agents,
  *      either for commands). Hooks refs are intentionally excluded: the hooks field
- *      typically points at `hooks/claude.json`, which is a Claude-target generated
- *      artifact and is not guaranteed to exist in a Cursor-only build context.
+ *      should point at `./hooks/cursor.json`, a toolkit-generated Cursor-format artifact
+ *      that is not guaranteed to exist in a Cursor-only build context.
  *   2. Cursor rule frontmatter — validates YAML frontmatter in rules/*.mdc files
  *      against cursorRuleFrontmatterSchema. Files with no frontmatter block are
  *      silently skipped.
+ *   3. Generated hooks file — when hooks/cursor.json is present, validates it against
+ *      cursorHooksFileSchema (HARD schema-invalid on failure).
  *
  * Cross-target concerns (envelope adherence, name consistency, MCP key sync,
  * marketplace registration, freshness) are NOT checked here.
@@ -29,7 +31,11 @@ import {
   nameGrammarConformanceFindings,
 } from '../open-plugins-conformance.js';
 import { hasTraversalSegment } from '../path-safety.js';
-import { cursorPluginManifestSchema, cursorRuleFrontmatterSchema } from './schemas.js';
+import {
+  cursorHooksFileSchema,
+  cursorPluginManifestSchema,
+  cursorRuleFrontmatterSchema,
+} from './schemas.js';
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -93,8 +99,8 @@ function validateManifestFileRefs(pluginDir: string, pluginName: string): Findin
   const findings: Finding[] = [];
 
   // Ref groups: skills → directory, agents → .md file, commands → either.
-  // hooks is intentionally excluded — hooks/claude.json is a Claude-generated
-  // artifact and is not guaranteed present in a Cursor-only build context.
+  // hooks is intentionally excluded — the hooks field should point at ./hooks/cursor.json,
+  // a toolkit-generated artifact not guaranteed present in a Cursor-only build context.
   const refGroups: { field: string; paths: string[]; mustBeDir?: boolean }[] = [
     { field: 'skills', paths: normalisePathField(manifest.skills), mustBeDir: true },
     { field: 'agents', paths: normalisePathField(manifest.agents), mustBeDir: false },
@@ -189,6 +195,56 @@ function rejectPathTraversal(pluginName: string, field: string, value: unknown):
 }
 
 // ---------------------------------------------------------------------------
+// Generated hooks-file validation (hooks/cursor.json)
+// ---------------------------------------------------------------------------
+
+/**
+ * Validate the toolkit-generated `hooks/cursor.json` (when present) against
+ * {@link cursorHooksFileSchema}. Emits a HARD `schema-invalid` finding on malformed JSON or a
+ * schema mismatch; absent file → no finding (it need not exist in a Cursor-only build context).
+ *
+ * The toolkit stamps a top-level `_generated` sentinel onto the file (§4.3); it is a
+ * toolkit-owned field, so it is dropped before the strict schema check rather than rejected.
+ */
+function validateCursorHooksFile(pluginDir: string, pluginName: string): Finding[] {
+  const hooksPath = path.join(pluginDir, 'hooks', 'cursor.json');
+  if (!fs.existsSync(hooksPath)) return [];
+
+  let raw: unknown;
+  try {
+    raw = JSON.parse(fs.readFileSync(hooksPath, 'utf-8'));
+  } catch {
+    return [
+      makeInvalid(
+        pluginName,
+        `hooks/cursor.json is not valid JSON`,
+        'Ensure the file is well-formed JSON, or re-run `aipm build` to regenerate it.',
+      ),
+    ];
+  }
+
+  // Drop the toolkit-owned `_generated` sentinel (§4.3) so the strict schema validates only the
+  // hook payload rather than rejecting the sentinel field.
+  if (typeof raw === 'object' && raw !== null && !Array.isArray(raw)) {
+    delete (raw as Record<string, unknown>)['_generated'];
+  }
+
+  const parsed = cursorHooksFileSchema.safeParse(raw);
+  if (!parsed.success) {
+    const issues = parsed.error.issues.map((i) => `${i.path.join('.')}: ${i.message}`).join('; ');
+    return [
+      makeInvalid(
+        pluginName,
+        `hooks/cursor.json failed schema validation: ${issues}`,
+        'Regenerate the file with `aipm build`; do not hand-edit generated hook JSON.',
+      ),
+    ];
+  }
+
+  return [];
+}
+
+// ---------------------------------------------------------------------------
 // Cursor rule frontmatter validation
 // ---------------------------------------------------------------------------
 
@@ -275,6 +331,7 @@ export function validateCursorPlugin(pluginDir: string): Finding[] {
   const pluginName = path.basename(pluginDir);
   return [
     ...validateManifestFileRefs(pluginDir, pluginName),
+    ...validateCursorHooksFile(pluginDir, pluginName),
     ...validateCursorRules(pluginDir, pluginName),
     ...validateOpenPluginsConformance(pluginDir, pluginName),
   ];

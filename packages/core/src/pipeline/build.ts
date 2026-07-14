@@ -8,7 +8,7 @@
  * forbidden, but the pipeline is permitted to orchestrate all of them.
  *
  * **Sentinel scope (§4.3).** Only the in-plugin-dir generated hook JSONs (`hooks/claude.json`,
- * `hooks/hooks.json`) carry a `_generated` JSON sentinel. The `dist/**` bundle trees are
+ * `hooks/hooks.json`, `hooks/cursor.json`) carry a `_generated` JSON sentinel. The `dist/**` bundle trees are
  * wholly-generated and stay sentinel-less so they remain byte-identical to the committed
  * template oracle; freshness for those is a whole-tree regeneration compare (§10.5).
  *
@@ -21,6 +21,7 @@ import * as path from 'node:path';
 import { performance } from 'node:perf_hooks';
 
 import { parseClaudeHooksYaml } from '../targets/claude/transform.js';
+import { convertClaudeHooksYamlToCursorJson } from '../targets/cursor/transform.js';
 import { convertClaudeHooksYamlToGeminiJson } from '../targets/gemini/transform.js';
 import { bundleGeminiPlugin } from '../targets/gemini/bundle.js';
 import { bundleKiroPlugin } from '../targets/kiro/bundle.js';
@@ -74,6 +75,7 @@ function findHooksYaml(pluginDir: string): { absPath: string; source: string } |
  *
  * - `claude` in envelope + a hooks YAML present → `hooks/claude.json` (Claude JSON + sentinel).
  * - `gemini` in envelope + a hooks YAML present → `hooks/hooks.json` (Gemini JSON + sentinel).
+ * - `cursor` in envelope + a hooks YAML present → `hooks/cursor.json` (Cursor JSON + sentinel).
  *
  * The sentinel is applied to the **parsed object** so the on-disk file carries a top-level
  * `_generated` field (§4.3), serialized 2-space + trailing newline.
@@ -115,6 +117,21 @@ export function computePluginHookArtifacts(
       sentinelMode: 'json-field',
       target: 'gemini',
       expectedContent: applyJsonSentinel(geminiObj, yaml.source),
+    });
+  }
+
+  if (envelopeSet.has('cursor')) {
+    // The Cursor transform returns a serialized string; parse it back to an object so the
+    // sentinel sits at the top level. applyJsonSentinel re-serializes 2-space + newline,
+    // matching the transform's own format, so the body round-trips byte-for-byte.
+    const cursorJson = convertClaudeHooksYamlToCursorJson(yamlContent);
+    const cursorObj = JSON.parse(cursorJson) as unknown;
+    artifacts.push({
+      absPath: path.join(pluginDir, 'hooks', 'cursor.json'),
+      source: yaml.source,
+      sentinelMode: 'json-field',
+      target: 'cursor',
+      expectedContent: applyJsonSentinel(cursorObj, yaml.source),
     });
   }
 
@@ -779,7 +796,8 @@ async function buildOnePlugin(
     }
   }
 
-  // codex / cursor / vercel emit no mechanical build output — nothing to do.
+  // codex / vercel emit no mechanical build output — nothing to do. (cursor's hooks/cursor.json
+  // is emitted above via computePluginHookArtifacts; it has no dist bundle.)
 
   return {
     plugin: pluginName,

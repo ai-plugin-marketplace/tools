@@ -290,6 +290,72 @@ describe('validateCursorPlugin — open-plugins-conformance advisories', () => {
 });
 
 // ---------------------------------------------------------------------------
+// Generated hooks/cursor.json validation (spec §3.4)
+// ---------------------------------------------------------------------------
+
+describe('validateCursorPlugin — hooks/cursor.json validation', () => {
+  it('produces no findings for a well-formed hooks/cursor.json', () => {
+    writeManifest();
+    writeFile(
+      'hooks/cursor.json',
+      JSON.stringify(
+        {
+          version: 1,
+          hooks: {
+            preToolUse: [{ command: './guard.sh', type: 'command', matcher: 'Shell' }],
+            beforeSubmitPrompt: [{ command: './prompt.sh', type: 'command' }],
+          },
+        },
+        null,
+        2,
+      ),
+    );
+    expect(validateCursorPlugin(tmpDir)).toHaveLength(0);
+  });
+
+  it('tolerates the toolkit _generated sentinel field on a well-formed file', () => {
+    writeManifest();
+    writeFile(
+      'hooks/cursor.json',
+      JSON.stringify(
+        {
+          _generated: { by: '@ai-plugin-marketplace/cli', source: 'hooks/claude.yaml' },
+          version: 1,
+          hooks: { stop: [{ command: './x.sh', type: 'command' }] },
+        },
+        null,
+        2,
+      ),
+    );
+    expect(validateCursorPlugin(tmpDir).filter((f) => f.code === 'schema-invalid')).toEqual([]);
+  });
+
+  it('emits a HARD schema-invalid when hooks/cursor.json fails the schema', () => {
+    writeManifest();
+    // version 2 is not the required literal 1
+    writeFile('hooks/cursor.json', JSON.stringify({ version: 2, hooks: {} }));
+    const hard = validateCursorPlugin(tmpDir).filter((f) => f.code === 'schema-invalid');
+    expect(hard).toHaveLength(1);
+    expect(hard[0]?.severity).toBe('hard');
+    expect(hard[0]?.message).toMatch(/hooks\/cursor\.json failed schema validation/i);
+  });
+
+  it('emits a HARD schema-invalid when hooks/cursor.json is not valid JSON', () => {
+    writeManifest();
+    writeFile('hooks/cursor.json', '{ not valid json');
+    const hard = validateCursorPlugin(tmpDir).filter((f) => f.code === 'schema-invalid');
+    expect(hard).toHaveLength(1);
+    expect(hard[0]?.severity).toBe('hard');
+    expect(hard[0]?.message).toMatch(/hooks\/cursor\.json is not valid JSON/i);
+  });
+
+  it('emits no finding when hooks/cursor.json is absent', () => {
+    writeManifest();
+    expect(validateCursorPlugin(tmpDir).filter((f) => f.code === 'schema-invalid')).toEqual([]);
+  });
+});
+
+// ---------------------------------------------------------------------------
 // Path-traversal hardening (spec §7 item 1 / traversal audit) — hooks/mcpServers
 // ---------------------------------------------------------------------------
 

@@ -16,13 +16,15 @@
  */
 
 import * as fs from 'node:fs';
+import * as os from 'node:os';
 import * as path from 'node:path';
 
 import { afterEach, describe, expect, it } from 'vitest';
 
 import { convertClaudeHooksYamlToJson } from '../targets/claude/transform.js';
+import { convertClaudeHooksYamlToCursorJson } from '../targets/cursor/transform.js';
 import { convertClaudeHooksYamlToGeminiJson } from '../targets/gemini/transform.js';
-import { runBuild } from './build.js';
+import { computePluginHookArtifacts, runBuild } from './build.js';
 import { hasSentinel, readSentinelSource, stripSentinel } from './sentinel.js';
 import {
   ALL_SYNTH_TARGETS,
@@ -149,6 +151,27 @@ describeMaybe('runBuild — in-plugin hook JSON sentinels (§4.3)', () => {
     // claude.json IS emitted because claude is declared.
     expect(fs.existsSync(path.join(repo.pluginDir, 'hooks', 'claude.json'))).toBe(true);
   });
+
+  it('writes hooks/cursor.json (cursor) with a json-field sentinel that strips to the Cursor transform', async () => {
+    repo = synthPluginRepo(ALL_SYNTH_TARGETS);
+    await runBuild(repo.repoRoot);
+
+    const cursorJsonPath = path.join(repo.pluginDir, 'hooks', 'cursor.json');
+    expect(fs.existsSync(cursorJsonPath)).toBe(true);
+
+    const onDisk = fs.readFileSync(cursorJsonPath, 'utf-8');
+    expect(hasSentinel(onDisk, 'json-field')).toBe(true);
+    expect(readSentinelSource(onDisk, 'json-field')).toBe('hooks/claude.yaml');
+
+    const yaml = fs.readFileSync(path.join(repo.pluginDir, 'hooks', 'claude.yaml'), 'utf-8');
+    expect(stripSentinel(onDisk, 'json-field')).toBe(convertClaudeHooksYamlToCursorJson(yaml));
+  });
+
+  it('does NOT emit cursor.json when cursor is absent from the envelope', async () => {
+    repo = synthPluginRepo(['claude']);
+    await runBuild(repo.pluginDir);
+    expect(fs.existsSync(path.join(repo.pluginDir, 'hooks', 'cursor.json'))).toBe(false);
+  });
 });
 
 describeMaybe('runBuild — BuildResult shape (§8.1)', () => {
@@ -197,15 +220,30 @@ describeMaybe('runBuild — BuildResult shape (§8.1)', () => {
     expect(kiroPower?.target).toBe('kiro');
   });
 
-  it('emits no mechanical output for cursor / vercel (no dist tree, no hook JSON beyond claude/gemini)', async () => {
+  it('records the cursor hook JSON with target=cursor and the right source', async () => {
+    repo = synthPluginRepo(ALL_SYNTH_TARGETS);
+    const [result] = await runBuild(repo.repoRoot);
+
+    const cursorArtifact = result?.artifacts.find(
+      (a) => a.path === path.join(repo.pluginDir, 'hooks', 'cursor.json'),
+    );
+    expect(cursorArtifact).toBeDefined();
+    expect(cursorArtifact?.target).toBe('cursor');
+    expect(cursorArtifact?.source).toBe(`${SYNTH_PLUGIN_NAME}/hooks/claude.yaml`);
+  });
+
+  it('emits only hooks/cursor.json for cursor (no dist tree) and nothing for vercel', async () => {
     repo = synthPluginRepo(['cursor', 'vercel']);
     const [result] = await runBuild(repo.pluginDir);
     // No dist trees: cursor/vercel have no bundle step.
     expect(fs.existsSync(path.join(repo.repoRoot, 'dist'))).toBe(false);
-    // No hook JSONs: neither claude nor gemini is declared.
+    // Neither claude nor gemini is declared → their hook JSONs are absent.
     expect(fs.existsSync(path.join(repo.pluginDir, 'hooks', 'claude.json'))).toBe(false);
     expect(fs.existsSync(path.join(repo.pluginDir, 'hooks', 'hooks.json'))).toBe(false);
-    expect(result?.artifacts).toHaveLength(0);
+    // cursor IS declared and a hooks YAML is present → hooks/cursor.json is emitted.
+    expect(fs.existsSync(path.join(repo.pluginDir, 'hooks', 'cursor.json'))).toBe(true);
+    expect(result?.artifacts).toHaveLength(1);
+    expect(result?.artifacts[0]?.target).toBe('cursor');
   });
 });
 
@@ -235,5 +273,73 @@ describeMaybe('runBuild — post-build validation (§5.4)', () => {
     // No throw means post-build validate found no hard findings.
     const results = await runBuild(repo.repoRoot, { failFast: true });
     expect(results).toHaveLength(1);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// computePluginHookArtifacts — cursor branch (template-independent, §3.3/§4.3)
+//
+// This is the single source of truth shared by runBuild (writes) and the freshness check
+// (compares on-disk bytes). Exercising it directly needs only a hand-written hooks/claude.yaml,
+// so it runs in CI without the template checkout.
+// ---------------------------------------------------------------------------
+
+describe('computePluginHookArtifacts — cursor branch', () => {
+  let pluginDir: string | undefined;
+
+  afterEach(() => {
+    // Guard the cleanup: if a test fails before `pluginDir` is assigned, an unguarded
+    // `fs.existsSync(undefined)` throws `path must be a string` and masks the real failure.
+    if (pluginDir && fs.existsSync(pluginDir)) fs.rmSync(pluginDir, { recursive: true });
+  });
+
+  /** Write a plugin dir containing hooks/claude.yaml and return its absolute path. */
+  function writePluginWithHooks(yaml: string): string {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'aipm-cursor-hook-'));
+    fs.mkdirSync(path.join(dir, 'hooks'), { recursive: true });
+    fs.writeFileSync(path.join(dir, 'hooks', 'claude.yaml'), yaml, 'utf-8');
+    return dir;
+  }
+
+  const HOOKS_YAML =
+    'hooks:\n  PreToolUse:\n    - matcher: Bash\n      hooks:\n        - { type: command, command: ./guard.sh }\n';
+
+  it('produces a hooks/cursor.json artifact (target cursor, json-field sentinel) when cursor is declared', () => {
+    pluginDir = writePluginWithHooks(HOOKS_YAML);
+    const artifacts = computePluginHookArtifacts(pluginDir, ['cursor']);
+
+    const cursor = artifacts.find((a) => a.target === 'cursor');
+    expect(cursor).toBeDefined();
+    expect(cursor?.absPath).toBe(path.join(pluginDir, 'hooks', 'cursor.json'));
+    expect(cursor?.source).toBe('hooks/claude.yaml');
+    expect(cursor?.sentinelMode).toBe('json-field');
+    // The sentinel-stripped body equals the mechanical Cursor transform output.
+    expect(stripSentinel(cursor?.expectedContent ?? '', 'json-field')).toBe(
+      convertClaudeHooksYamlToCursorJson(HOOKS_YAML),
+    );
+  });
+
+  it('does not produce a cursor artifact when cursor is absent from the envelope', () => {
+    pluginDir = writePluginWithHooks(HOOKS_YAML);
+    const artifacts = computePluginHookArtifacts(pluginDir, ['claude']);
+    expect(artifacts.some((a) => a.target === 'cursor')).toBe(false);
+  });
+
+  it('round-trips the generated cursor.json bytes byte-for-byte (freshness invariant §10.5)', () => {
+    pluginDir = writePluginWithHooks(HOOKS_YAML);
+
+    // First pass: compute + write (what runBuild does).
+    const first = computePluginHookArtifacts(pluginDir, ['cursor']).find(
+      (a) => a.target === 'cursor',
+    );
+    expect(first).toBeDefined();
+    fs.writeFileSync(first?.absPath ?? '', first?.expectedContent ?? '', 'utf-8');
+
+    // Second pass: recompute (what the freshness check does) and compare to the on-disk bytes.
+    const second = computePluginHookArtifacts(pluginDir, ['cursor']).find(
+      (a) => a.target === 'cursor',
+    );
+    const onDisk = fs.readFileSync(first?.absPath ?? '', 'utf-8');
+    expect(second?.expectedContent).toBe(onDisk);
   });
 });

@@ -138,3 +138,54 @@ export const cursorRuleFrontmatterSchema = z.object({
   globs: z.string().array().optional(),
   schemaVersion: z.string().optional(),
 });
+
+// ---------------------------------------------------------------------------
+// cursorHooksFileSchema
+//
+// Models the toolkit-generated hooks/cursor.json (spec docs/specs/cursor-hooks-target.md §3.4).
+// Strict — validation is aligned with exactly what the Cursor hooks transform EMITS: the four
+// events the Claude-dialect source can reach and flat command entries. Cursor-only events
+// (beforeShellExecution, afterFileEdit, …) are out of scope (§2), so they are intentionally not
+// accepted here. Extend cursorHookEntrySchema if we later emit timeout/loop_limit/failClosed.
+// ---------------------------------------------------------------------------
+
+/**
+ * The Cursor hook event names this transform emits — the camelCase renames of the four
+ * Claude-dialect source events (spec §3.1). Committed so the schema and the transform's event
+ * table agree on one list.
+ */
+const CURSOR_HOOK_EVENTS = ['preToolUse', 'postToolUse', 'stop', 'beforeSubmitPrompt'] as const;
+
+/** Union type of the Cursor hook event names the toolkit emits. */
+export type CursorHookEvent = (typeof CURSOR_HOOK_EVENTS)[number];
+
+/** Enum schema for the emitted Cursor hook event keys. */
+const cursorHookEventSchema = z.enum(CURSOR_HOOK_EVENTS);
+
+/**
+ * A single flat Cursor hook entry. `command` is required; `type` (`'command'`) and `matcher`
+ * are optional. Strict — an unknown per-entry field is rejected.
+ */
+const cursorHookEntrySchema = z
+  .object({
+    command: z.string(),
+    type: z.literal('command').optional(),
+    matcher: z.string().optional(),
+  })
+  .strict();
+
+/**
+ * Schema for `hooks/cursor.json`.
+ *
+ * Top level: `{ version: 1, hooks: Partial<Record<CursorHookEvent, CursorHookEntry[]>> }`.
+ * Strict. `schemaVersion` accepted but not validated per §9.4 / §12.2.
+ */
+export const cursorHooksFileSchema = z
+  .object({
+    /** Reserved for future migrex adoption. Accepted but not validated in v0.1.0. */
+    schemaVersion: z.string().optional(),
+
+    version: z.literal(1),
+    hooks: z.partialRecord(cursorHookEventSchema, z.array(cursorHookEntrySchema)),
+  })
+  .strict();

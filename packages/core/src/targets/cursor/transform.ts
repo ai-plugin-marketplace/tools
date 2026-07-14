@@ -27,7 +27,8 @@
  * every axis (stdin field names, stdout control shape, and an opposite fail-OPEN default that
  * silently allows on malformed JSON). A Claude-authored deny gate emitted through this transform
  * can therefore fail open on Cursor. Contract-translating controller hooks (a fail-closed shim)
- * is deferred — see docs/specs/adapter-system.md §4.2.1 (D6b) and the tracked follow-up.
+ * is deferred — tracked in issue #37 (its design lives in the adapter-system spec, §4.2.1 D6b,
+ * on PR #26 until merged).
  *
  * @see docs/specs/cursor-hooks-target.md §3 (architecture, committed tables, worked example)
  * @see docs/specs/architecture.md §7 (mechanical transformations), §12.4–§12.5 (module shape)

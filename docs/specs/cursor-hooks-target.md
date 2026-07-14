@@ -60,8 +60,8 @@ target is wired today.
   handler contract diverges from Claude's on stdin field names, stdout control shape, and failure
   default (Cursor fails **open** and silently allows on malformed JSON), so a Claude-authored deny
   gate can **fail open** on Cursor. Contract-translating controller hooks via a fail-closed shim is
-  deferred to the adapter-system work — see `adapter-system.md` §4.2.1 (D6b) and the tracked
-  follow-up issue.
+  deferred — tracked in issue #37 (its design lives in the adapter-system spec, §4.2.1 D6b, on
+  PR #26 until that spec is merged).
 
 ## 3. Architecture
 

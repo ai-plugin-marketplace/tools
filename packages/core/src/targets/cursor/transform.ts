@@ -19,6 +19,16 @@
  * ({@link adaptMatcherBlockToCursorEntries}) so the event-rename layer and the entry-reshape
  * layer are independently testable (spec §3.1).
  *
+ * **Scope caveat — observer hooks only.** This transform renames events, translates the matcher,
+ * and reshapes structure; it does NOT translate a hook handler's stdin/stdout contract. That is
+ * safe for *observer* hooks (side-effect only: log / notify / format-on-save — they ignore the
+ * stdin envelope and emit no control output). It is NOT sufficient for *controller* hooks that
+ * return a block/deny/updated-input decision: Cursor's handler contract diverges from Claude's on
+ * every axis (stdin field names, stdout control shape, and an opposite fail-OPEN default that
+ * silently allows on malformed JSON). A Claude-authored deny gate emitted through this transform
+ * can therefore fail open on Cursor. Contract-translating controller hooks (a fail-closed shim)
+ * is deferred — see docs/specs/adapter-system.md §4.2.1 (D6b) and the tracked follow-up.
+ *
  * @see docs/specs/cursor-hooks-target.md §3 (architecture, committed tables, worked example)
  * @see docs/specs/architecture.md §7 (mechanical transformations), §12.4–§12.5 (module shape)
  * @see https://cursor.com/docs/hooks.md — Cursor hook format

@@ -53,6 +53,15 @@ target is wired today.
 - **Auto-rewriting the manifest `hooks` field.** Manifests remain author-authored skeleton files
   (§4.3). This design corrects the _guidance_ (point at `./hooks/cursor.json`) but does not make the
   build mutate an author's manifest.
+- **Controller-hook contract translation.** The transform renames events, translates the matcher,
+  and reshapes structure — it does **not** translate a hook handler's stdin/stdout contract. That
+  is correct for _observer_ hooks (side-effect only: log / notify / format-on-save). It is **not**
+  sufficient for _controller_ hooks that return a block/deny/updated-input decision: Cursor's
+  handler contract diverges from Claude's on stdin field names, stdout control shape, and failure
+  default (Cursor fails **open** and silently allows on malformed JSON), so a Claude-authored deny
+  gate can **fail open** on Cursor. Contract-translating controller hooks via a fail-closed shim is
+  deferred to the adapter-system work — see `adapter-system.md` §4.2.1 (D6b) and the tracked
+  follow-up issue.
 
 ## 3. Architecture
 

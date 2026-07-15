@@ -240,9 +240,9 @@ suspenders: even if the runner somehow died before printing, Cursor blocks.
 
 - **Explicit `maxBuffer` (64 MB).** The handler `spawnSync` sets `maxBuffer: 64 * 1024 * 1024`.
   spawnSync's 1 MB default would set `error` + `status === null` on a handler that legitimately emits
-  > 1 MB of stdout, which the runner's genuine-spawn-failure detection (`error && status === null`)
-  > would misread as a spawn failure and deny. The explicit generous buffer avoids that misread while
-  > keeping the detection for a real "the shell never ran" failure.
+  over 1 MB of stdout, which the runner's genuine-spawn-failure detection (`error && status === null`)
+  would misread as a spawn failure and deny. The explicit generous buffer avoids that misread while
+  keeping the detection for a real "the shell never ran" failure.
 - **Flush stdout before exit.** The runner writes its control JSON and exits from the write's flush
   callback (`process.stdout.write(json, () => process.exit(code))`), not immediately after the write.
   A bare `process.exit()` can truncate a pipe-buffered write; on the **allow** path that would yield

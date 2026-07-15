@@ -62,6 +62,13 @@ export interface PluginHookArtifact {
   target: TargetId;
   /** Exact bytes the build writes (sentinel included). */
   expectedContent: string;
+  /**
+   * When `true`, the build sets the executable bit (`0o755`) on the written file. Reserved for
+   * assets meant to be invoked directly (e.g. `hooks/payload-adapter` — spec §1/§11 document
+   * calling it as `"${CLAUDE_PLUGIN_ROOT}/hooks/payload-adapter"`), never its `.generated`
+   * sidecar or JSON artifacts. Omitted (not `false`) when not executable.
+   */
+  executable?: true;
 }
 
 /**
@@ -74,12 +81,11 @@ export interface PluginHookArtifact {
  * truthful for envelopes that never include `claude` (e.g. a codex-only plugin) without adding a
  * new "shared"/cross-target `TargetId` value.
  *
- * @throws {Error} If `envelope` is empty (a plugin with no declared targets never reaches this
+ * @throws {Error} If `envelopeSet` is empty (a plugin with no declared targets never reaches this
  *   path — {@link computePluginHookArtifacts} is only invoked with a non-empty envelope).
  */
-function sharedHookArtifactTarget(envelope: readonly TargetId[]): TargetId {
-  if (envelope.includes('claude')) return 'claude';
-  const envelopeSet = new Set(envelope);
+function sharedHookArtifactTarget(envelopeSet: ReadonlySet<TargetId>): TargetId {
+  if (envelopeSet.has('claude')) return 'claude';
   const firstCanonical = TARGET_IDS.find((id) => envelopeSet.has(id));
   if (firstCanonical === undefined) {
     throw new Error('sharedHookArtifactTarget: envelope must contain at least one target');
@@ -137,13 +143,16 @@ export function computePluginHookArtifacts(
   // from the normalized cross-harness payload. A pure, plugin-independent script, so it carries a
   // sidecar sentinel (like the cursor shim) rather than an inline one.
   const payloadAdapterAbsPath = path.join(pluginDir, 'hooks', PAYLOAD_ADAPTER_FILENAME);
-  const sharedArtifactTarget = sharedHookArtifactTarget(envelope);
+  const sharedArtifactTarget = sharedHookArtifactTarget(envelopeSet);
   artifacts.push({
     absPath: payloadAdapterAbsPath,
     source: yaml.source,
     sentinelMode: 'sidecar',
     target: sharedArtifactTarget,
     expectedContent: PAYLOAD_ADAPTER_SOURCE,
+    // Spec §1/§11: the adapter is invoked directly (`"${CLAUDE_PLUGIN_ROOT}/hooks/payload-adapter"`),
+    // so it needs the executable bit — unlike its `.generated` sidecar below, which is never run.
+    executable: true,
   });
   artifacts.push({
     absPath: sidecarPath(payloadAdapterAbsPath),
@@ -864,6 +873,12 @@ async function buildOnePlugin(
   // ── In-plugin-dir generated hook JSONs (sentinel-carrying) ────────────────
   for (const hookArtifact of computePluginHookArtifacts(pluginDir, envelope)) {
     writeFileEnsuringDir(hookArtifact.absPath, hookArtifact.expectedContent);
+    if (hookArtifact.executable) {
+      // writeFileSync's mode argument only applies at file creation, so an existing file (e.g. a
+      // stale non-executable copy from before this artifact carried `executable: true`) would
+      // otherwise keep its old permission bits — chmod unconditionally instead.
+      fs.chmodSync(hookArtifact.absPath, 0o755);
+    }
     artifacts.push({
       path: hookArtifact.absPath,
       source: `${pluginName}/${hookArtifact.source}`,

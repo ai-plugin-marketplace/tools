@@ -117,9 +117,11 @@ alone cannot discriminate them. Detection instead leans on Codex's **additive-on
 exactly the fields D2 says must never be stripped — plus `CODEX_HOME` as a documented secondary
 signal for the rare event where no additive field is present:
 
-1. Parse stdin as JSON. If parsing fails, harness detection is skipped entirely — the adapter
-   falls back to the unknown-harness passthrough path (§7; invalid JSON can't safely carry an
-   added envelope).
+1. Parse stdin as JSON. If parsing fails **or the parsed top-level value is not a JSON object**,
+   harness detection is skipped entirely — the adapter falls back to the byte-for-byte passthrough
+   path (distinct from §7's `unknown`-harness envelope: neither invalid JSON nor a non-object top
+   level — an array, number, string, boolean, or `null` — can safely carry an added envelope at
+   all, so no `harness`/`is_subagent` fields are added here either).
 2. **Codex** if the parsed payload contains **any** of `turn_id`, `model`, `tool_response`,
    `agent_transcript_path` — these are Codex-only additive fields per §4.2.1's empirical capture;
    Claude's payload never emits them.
@@ -129,8 +131,13 @@ signal for the rare event where no additive field is present:
    weaker evidence than an in-payload field — an operator running Claude Code with a stray
    `CODEX_HOME` set would misdetect — but it is the only available signal for those events.
 4. Else, **`claude-code`** if `hook_event_name` is a non-empty string matching one of the known
-   PascalCase Claude/Codex event names (§3). Claude is the hub shape (D1), so this is the default
-   once Codex is ruled out.
+   PascalCase Claude/Codex event names. Claude is the hub shape (D1), so this is the default once
+   Codex is ruled out. The known-event set is pinned to a single authoritative source:
+   `adapter-system.md` §4.2.1's committed Claude↔Codex map (`SessionStart`, `SubagentStart`,
+   `PreToolUse`, `PermissionRequest`, `PostToolUse`, `PreCompact`, `PostCompact`,
+   `UserPromptSubmit`, `SubagentStop`, `Stop`) **plus** `SessionEnd` and `Notification` — real
+   Claude Code events that map explicitly omits (no Codex equivalent, §4.2.1 D6a) but which are
+   still valid Claude events for this detection step.
 5. Else, **`unknown`** — `hook_event_name` absent, not a string, or not a recognized event name
    (this is also where a future Cursor payload — camelCase `hook_event_name` — lands until a
    Cursor spoke is built; see §12).
@@ -269,7 +276,10 @@ the precedent `hooks/cursor-shim.mjs` / `hooks/cursor-shim.mjs.generated` set (�
 `cursor-controller-shim.md`): a companion `hooks/payload-adapter.generated` file holds the
 sentinel body (`sidecarContent(source)` / `sidecarPath(...)`), and the script itself stays pure,
 executable shell. No change to `sentinel.ts` is required — the sidecar mode is generic over the
-artifact it accompanies.
+artifact it accompanies. Because §1/§11 document invoking the script directly
+(`"${CLAUDE_PLUGIN_ROOT}/hooks/payload-adapter"`), the build emits `hooks/payload-adapter` with
+the executable bit set (`0o755`); its `.generated` sidecar is never invoked and stays at the
+default mode.
 
 The script's bytes are a **deterministic constant** (like `cursor-shim.mjs`): identical across
 every plugin that receives one, parameterized by nothing plugin-specific (unlike the Cursor shim,

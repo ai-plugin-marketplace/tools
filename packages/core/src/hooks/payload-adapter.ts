@@ -155,8 +155,9 @@ function renderSchemaResponseLiteral(): string {
  *  - **D1 (§3), canonical shape**: the Claude Code hook stdin envelope is the hub shape.
  *  - **D2 (§4), additive-never-destructive**: Codex's `tool_response` gains a canonical
  *    `tool_output` alongside it (neither removed); every other field passes through untouched,
- *    including on invalid-JSON input (byte-for-byte passthrough — no envelope can safely be added
- *    to non-JSON, spec §5.1 step 1) and on unknown-harness input (§7).
+ *    including on invalid-JSON or non-object-JSON input (byte-for-byte passthrough — no envelope
+ *    can safely be added to non-JSON or a non-object top level, spec §5.1 step 1) and on
+ *    unknown-harness input (§7).
  *  - **D3 (§5) + §5.1 detection algorithm**: `harness: {name}` is added, detected via Codex's
  *    additive-only fields, then `CODEX_HOME` as a secondary signal, then a recognized PascalCase
  *    `hook_event_name`, else `"unknown"`.
@@ -186,14 +187,15 @@ if [ "\${1:-}" = "--schema" ]; then
   exit 0
 fi
 
-# Buffer stdin to a temp file so an invalid-JSON input can still be echoed back byte-for-byte
-# (spec section 5.1 step 1: harness detection is skipped entirely on parse failure -- no envelope
-# can safely be added to non-JSON output).
+# Buffer stdin to a temp file so an invalid-JSON or non-object-JSON input can still be echoed back
+# byte-for-byte (spec section 5.1 step 1: harness detection is skipped entirely on parse failure OR
+# a non-object top level -- no envelope can safely be added to non-JSON, or to a JSON array,
+# number, string, boolean, or null).
 tmp=$(mktemp 2>/dev/null) || { cat; exit 0; }
 trap 'rm -f "$tmp"' EXIT INT TERM
 cat > "$tmp"
 
-if ! jq -e . "$tmp" >/dev/null 2>&1; then
+if ! jq -e 'type == "object"' "$tmp" >/dev/null 2>&1; then
   cat "$tmp"
   exit 0
 fi
@@ -206,8 +208,13 @@ if [ -n "\${CODEX_HOME:-}" ]; then
 fi
 
 jq -S --argjson codex_home_set "$CODEX_HOME_SET" '
+  # Recognized PascalCase event names (spec section 5.1 step 4): the adapter-system.md section
+  # 4.2.1 committed Claude<->Codex map ({SessionStart, SubagentStart, PreToolUse,
+  # PermissionRequest, PostToolUse, PreCompact, PostCompact, UserPromptSubmit, SubagentStop, Stop})
+  # plus SessionEnd and Notification -- real Claude Code events that map has no Codex equivalent
+  # for, but which are still valid Claude events for detection purposes here.
   def known_events:
-    ["PreToolUse", "PostToolUse", "UserPromptSubmit", "Stop", "SessionStart", "PreCompact", "SubagentStart", "SubagentStop"];
+    ["SessionStart", "SubagentStart", "PreToolUse", "PermissionRequest", "PostToolUse", "PreCompact", "PostCompact", "UserPromptSubmit", "SubagentStop", "Stop", "SessionEnd", "Notification"];
 
   # D3 (section 5) harness detection, section 5.1 steps 2-5.
   def harness_name:
@@ -232,7 +239,6 @@ jq -S --argjson codex_home_set "$CODEX_HOME_SET" '
   # is left in place, untouched. Never overwrites a native tool_output.
   (if has("tool_response") and (has("tool_output") | not) then .tool_output = .tool_response else . end)
   | . as $normalized
-  | $normalized
   # harness and is_subagent are the adapter reserved, authoritative output keys (spec section 4,
   # D2 clarification): always (re)written from the adapter own computation, even if the raw
   # payload already carries a same-named field. D2 never-overwrite/remove/hide guarantee protects

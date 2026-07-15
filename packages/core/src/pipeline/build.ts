@@ -20,6 +20,7 @@ import * as os from 'node:os';
 import * as path from 'node:path';
 import { performance } from 'node:perf_hooks';
 
+import { PAYLOAD_ADAPTER_FILENAME, PAYLOAD_ADAPTER_SOURCE } from '../hooks/payload-adapter.js';
 import { parseClaudeHooksYaml } from '../targets/claude/transform.js';
 import {
   convertClaudeHooksYamlToCursorJson,
@@ -38,6 +39,7 @@ import type { ConfigCache } from './load-config.js';
 import { applyJsonSentinel, sidecarContent, sidecarPath } from './sentinel.js';
 import type { SentinelMode } from './sentinel.js';
 import { runValidate } from './validate.js';
+import { TARGET_IDS } from './types.js';
 import type { BuildOptions, BuildResult, Finding, GeneratedFile, TargetId } from './types.js';
 
 // ---------------------------------------------------------------------------
@@ -62,6 +64,29 @@ export interface PluginHookArtifact {
   expectedContent: string;
 }
 
+/**
+ * `GeneratedFile.target` records which target's build step produced a file — but the payload
+ * adapter (and its sidecar) is emitted for **any** plugin authoring a hooks YAML, independent of
+ * the envelope (see {@link computePluginHookArtifacts} above), so there is no single build step
+ * that "owns" it. Attribute it deterministically: `claude` when present in the envelope (it is
+ * the source dialect the adapter's `sh`+`jq` filter is modeled after), otherwise the first
+ * envelope target in {@link TARGET_IDS}'s canonical order. This keeps `BuildResult.artifacts`
+ * truthful for envelopes that never include `claude` (e.g. a codex-only plugin) without adding a
+ * new "shared"/cross-target `TargetId` value.
+ *
+ * @throws {Error} If `envelope` is empty (a plugin with no declared targets never reaches this
+ *   path — {@link computePluginHookArtifacts} is only invoked with a non-empty envelope).
+ */
+function sharedHookArtifactTarget(envelope: readonly TargetId[]): TargetId {
+  if (envelope.includes('claude')) return 'claude';
+  const envelopeSet = new Set(envelope);
+  const firstCanonical = TARGET_IDS.find((id) => envelopeSet.has(id));
+  if (firstCanonical === undefined) {
+    throw new Error('sharedHookArtifactTarget: envelope must contain at least one target');
+  }
+  return firstCanonical;
+}
+
 /** First existing hooks YAML candidate (`claude.yaml`, then `claude.yml`), or `undefined`. */
 function findHooksYaml(pluginDir: string): { absPath: string; source: string } | undefined {
   for (const name of ['claude.yaml', 'claude.yml']) {
@@ -77,6 +102,11 @@ function findHooksYaml(pluginDir: string): { absPath: string; source: string } |
  * Compute every in-plugin-dir generated hook JSON for a plugin given its envelope, **without
  * writing**. This is the single source of truth shared by `runBuild` and the freshness check.
  *
+ * - A hooks YAML present at all (regardless of envelope) → `hooks/payload-adapter` (the static
+ *   cross-harness `sh`+`jq` payload-normalization filter, sidecar-carried sentinel) and its
+ *   `hooks/payload-adapter.generated` sidecar (docs/specs/payload-adapter.md §11, D10). Emission
+ *   does not depend on which target(s) the envelope declares — the adapter is useful to any
+ *   handler, gating or not.
  * - `claude` in envelope + a hooks YAML present → `hooks/claude.json` (Claude JSON + sentinel).
  * - `gemini` in envelope + a hooks YAML present → `hooks/hooks.json` (Gemini JSON + sentinel).
  * - `cursor` in envelope + a hooks YAML present → `hooks/cursor.json` (Cursor JSON + sentinel), plus
@@ -85,8 +115,9 @@ function findHooksYaml(pluginDir: string): { absPath: string; source: string } |
  *   (cursor-controller-shim.md §3.3/§3.4).
  *
  * The JSON sentinel is applied to the **parsed object** so the on-disk file carries a top-level
- * `_generated` field (§4.3), serialized 2-space + trailing newline. The `.mjs` runner is pure
- * executable JS and carries no inline sentinel — its companion `.generated` sidecar does.
+ * `_generated` field (§4.3), serialized 2-space + trailing newline. The `.mjs` runner and the
+ * payload adapter are pure executable scripts and carry no inline sentinel — their companion
+ * `.generated` sidecars do.
  *
  * @throws {Error} If the hooks YAML is malformed or fails the Claude hooks schema.
  */
@@ -100,6 +131,27 @@ export function computePluginHookArtifacts(
   const envelopeSet = new Set(envelope);
   const artifacts: PluginHookArtifact[] = [];
   const yamlContent = fs.readFileSync(yaml.absPath, 'utf-8');
+
+  // Payload adapter (docs/specs/payload-adapter.md §11, D10): emitted whenever a plugin authors a
+  // hooks YAML at all, independent of the target envelope — any handler, gating or not, benefits
+  // from the normalized cross-harness payload. A pure, plugin-independent script, so it carries a
+  // sidecar sentinel (like the cursor shim) rather than an inline one.
+  const payloadAdapterAbsPath = path.join(pluginDir, 'hooks', PAYLOAD_ADAPTER_FILENAME);
+  const sharedArtifactTarget = sharedHookArtifactTarget(envelope);
+  artifacts.push({
+    absPath: payloadAdapterAbsPath,
+    source: yaml.source,
+    sentinelMode: 'sidecar',
+    target: sharedArtifactTarget,
+    expectedContent: PAYLOAD_ADAPTER_SOURCE,
+  });
+  artifacts.push({
+    absPath: sidecarPath(payloadAdapterAbsPath),
+    source: yaml.source,
+    sentinelMode: 'sidecar',
+    target: sharedArtifactTarget,
+    expectedContent: sidecarContent(yaml.source),
+  });
 
   if (envelopeSet.has('claude')) {
     // Parse+validate to a typed object, then attach the JSON sentinel.

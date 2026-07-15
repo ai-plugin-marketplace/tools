@@ -21,6 +21,7 @@ import * as path from 'node:path';
 
 import { afterEach, describe, expect, it } from 'vitest';
 
+import { PAYLOAD_ADAPTER_FILENAME, PAYLOAD_ADAPTER_SOURCE } from '../hooks/payload-adapter.js';
 import { convertClaudeHooksYamlToJson } from '../targets/claude/transform.js';
 import { convertClaudeHooksYamlToCursorJson } from '../targets/cursor/transform.js';
 import { CURSOR_SHIM_FILENAME, CURSOR_SHIM_RUNNER_SOURCE } from '../targets/cursor/shim-runner.js';
@@ -249,8 +250,15 @@ describeMaybe('runBuild — BuildResult shape (§8.1)', () => {
     expect(fs.existsSync(path.join(repo.pluginDir, 'hooks', 'hooks.json'))).toBe(false);
     // cursor IS declared and a hooks YAML is present → hooks/cursor.json is emitted.
     expect(fs.existsSync(path.join(repo.pluginDir, 'hooks', 'cursor.json'))).toBe(true);
-    expect(result?.artifacts).toHaveLength(1);
-    expect(result?.artifacts[0]?.target).toBe('cursor');
+    // A hooks YAML is present regardless of envelope → the payload adapter + its sidecar are
+    // always emitted alongside cursor.json (docs/specs/payload-adapter.md §11, D10).
+    expect(fs.existsSync(path.join(repo.pluginDir, 'hooks', 'payload-adapter'))).toBe(true);
+    expect(fs.existsSync(path.join(repo.pluginDir, 'hooks', 'payload-adapter.generated'))).toBe(
+      true,
+    );
+    expect(result?.artifacts).toHaveLength(3);
+    const cursorArtifact = result?.artifacts.find((a) => a.path.endsWith('cursor.json'));
+    expect(cursorArtifact?.target).toBe('cursor');
   });
 });
 
@@ -315,9 +323,14 @@ describe('computePluginHookArtifacts — cursor branch', () => {
     pluginDir = writePluginWithHooks(HOOKS_YAML);
     const artifacts = computePluginHookArtifacts(pluginDir, ['cursor']);
 
-    const cursor = artifacts.find((a) => a.target === 'cursor');
+    // Find by absPath, not target: with `claude` absent from the envelope, the shared
+    // payload-adapter artifacts also fall back to `target: 'cursor'` (the only envelope target),
+    // so `target === 'cursor'` alone would ambiguously match either artifact.
+    const cursor = artifacts.find(
+      (a) => a.absPath === path.join(pluginDir, 'hooks', 'cursor.json'),
+    );
     expect(cursor).toBeDefined();
-    expect(cursor?.absPath).toBe(path.join(pluginDir, 'hooks', 'cursor.json'));
+    expect(cursor?.target).toBe('cursor');
     expect(cursor?.source).toBe('hooks/claude.yaml');
     expect(cursor?.sentinelMode).toBe('json-field');
     // The sentinel-stripped body equals the mechanical Cursor transform output.
@@ -334,17 +347,22 @@ describe('computePluginHookArtifacts — cursor branch', () => {
 
   it('round-trips the generated cursor.json bytes byte-for-byte (freshness invariant §10.5)', () => {
     pluginDir = writePluginWithHooks(HOOKS_YAML);
+    const cursorJsonAbsPath = path.join(pluginDir, 'hooks', 'cursor.json');
+
+    // Find by absPath, not target: with `claude` absent from the envelope, the shared
+    // payload-adapter artifacts also fall back to `target: 'cursor'`, so a target-only predicate
+    // would ambiguously match the payload-adapter artifact instead of cursor.json.
 
     // First pass: compute + write (what runBuild does).
     const first = computePluginHookArtifacts(pluginDir, ['cursor']).find(
-      (a) => a.target === 'cursor',
+      (a) => a.absPath === cursorJsonAbsPath,
     );
     expect(first).toBeDefined();
     fs.writeFileSync(first?.absPath ?? '', first?.expectedContent ?? '', 'utf-8');
 
     // Second pass: recompute (what the freshness check does) and compare to the on-disk bytes.
     const second = computePluginHookArtifacts(pluginDir, ['cursor']).find(
-      (a) => a.target === 'cursor',
+      (a) => a.absPath === cursorJsonAbsPath,
     );
     const onDisk = fs.readFileSync(first?.absPath ?? '', 'utf-8');
     expect(second?.expectedContent).toBe(onDisk);
@@ -417,7 +435,7 @@ describe('computePluginHookArtifacts — cursor shim artifacts', () => {
     expect(artifacts.some((a) => a.absPath === sidecarPath(shimAbs))).toBe(false);
   });
 
-  it('round-trips all three artifacts byte-for-byte (freshness invariant §10.5)', () => {
+  it('round-trips all five artifacts byte-for-byte (freshness invariant §10.5)', () => {
     pluginDir = writePluginWithHooks(GATING_YAML);
 
     // First pass: compute + write (runBuild).
@@ -427,13 +445,118 @@ describe('computePluginHookArtifacts — cursor shim artifacts', () => {
     }
 
     // Second pass: recompute (freshness) and compare to the on-disk bytes for each artifact.
+    // cursor.json + cursor-shim.mjs + its sidecar + the payload adapter + its sidecar.
     const second = computePluginHookArtifacts(pluginDir, ['cursor']);
-    expect(second).toHaveLength(3);
+    expect(second).toHaveLength(5);
     for (const artifact of second) {
       const onDisk = fs.readFileSync(artifact.absPath, 'utf-8');
       expect(onDisk, `byte mismatch for ${path.basename(artifact.absPath)}`).toBe(
         artifact.expectedContent,
       );
+    }
+  });
+});
+
+// ---------------------------------------------------------------------------
+// computePluginHookArtifacts — payload adapter emission (template-independent;
+// docs/specs/payload-adapter.md §11, D10)
+// ---------------------------------------------------------------------------
+
+describe('computePluginHookArtifacts — payload adapter', () => {
+  let pluginDir: string | undefined;
+
+  afterEach(() => {
+    if (pluginDir && fs.existsSync(pluginDir)) fs.rmSync(pluginDir, { recursive: true });
+  });
+
+  function writePluginWithHooks(yaml: string): string {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'aipm-payload-adapter-build-'));
+    fs.mkdirSync(path.join(dir, 'hooks'), { recursive: true });
+    fs.writeFileSync(path.join(dir, 'hooks', 'claude.yaml'), yaml, 'utf-8');
+    return dir;
+  }
+
+  const HOOKS_YAML =
+    'hooks:\n  PreToolUse:\n    - matcher: Bash\n      hooks:\n        - { type: command, command: ./guard.sh }\n';
+
+  it('emits hooks/payload-adapter + its .generated sidecar for any declared envelope (§11, D10)', () => {
+    pluginDir = writePluginWithHooks(HOOKS_YAML);
+    const adapterAbs = path.join(pluginDir, 'hooks', PAYLOAD_ADAPTER_FILENAME);
+
+    for (const envelope of [['claude'], ['cursor'], ['gemini'], ['claude', 'cursor', 'gemini']]) {
+      const artifacts = computePluginHookArtifacts(
+        pluginDir,
+        envelope as ('claude' | 'cursor' | 'gemini')[],
+      );
+      const adapter = artifacts.find((a) => a.absPath === adapterAbs);
+      const sidecar = artifacts.find((a) => a.absPath === sidecarPath(adapterAbs));
+
+      expect(adapter, `envelope ${envelope.join(',')}`).toBeDefined();
+      expect(adapter?.sentinelMode).toBe('sidecar');
+      // Byte-exact static asset — identical regardless of envelope (D10: takes no plugin-specific
+      // argument).
+      expect(adapter?.expectedContent).toBe(PAYLOAD_ADAPTER_SOURCE);
+
+      expect(sidecar, `envelope ${envelope.join(',')}`).toBeDefined();
+      expect(sidecar?.absPath).toBe(`${adapterAbs}.generated`);
+      expect(sidecar?.expectedContent).toBe(sidecarContent('hooks/claude.yaml'));
+      expect(hasSentinel(sidecar?.expectedContent ?? '', 'sidecar')).toBe(true);
+      expect(readSentinelSource(sidecar?.expectedContent ?? '', 'sidecar')).toBe(
+        'hooks/claude.yaml',
+      );
+    }
+  });
+
+  it('emits neither hooks/payload-adapter nor its sidecar when no hooks YAML exists', () => {
+    pluginDir = fs.mkdtempSync(path.join(os.tmpdir(), 'aipm-payload-adapter-nohooks-'));
+    const artifacts = computePluginHookArtifacts(pluginDir, ['claude', 'cursor', 'gemini']);
+    expect(artifacts).toHaveLength(0);
+  });
+
+  it('round-trips the generated payload-adapter + sidecar bytes byte-for-byte (freshness §10.5)', () => {
+    pluginDir = writePluginWithHooks(HOOKS_YAML);
+
+    const first = computePluginHookArtifacts(pluginDir, ['claude']);
+    for (const artifact of first) {
+      fs.mkdirSync(path.dirname(artifact.absPath), { recursive: true });
+      fs.writeFileSync(artifact.absPath, artifact.expectedContent, 'utf-8');
+    }
+
+    const second = computePluginHookArtifacts(pluginDir, ['claude']);
+    const adapterAbs = path.join(pluginDir, 'hooks', PAYLOAD_ADAPTER_FILENAME);
+    const adapter = second.find((a) => a.absPath === adapterAbs);
+    const sidecar = second.find((a) => a.absPath === sidecarPath(adapterAbs));
+
+    expect(fs.readFileSync(adapterAbs, 'utf-8')).toBe(adapter?.expectedContent);
+    expect(fs.readFileSync(sidecarPath(adapterAbs), 'utf-8')).toBe(sidecar?.expectedContent);
+  });
+
+  // Regression: the payload adapter + sidecar previously carried a hardcoded `target: 'claude'`
+  // even for envelopes that never declare `claude` (e.g. a codex-only plugin), misreporting
+  // `BuildResult.artifacts` for that target's build step. The adapter is shared across the whole
+  // envelope, so it must be attributed deterministically to a target actually present in the
+  // envelope: `claude` when declared, otherwise the first envelope target in canonical
+  // (`TARGET_IDS`) order.
+  it('attributes the shared payload-adapter artifacts to a target present in the envelope', () => {
+    pluginDir = writePluginWithHooks(HOOKS_YAML);
+    const adapterAbs = path.join(pluginDir, 'hooks', PAYLOAD_ADAPTER_FILENAME);
+
+    const cases: { envelope: ('claude' | 'cursor' | 'gemini')[]; expectedTarget: string }[] = [
+      { envelope: ['claude'], expectedTarget: 'claude' },
+      { envelope: ['cursor', 'claude', 'gemini'], expectedTarget: 'claude' },
+      // No `claude` in the envelope: falls back to the first envelope target in canonical
+      // (TARGET_IDS) order, never the hardcoded 'claude'.
+      { envelope: ['gemini'], expectedTarget: 'gemini' },
+      { envelope: ['gemini', 'cursor'], expectedTarget: 'cursor' },
+    ];
+
+    for (const { envelope, expectedTarget } of cases) {
+      const artifacts = computePluginHookArtifacts(pluginDir, envelope);
+      const adapter = artifacts.find((a) => a.absPath === adapterAbs);
+      const sidecar = artifacts.find((a) => a.absPath === sidecarPath(adapterAbs));
+
+      expect(adapter?.target, `envelope ${envelope.join(',')}`).toBe(expectedTarget);
+      expect(sidecar?.target, `envelope ${envelope.join(',')}`).toBe(expectedTarget);
     }
   });
 });

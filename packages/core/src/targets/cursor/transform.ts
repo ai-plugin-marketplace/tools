@@ -85,6 +85,19 @@ export const GATING_EVENTS: ReadonlySet<string> = new Set<string>([
   'UserPromptSubmit',
 ]);
 
+/**
+ * The Cursor-side event names of the gating events — the images of {@link GATING_EVENTS} under
+ * {@link CLAUDE_TO_CURSOR_EVENTS} (`preToolUse`, `beforeSubmitPrompt`). A converted Cursor document
+ * carries a shimmed gating hook iff one of these keys holds a non-empty entry array, which is what
+ * {@link cursorDocHasGatingHook} inspects — so "has a gating hook" is derived from the single parse
+ * the converter already did, not a second re-parse of the source YAML.
+ */
+export const GATING_CURSOR_EVENTS: ReadonlySet<CursorHookEvent> = new Set<CursorHookEvent>(
+  [...GATING_EVENTS]
+    .map((claudeEvent) => CLAUDE_TO_CURSOR_EVENTS[claudeEvent])
+    .filter((cursorEvent): cursorEvent is CursorHookEvent => cursorEvent !== undefined),
+);
+
 // ---------------------------------------------------------------------------
 // Local source/target types (no cross-target import — §3.4)
 // ---------------------------------------------------------------------------
@@ -178,12 +191,26 @@ export function adaptMatcherBlockToCursorEntries(block: ClaudeHookMatcherBlock):
 }
 
 /**
+ * POSIX-single-quote a string so it survives a shell's tokenization as a **single** argument.
+ * Wraps the whole string in single quotes and escapes any embedded single quote as `'\''` (close
+ * quote, escaped literal quote, reopen quote) — the standard shell-safe encoding. Used to embed the
+ * original Claude handler command as one token after the shim's `--` sentinel (spec §3.1) so shell
+ * metacharacters and spaces in the handler command cannot be split into extra argv by Cursor.
+ */
+function posixSingleQuote(value: string): string {
+  return `'${value.replace(/'/g, "'\\''")}'`;
+}
+
+/**
  * Rewrite one observer-shaped Cursor entry into a **shimmed controller entry** for a gating event
  * (spec `cursor-controller-shim.md` §3.1). The entry's `command` becomes an invocation of the
- * generated shim runner — `node ./hooks/<shim> <cursorEvent> -- <original command>` — where the
- * `--` sentinel separates the runner's own args from the handler command (which keeps any of its
- * own args verbatim). The translated `matcher` is preserved; `failClosed: true` is added; `type`
- * is dropped (Cursor defaults it to `command`). Key order: `command`, `matcher?`, `failClosed`.
+ * generated shim runner — `node ./hooks/<shim> <cursorEvent> -- '<original command>'` — where the
+ * `--` sentinel separates the runner's own args from the handler command, and the handler command
+ * is embedded as a **single POSIX-single-quoted token** so Cursor's shell tokenization preserves it
+ * (with any of its own args and shell features) as one argument. The runner then runs that command
+ * through a shell, matching Claude's `sh -c` execution. The translated `matcher` is preserved;
+ * `failClosed: true` is added; `type` is dropped (Cursor defaults it to `command`). Key order:
+ * `command`, `matcher?`, `failClosed`.
  *
  * @param entry - An observer Cursor entry from {@link adaptMatcherBlockToCursorEntries}.
  * @param cursorEvent - The (renamed) Cursor event this hook fires on — passed to the shim so it
@@ -192,7 +219,7 @@ export function adaptMatcherBlockToCursorEntries(block: ClaudeHookMatcherBlock):
  */
 function toShimmedEntry(entry: CursorHookEntry, cursorEvent: CursorHookEvent): CursorHookEntry {
   const shimmed: CursorHookEntry = {
-    command: `node ./hooks/${CURSOR_SHIM_FILENAME} ${cursorEvent} -- ${entry.command}`,
+    command: `node ./hooks/${CURSOR_SHIM_FILENAME} ${cursorEvent} -- ${posixSingleQuote(entry.command)}`,
   };
   if (entry.matcher !== undefined) shimmed.matcher = entry.matcher;
   shimmed.failClosed = true;
@@ -200,23 +227,25 @@ function toShimmedEntry(entry: CursorHookEntry, cursorEvent: CursorHookEvent): C
 }
 
 /**
- * Whether the Claude hooks source carries at least one **gating-event** hook with a real entry —
- * i.e. whether the build must additionally emit the shim runner + its sidecar (spec §3.3). Parses
- * the YAML and adapts each {@link GATING_EVENTS} block through the same shape adapter used by the
- * converter, so "has a gating hook" agrees exactly with "the converter emitted a shimmed entry".
+ * Whether a **converted** Cursor hooks document carries at least one **gating-event** hook with a
+ * real entry — i.e. whether the build must additionally emit the shim runner + its sidecar (spec
+ * §3.3). Derived from the document {@link convertClaudeHooksYamlToCursorJson} already produced (a
+ * non-empty {@link GATING_CURSOR_EVENTS} key), so the build parses the source YAML exactly **once**
+ * for Cursor rather than re-parsing it to answer this question. Behavior is identical to inspecting
+ * the source directly: the converter emits a non-empty gating key iff a gating source event had ≥1
+ * emittable entry.
  *
- * @param yamlContent - Raw `hooks/claude.yaml` contents.
- * @returns `true` iff a gating event has ≥1 emittable entry.
- * @throws {Error} If the YAML is malformed.
+ * @param doc - The parsed Cursor hooks document (the object form of the converter's JSON output).
+ * @returns `true` iff a gating Cursor event key holds ≥1 entry.
  */
-export function claudeSourceHasGatingHook(yamlContent: string): boolean {
-  const parsed = (parseYaml(yamlContent) ?? {}) as ClaudeHooksSource;
-  const sourceHooks = parsed.hooks ?? {};
-  for (const [claudeEvent, blocks] of Object.entries(sourceHooks)) {
-    if (!GATING_EVENTS.has(claudeEvent) || !Array.isArray(blocks)) continue;
-    for (const block of blocks) {
-      if (adaptMatcherBlockToCursorEntries(block).length > 0) return true;
-    }
+export function cursorDocHasGatingHook(doc: unknown): boolean {
+  if (typeof doc !== 'object' || doc === null) return false;
+  const hooks = (doc as { hooks?: unknown }).hooks;
+  if (typeof hooks !== 'object' || hooks === null) return false;
+  const hooksRecord = hooks as Record<string, unknown>;
+  for (const cursorEvent of GATING_CURSOR_EVENTS) {
+    const entries = hooksRecord[cursorEvent];
+    if (Array.isArray(entries) && entries.length > 0) return true;
   }
   return false;
 }

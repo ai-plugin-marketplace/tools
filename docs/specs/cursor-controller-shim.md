@@ -96,47 +96,67 @@ For a plugin with a `hooks/claude.yaml` and `cursor` in its envelope:
 
   ```json
   {
-    "command": "node ./hooks/cursor-shim.mjs preToolUse -- ./gate.sh",
+    "command": "node ./hooks/cursor-shim.mjs preToolUse -- './gate.sh'",
     "matcher": "Shell",
     "failClosed": true
   }
   ```
 
   - `preToolUse` — the Cursor event, so the runner knows which translation table to apply.
-  - `-- ./gate.sh` — the original Claude handler command (verbatim, including any of its own args),
-    after a `--` sentinel so the runner never confuses handler args with its own.
+  - `-- './gate.sh'` — the original Claude handler command (including any of its own args), embedded
+    after a `--` sentinel as a **single POSIX-single-quoted token** (any embedded `'` escaped as
+    `'\''`). The single-quoting makes Cursor's shell tokenization preserve the whole handler command
+    — spaces, args, and shell metacharacters — as one argument, which the runner then executes
+    through a shell (matching Claude's `sh -c`). The `--` sentinel keeps the runner from ever
+    confusing the handler command with its own args.
 
 - **`hooks/cursor-shim.mjs`** is emitted once (when any gating-event hook exists) as a committed,
   sentinel-carrying generated file (§3.4).
 
 ### 3.2 The shim runner (`hooks/cursor-shim.mjs`)
 
-A static, plugin-independent Node script (byte-identical across plugins — it is a committed constant,
-not templated per hook). Contract:
+A deterministic, plugin-independent Node script (byte-identical across plugins — its bytes are a
+deterministic constant, not templated per hook). Contract:
 
-1. Parse `argv`: `<cursorEvent> -- <handler> [handlerArgs...]`.
+1. Parse `argv`: `<cursorEvent> -- <handler command>`. Everything after the `--` sentinel is the
+   handler command string (under real Cursor it arrives as a single POSIX-single-quoted token; the
+   runner joins any residual elements with a space to reconstitute it).
 2. Read all of stdin (Cursor's hook payload JSON).
-3. **Translate Cursor → Claude** (§4.1) and spawn `<handler> [handlerArgs...]`, piping the Claude
-   payload to its stdin.
+3. **Translate Cursor → Claude** (§4.1) and run the handler command **through a shell**
+   (`spawnSync(handlerCommand, { shell: true, input, encoding: 'utf8', maxBuffer })`), piping the
+   Claude payload to its stdin. Shell execution matches Claude's own `sh -c` hook model, so a handler
+   using env-var refs / quoting / other shell features execs correctly (the command is the plugin
+   author's own trusted hook — shell execution is intended, not an injection vector).
 4. Capture the handler's stdout + exit code. **Translate Claude → Cursor** (§4.2) and print the
-   Cursor control JSON to stdout.
+   Cursor control JSON to stdout, exiting **only after stdout has flushed** (`process.stdout.write(json,
+() => process.exit(code))`) so a large allow decision is never truncated into malformed JSON.
 5. **Fail-closed on anything unexpected** (§4.4): if the handler exits non-zero, or emits output that
    is not parseable/lacks a recognized decision, print `{"permission":"deny","agent_message":"<why>"}`
    and exit `2`. Always print syntactically valid JSON. Never throw uncaught.
 
-The runner carries **committed inverse lookup tables** (Cursor→Claude) — the mirror of the transform's
-`CLAUDE_TO_CURSOR_*`. Because the runner is a static asset (not generated from the tables), a test
-asserts the two stay in sync (§5).
+The `maxBuffer` (see §4.4) is set explicitly to 64 MB rather than left at spawnSync's 1 MB default,
+which would set `error` + `status === null` on a handler that legitimately emits >1 MB of stdout and
+be misread as a spawn failure. The genuine-spawn-failure detection (`error && status === null`)
+remains for the case where the shell itself cannot run.
+
+The runner carries an **inverse lookup table** (Cursor→Claude) — the mirror of the transform's
+`CLAUDE_TO_CURSOR_*`. It is **generated from the exported `CURSOR_TO_CLAUDE_TOOLS` const** at emit
+time (stable, sorted key order — the `.mjs` stays byte-deterministic so freshness round-trips), so
+the two tables are one source of truth and cannot drift; a test asserts the emitted literal matches
+the const (§5).
 
 ### 3.3 Build wiring
 
 Extend `computePluginHookArtifacts` (`packages/core/src/pipeline/build.ts`), the single source of
 truth for write + freshness:
 
-- Reuse the parsed Claude source. Partition events into observer vs gating via `GATING_EVENTS`.
+- Parse the source YAML **once** for Cursor (the converter's parse). Partition events into observer
+  vs gating via `GATING_EVENTS`.
 - Observer events → existing path. Gating events → shimmed entries (command rewrite + `failClosed`).
-- If any gating-event hook is present, additionally emit `hooks/cursor-shim.mjs` (static content) and
-  its **sidecar sentinel** `hooks/cursor-shim.mjs.generated` (see §3.4).
+- "Has a gating hook?" is derived from the **already-converted document** (`cursorDocHasGatingHook`:
+  a non-empty gating Cursor event key — `preToolUse` / `beforeSubmitPrompt`), not a second re-parse
+  of the source. If true, additionally emit `hooks/cursor-shim.mjs` (static content) and its
+  **sidecar sentinel** `hooks/cursor-shim.mjs.generated` (see §3.4).
 - Freshness compares `hooks/cursor.json`, `hooks/cursor-shim.mjs`, and the `.generated` sidecar
   byte-for-byte.
 
@@ -215,6 +235,19 @@ of:
 For `beforeSubmitPrompt` the deny form is `{"continue": false, "user_message": "<why>"}`. In all
 cases output is valid JSON and the process exits `2`. The `failClosed:true` entry flag is belt-and-
 suspenders: even if the runner somehow died before printing, Cursor blocks.
+
+**Reliability guards (so fail-closed never fires spuriously and an allow never truncates):**
+
+- **Explicit `maxBuffer` (64 MB).** The handler `spawnSync` sets `maxBuffer: 64 * 1024 * 1024`.
+  spawnSync's 1 MB default would set `error` + `status === null` on a handler that legitimately emits
+  > 1 MB of stdout, which the runner's genuine-spawn-failure detection (`error && status === null`)
+  > would misread as a spawn failure and deny. The explicit generous buffer avoids that misread while
+  > keeping the detection for a real "the shell never ran" failure.
+- **Flush stdout before exit.** The runner writes its control JSON and exits from the write's flush
+  callback (`process.stdout.write(json, () => process.exit(code))`), not immediately after the write.
+  A bare `process.exit()` can truncate a pipe-buffered write; on the **allow** path that would yield
+  malformed JSON and Cursor would block a legitimately-allowed tool. This applies to the fail-closed
+  deny, the allow/`continue:true` path, and the normal interpret→emit path alike.
 
 ## 5. Testing
 

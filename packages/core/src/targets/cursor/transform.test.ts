@@ -17,7 +17,9 @@ import { describe, expect, it } from 'vitest';
 import {
   CLAUDE_TO_CURSOR_EVENTS,
   CLAUDE_TO_CURSOR_TOOLS,
+  GATING_EVENTS,
   adaptMatcherBlockToCursorEntries,
+  claudeSourceHasGatingHook,
   convertClaudeHooksYamlToCursorJson,
 } from './transform.js';
 
@@ -220,12 +222,15 @@ describe('convertClaudeHooksYamlToCursorJson — tool-name translation', () => {
   });
 });
 
+// The shape adapter is event-agnostic, so these exercise it through an OBSERVER event
+// (`PostToolUse`/`Stop`) where the emitted entries are byte-identical to the adapter output — the
+// gating events additionally rewrite the `command` (covered by the shimmed-entries suite above).
 describe('convertClaudeHooksYamlToCursorJson — shape adapter through the pipeline', () => {
   it('flattens multiple hooks[] entries under one matcher block into multiple flat entries', () => {
     const doc = convertToDoc(
-      'hooks:\n  PreToolUse:\n    - matcher: Bash\n      hooks:\n        - { command: ./a.sh }\n        - { command: ./b.sh }\n',
+      'hooks:\n  PostToolUse:\n    - matcher: Bash\n      hooks:\n        - { command: ./a.sh }\n        - { command: ./b.sh }\n',
     );
-    expect(doc.hooks.preToolUse).toStrictEqual([
+    expect(doc.hooks.postToolUse).toStrictEqual([
       { command: './a.sh', matcher: 'Shell' },
       { command: './b.sh', matcher: 'Shell' },
     ]);
@@ -233,9 +238,9 @@ describe('convertClaudeHooksYamlToCursorJson — shape adapter through the pipel
 
   it('concatenates entries from multiple matcher blocks under one event', () => {
     const doc = convertToDoc(
-      'hooks:\n  PreToolUse:\n    - matcher: Bash\n      hooks:\n        - { command: ./a.sh }\n    - matcher: Read\n      hooks:\n        - { command: ./b.sh }\n',
+      'hooks:\n  PostToolUse:\n    - matcher: Bash\n      hooks:\n        - { command: ./a.sh }\n    - matcher: Read\n      hooks:\n        - { command: ./b.sh }\n',
     );
-    expect(doc.hooks.preToolUse).toStrictEqual([
+    expect(doc.hooks.postToolUse).toStrictEqual([
       { command: './a.sh', matcher: 'Shell' },
       { command: './b.sh', matcher: 'Read' },
     ]);
@@ -243,9 +248,9 @@ describe('convertClaudeHooksYamlToCursorJson — shape adapter through the pipel
 
   it('emits no matcher key for a matcher-less block and drops description', () => {
     const doc = convertToDoc(
-      'hooks:\n  UserPromptSubmit:\n    - description: drop me\n      hooks:\n        - { command: ./p.sh }\n',
+      'hooks:\n  Stop:\n    - description: drop me\n      hooks:\n        - { command: ./p.sh }\n',
     );
-    expect(doc.hooks.beforeSubmitPrompt).toStrictEqual([{ command: './p.sh' }]);
+    expect(doc.hooks.stop).toStrictEqual([{ command: './p.sh' }]);
   });
 });
 
@@ -282,10 +287,16 @@ describe('convertClaudeHooksYamlToCursorJson — negatives', () => {
 });
 
 // ---------------------------------------------------------------------------
-// Worked example (spec §3.2 / issue #34) — byte-verbatim
+// Worked example — byte-verbatim
+//
+// The source is `cursor-hooks-target.md` §3.2's worked example, but both its events (`PreToolUse`,
+// `UserPromptSubmit`) are GATING, so the emitted `hooks/cursor.json` now flows through the
+// controller shim (`cursor-controller-shim.md` §3.1): each entry's `command` invokes
+// `hooks/cursor-shim.mjs`, carries the translated matcher, gains `failClosed: true`, and drops
+// `type`. Expected JSON is hand-derived from §3.1 and serialized as canonical 2-space JSON.
 // ---------------------------------------------------------------------------
 
-/** Source `hooks/claude.yaml` from the spec's worked example (§3.2). */
+/** Source `hooks/claude.yaml` (cursor-hooks-target.md §3.2 worked example — both events gating). */
 const WORKED_EXAMPLE_YAML = `hooks:
   PreToolUse:
     - matcher: Bash
@@ -299,37 +310,183 @@ const WORKED_EXAMPLE_YAML = `hooks:
 `;
 
 /**
- * Expected `hooks/cursor.json` body, hand-derived from the spec's worked-example object and
- * serialized as canonical 2-space JSON (the byte form the transform emits — the spec's markdown
- * shows a Prettier-compacted rendering of the same object).
+ * Expected `hooks/cursor.json` body: both gating events are shimmed (cursor-controller-shim.md
+ * §3.1). Serialized as canonical 2-space JSON — the byte form the transform emits.
  */
 const WORKED_EXAMPLE_JSON = `{
   "version": 1,
   "hooks": {
     "preToolUse": [
       {
-        "command": "./guard.sh",
-        "type": "command",
-        "matcher": "Shell"
+        "command": "node ./hooks/cursor-shim.mjs preToolUse -- ./guard.sh",
+        "matcher": "Shell",
+        "failClosed": true
       },
       {
-        "command": "./log.sh",
-        "type": "command",
-        "matcher": "Shell"
+        "command": "node ./hooks/cursor-shim.mjs preToolUse -- ./log.sh",
+        "matcher": "Shell",
+        "failClosed": true
       }
     ],
     "beforeSubmitPrompt": [
       {
-        "command": "./prompt.sh",
-        "type": "command"
+        "command": "node ./hooks/cursor-shim.mjs beforeSubmitPrompt -- ./prompt.sh",
+        "failClosed": true
       }
     ]
   }
 }
 `;
 
-describe('convertClaudeHooksYamlToCursorJson — spec worked example', () => {
-  it('produces the spec worked example verbatim', () => {
+describe('convertClaudeHooksYamlToCursorJson — worked example (shimmed gating events)', () => {
+  it('produces the shimmed worked example verbatim', () => {
     expect(convertClaudeHooksYamlToCursorJson(WORKED_EXAMPLE_YAML)).toBe(WORKED_EXAMPLE_JSON);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Controller-hook shim — gating events (cursor-controller-shim.md §2.2, §3.1, §4)
+//
+// Expected values are hand-derived from cursor-controller-shim.md §3.1 (the shimmed-entry shape:
+// `{ command: "node ./hooks/cursor-shim.mjs <cursorEvent> -- <handler>", matcher?, failClosed:
+// true }`) — not captured from program output.
+// @see docs/specs/cursor-controller-shim.md
+// ---------------------------------------------------------------------------
+
+/** A shimmed Cursor entry, including the `failClosed` flag the gating path adds. */
+interface ShimmedCursorDoc {
+  version: number;
+  hooks: Record<
+    string,
+    { command: string; type?: string; matcher?: string; failClosed?: boolean }[]
+  >;
+}
+function convertToShimDoc(yaml: string): ShimmedCursorDoc {
+  return JSON.parse(convertClaudeHooksYamlToCursorJson(yaml)) as ShimmedCursorDoc;
+}
+
+describe('GATING_EVENTS — committed controller/observer split (§2.2)', () => {
+  it('classifies PreToolUse and UserPromptSubmit as gating (controllers)', () => {
+    expect(GATING_EVENTS.has('PreToolUse')).toBe(true);
+    expect(GATING_EVENTS.has('UserPromptSubmit')).toBe(true);
+  });
+
+  it('classifies PostToolUse and Stop as NOT gating (observers)', () => {
+    expect(GATING_EVENTS.has('PostToolUse')).toBe(false);
+    expect(GATING_EVENTS.has('Stop')).toBe(false);
+  });
+
+  it('contains exactly the two gating events', () => {
+    expect([...GATING_EVENTS].sort()).toStrictEqual(['PreToolUse', 'UserPromptSubmit']);
+  });
+});
+
+describe('convertClaudeHooksYamlToCursorJson — shimmed gating entries (§3.1)', () => {
+  it('rewrites a PreToolUse hook to a shim invocation with failClosed and translated matcher', () => {
+    const doc = convertToShimDoc(
+      'hooks:\n  PreToolUse:\n    - matcher: Bash\n      hooks:\n        - { type: command, command: ./gate.sh }\n',
+    );
+    // §3.1: command → `node ./hooks/cursor-shim.mjs preToolUse -- ./gate.sh`, matcher Bash→Shell,
+    // failClosed:true, and NO `type` key (Cursor defaults it to command).
+    expect(doc.hooks.preToolUse).toStrictEqual([
+      {
+        command: 'node ./hooks/cursor-shim.mjs preToolUse -- ./gate.sh',
+        matcher: 'Shell',
+        failClosed: true,
+      },
+    ]);
+  });
+
+  it('rewrites a UserPromptSubmit hook (no matcher) to a beforeSubmitPrompt shim invocation', () => {
+    const doc = convertToShimDoc(
+      'hooks:\n  UserPromptSubmit:\n    - hooks:\n        - { type: command, command: ./prompt.sh }\n',
+    );
+    expect(doc.hooks.beforeSubmitPrompt).toStrictEqual([
+      {
+        command: 'node ./hooks/cursor-shim.mjs beforeSubmitPrompt -- ./prompt.sh',
+        failClosed: true,
+      },
+    ]);
+  });
+
+  it('preserves a handler command with its own args across the `--` boundary', () => {
+    const doc = convertToShimDoc(
+      'hooks:\n  PreToolUse:\n    - matcher: Bash\n      hooks:\n        - { command: "./gate.sh --strict foo" }\n',
+    );
+    // The handler's own args survive verbatim after the `--` sentinel (§3.1).
+    expect(doc.hooks.preToolUse?.[0]?.command).toBe(
+      'node ./hooks/cursor-shim.mjs preToolUse -- ./gate.sh --strict foo',
+    );
+    expect(doc.hooks.preToolUse?.[0]?.failClosed).toBe(true);
+  });
+
+  it('shims every entry when a gating block has multiple hooks[]', () => {
+    const doc = convertToShimDoc(
+      'hooks:\n  PreToolUse:\n    - matcher: Bash\n      hooks:\n        - { command: ./a.sh }\n        - { command: ./b.sh }\n',
+    );
+    expect(doc.hooks.preToolUse).toStrictEqual([
+      {
+        command: 'node ./hooks/cursor-shim.mjs preToolUse -- ./a.sh',
+        matcher: 'Shell',
+        failClosed: true,
+      },
+      {
+        command: 'node ./hooks/cursor-shim.mjs preToolUse -- ./b.sh',
+        matcher: 'Shell',
+        failClosed: true,
+      },
+    ]);
+  });
+});
+
+describe('convertClaudeHooksYamlToCursorJson — observer events stay byte-identical (§2.2 regression guard)', () => {
+  it('leaves PostToolUse entries un-shimmed (no shim command, no failClosed, type preserved)', () => {
+    const doc = convertToShimDoc(
+      'hooks:\n  PostToolUse:\n    - matcher: Write\n      hooks:\n        - { type: command, command: ./log.sh }\n',
+    );
+    expect(doc.hooks.postToolUse).toStrictEqual([
+      { command: './log.sh', type: 'command', matcher: 'Write' },
+    ]);
+    expect(doc.hooks.postToolUse?.[0]).not.toHaveProperty('failClosed');
+  });
+
+  it('leaves Stop entries un-shimmed', () => {
+    const doc = convertToShimDoc(
+      'hooks:\n  Stop:\n    - hooks:\n        - { type: command, command: ./cleanup.sh }\n',
+    );
+    expect(doc.hooks.stop).toStrictEqual([{ command: './cleanup.sh', type: 'command' }]);
+    expect(doc.hooks.stop?.[0]).not.toHaveProperty('failClosed');
+  });
+});
+
+describe('claudeSourceHasGatingHook — build gating-hook predicate (§3.3)', () => {
+  it('is true when a PreToolUse hook is present', () => {
+    expect(
+      claudeSourceHasGatingHook(
+        'hooks:\n  PreToolUse:\n    - hooks:\n        - { command: ./g.sh }\n',
+      ),
+    ).toBe(true);
+  });
+
+  it('is true when a UserPromptSubmit hook is present', () => {
+    expect(
+      claudeSourceHasGatingHook(
+        'hooks:\n  UserPromptSubmit:\n    - hooks:\n        - { command: ./p.sh }\n',
+      ),
+    ).toBe(true);
+  });
+
+  it('is false for observer-only sources (PostToolUse/Stop)', () => {
+    expect(
+      claudeSourceHasGatingHook(
+        'hooks:\n  PostToolUse:\n    - matcher: Write\n      hooks:\n        - { command: ./log.sh }\n  Stop:\n    - hooks:\n        - { command: ./c.sh }\n',
+      ),
+    ).toBe(false);
+  });
+
+  it('is false when a gating event has no emittable entry (empty/commandless block)', () => {
+    expect(
+      claudeSourceHasGatingHook('hooks:\n  PreToolUse:\n    - matcher: Bash\n      hooks: []\n'),
+    ).toBe(false);
   });
 });

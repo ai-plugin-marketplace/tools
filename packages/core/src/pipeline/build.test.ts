@@ -23,9 +23,16 @@ import { afterEach, describe, expect, it } from 'vitest';
 
 import { convertClaudeHooksYamlToJson } from '../targets/claude/transform.js';
 import { convertClaudeHooksYamlToCursorJson } from '../targets/cursor/transform.js';
+import { CURSOR_SHIM_FILENAME, CURSOR_SHIM_RUNNER_SOURCE } from '../targets/cursor/shim-runner.js';
 import { convertClaudeHooksYamlToGeminiJson } from '../targets/gemini/transform.js';
 import { computePluginHookArtifacts, runBuild } from './build.js';
-import { hasSentinel, readSentinelSource, stripSentinel } from './sentinel.js';
+import {
+  hasSentinel,
+  readSentinelSource,
+  sidecarContent,
+  sidecarPath,
+  stripSentinel,
+} from './sentinel.js';
 import {
   ALL_SYNTH_TARGETS,
   ORACLE_GEMINI_DIR,
@@ -341,5 +348,92 @@ describe('computePluginHookArtifacts — cursor branch', () => {
     );
     const onDisk = fs.readFileSync(first?.absPath ?? '', 'utf-8');
     expect(second?.expectedContent).toBe(onDisk);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// computePluginHookArtifacts — cursor controller-hook shim artifacts
+// (template-independent; cursor-controller-shim.md §3.3/§3.4)
+// ---------------------------------------------------------------------------
+
+describe('computePluginHookArtifacts — cursor shim artifacts', () => {
+  let pluginDir: string | undefined;
+
+  afterEach(() => {
+    if (pluginDir && fs.existsSync(pluginDir)) fs.rmSync(pluginDir, { recursive: true });
+  });
+
+  function writePluginWithHooks(yaml: string): string {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'aipm-cursor-shim-build-'));
+    fs.mkdirSync(path.join(dir, 'hooks'), { recursive: true });
+    fs.writeFileSync(path.join(dir, 'hooks', 'claude.yaml'), yaml, 'utf-8');
+    return dir;
+  }
+
+  // A gating (PreToolUse) source → the shim files must be emitted alongside cursor.json.
+  const GATING_YAML =
+    'hooks:\n  PreToolUse:\n    - matcher: Bash\n      hooks:\n        - { type: command, command: ./gate.sh }\n';
+  // An observer-only (PostToolUse) source → no shim files.
+  const OBSERVER_YAML =
+    'hooks:\n  PostToolUse:\n    - matcher: Write\n      hooks:\n        - { type: command, command: ./log.sh }\n';
+
+  it('emits cursor.json + cursor-shim.mjs + the .generated sidecar for a gating source (§3.3)', () => {
+    pluginDir = writePluginWithHooks(GATING_YAML);
+    const artifacts = computePluginHookArtifacts(pluginDir, ['cursor']);
+    const shimAbs = path.join(pluginDir, 'hooks', CURSOR_SHIM_FILENAME);
+
+    const cursorJson = artifacts.find(
+      (a) => a.absPath === path.join(pluginDir, 'hooks', 'cursor.json'),
+    );
+    const shim = artifacts.find((a) => a.absPath === shimAbs);
+    const sidecar = artifacts.find((a) => a.absPath === sidecarPath(shimAbs));
+
+    expect(cursorJson).toBeDefined();
+
+    // The static runner is emitted byte-exact, target cursor, sidecar carrier.
+    expect(shim).toBeDefined();
+    expect(shim?.target).toBe('cursor');
+    expect(shim?.sentinelMode).toBe('sidecar');
+    expect(shim?.expectedContent).toBe(CURSOR_SHIM_RUNNER_SOURCE);
+
+    // The sidecar carries the sentinel (the .mjs is pure JS); it names the author-authored source.
+    expect(sidecar).toBeDefined();
+    expect(sidecar?.absPath).toBe(`${shimAbs}.generated`);
+    expect(sidecar?.expectedContent).toBe(sidecarContent('hooks/claude.yaml'));
+    expect(hasSentinel(sidecar?.expectedContent ?? '', 'sidecar')).toBe(true);
+    expect(readSentinelSource(sidecar?.expectedContent ?? '', 'sidecar')).toBe('hooks/claude.yaml');
+  });
+
+  it('emits NO shim files for an observer-only source (§3.3)', () => {
+    pluginDir = writePluginWithHooks(OBSERVER_YAML);
+    const artifacts = computePluginHookArtifacts(pluginDir, ['cursor']);
+    const shimAbs = path.join(pluginDir, 'hooks', CURSOR_SHIM_FILENAME);
+
+    // cursor.json is still emitted, but neither the runner nor its sidecar.
+    expect(artifacts.some((a) => a.absPath === path.join(pluginDir, 'hooks', 'cursor.json'))).toBe(
+      true,
+    );
+    expect(artifacts.some((a) => a.absPath === shimAbs)).toBe(false);
+    expect(artifacts.some((a) => a.absPath === sidecarPath(shimAbs))).toBe(false);
+  });
+
+  it('round-trips all three artifacts byte-for-byte (freshness invariant §10.5)', () => {
+    pluginDir = writePluginWithHooks(GATING_YAML);
+
+    // First pass: compute + write (runBuild).
+    for (const artifact of computePluginHookArtifacts(pluginDir, ['cursor'])) {
+      fs.mkdirSync(path.dirname(artifact.absPath), { recursive: true });
+      fs.writeFileSync(artifact.absPath, artifact.expectedContent, 'utf-8');
+    }
+
+    // Second pass: recompute (freshness) and compare to the on-disk bytes for each artifact.
+    const second = computePluginHookArtifacts(pluginDir, ['cursor']);
+    expect(second).toHaveLength(3);
+    for (const artifact of second) {
+      const onDisk = fs.readFileSync(artifact.absPath, 'utf-8');
+      expect(onDisk, `byte mismatch for ${path.basename(artifact.absPath)}`).toBe(
+        artifact.expectedContent,
+      );
+    }
   });
 });

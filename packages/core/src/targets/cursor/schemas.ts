@@ -164,13 +164,17 @@ const cursorHookEventSchema = z.enum(CURSOR_HOOK_EVENTS);
 
 /**
  * A single flat Cursor hook entry. `command` is required; `type` (`'command'`) and `matcher`
- * are optional. Strict — an unknown per-entry field is rejected.
+ * are optional. `failClosed` is accepted on **shimmed controller entries** for gating events
+ * (`preToolUse`/`beforeSubmitPrompt`), whose `command` invokes the generated
+ * `hooks/cursor-shim.mjs` runner — see `docs/specs/cursor-controller-shim.md` §3.1. Strict — an
+ * unknown per-entry field is still rejected.
  */
 const cursorHookEntrySchema = z
   .object({
     command: z.string(),
     type: z.literal('command').optional(),
     matcher: z.string().optional(),
+    failClosed: z.boolean().optional(),
   })
   .strict();
 

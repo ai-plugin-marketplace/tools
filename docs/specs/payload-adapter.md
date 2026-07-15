@@ -38,6 +38,10 @@ and where the near-parity trap lives (§1). Cursor is carried as an explicit **f
 (`adapter-system.md` §4.2.1), and normalizing it is a separate, larger design already partially
 covered by the controller shim's own translation tables.
 
+See [`docs/guides/hook-handler-authoring.md`](../guides/hook-handler-authoring.md) for the
+consumer-facing usage patterns, a reproduced per-field assertability table, and a worked
+permission-layer example built on this contract.
+
 ## 2. Governing references
 
 - `adapter-system.md` §4.2.1 — the primary-verified cross-harness stdin payload/stdout-control

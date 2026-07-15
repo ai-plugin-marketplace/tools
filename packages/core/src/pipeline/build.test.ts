@@ -560,3 +560,52 @@ describe('computePluginHookArtifacts — payload adapter', () => {
     }
   });
 });
+
+// ---------------------------------------------------------------------------
+// runBuild — payload adapter executable bit (template-independent;
+// docs/specs/payload-adapter.md §1/§11)
+//
+// Regression: `computePluginHookArtifacts` writes go through `writeFileEnsuringDir`, which is a
+// plain `fs.writeFileSync` at mode 0644 for every hook artifact — but §1/§11 document invoking
+// `hooks/payload-adapter` DIRECTLY (`payload=$(".../hooks/payload-adapter")`), which fails EACCES
+// without the executable bit. Exercises the real `runBuild` write path (not the pure
+// `computePluginHookArtifacts` compute step) so the on-disk mode is actually observed.
+// ---------------------------------------------------------------------------
+
+describe('runBuild — payload adapter executable bit (§1/§11 regression)', () => {
+  let repoRoot: string | undefined;
+
+  afterEach(() => {
+    if (repoRoot && fs.existsSync(repoRoot)) fs.rmSync(repoRoot, { recursive: true });
+  });
+
+  it('emits hooks/payload-adapter with the executable bit set, but not its .generated sidecar', async () => {
+    // POSIX permission bits are not meaningful on Windows; skip there.
+    if (process.platform === 'win32') return;
+
+    repoRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'aipm-payload-adapter-exec-'));
+    const pluginDir = path.join(repoRoot, 'plugins', 'exec-bit-plugin');
+    fs.mkdirSync(path.join(pluginDir, 'hooks'), { recursive: true });
+    fs.writeFileSync(
+      path.join(pluginDir, 'aipm.config.ts'),
+      "import { defineConfig } from '@ai-plugin-marketplace/core';\n\nexport default defineConfig({\n  version: '0.1.0',\n  targets: ['cursor'],\n});\n",
+      'utf-8',
+    );
+    fs.writeFileSync(
+      path.join(pluginDir, 'hooks', 'claude.yaml'),
+      'hooks:\n  PreToolUse:\n    - matcher: Bash\n      hooks:\n        - { type: command, command: ./guard.sh }\n',
+      'utf-8',
+    );
+
+    await runBuild(pluginDir);
+
+    const adapterAbs = path.join(pluginDir, 'hooks', PAYLOAD_ADAPTER_FILENAME);
+    const sidecarAbs = sidecarPath(adapterAbs);
+    expect(fs.existsSync(adapterAbs)).toBe(true);
+    expect(fs.existsSync(sidecarAbs)).toBe(true);
+
+    expect((fs.statSync(adapterAbs).mode & 0o111) !== 0).toBe(true);
+    // The .generated sidecar is never invoked directly — it must NOT carry the executable bit.
+    expect((fs.statSync(sidecarAbs).mode & 0o111) !== 0).toBe(false);
+  });
+});

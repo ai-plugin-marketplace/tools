@@ -209,6 +209,50 @@ describe('payload-adapter — harness detection (§5.1)', () => {
     expect(status).toBe(0);
     expect(stdout).toBe(raw);
   });
+
+  // Regression: a valid-JSON non-object top level (array/number/string) passed the old `jq -e .`
+  // validation gate, then crashed the main jq program on `has("tool_response")` ("Cannot check
+  // whether array has a string key"), producing EMPTY stdout and exit 5 — breaking the hook chain
+  // (spec §7/§9's never-break-the-hook-chain principle). §5.1 step 1 now rejects non-objects at
+  // the same gate as invalid JSON, so these take the byte-for-byte passthrough path instead.
+  it.each([
+    ['a JSON array', JSON.stringify([1, 2, 3])],
+    ['a JSON number', JSON.stringify(42)],
+    ['a JSON string', JSON.stringify('hello')],
+  ])(
+    'passes %s through byte-for-byte and exits 0, instead of crashing (step 1 non-object regression)',
+    (_label, raw) => {
+      const { stdout, status } = runAdapter(raw);
+      expect(status).toBe(0);
+      expect(stdout).toBe(raw);
+    },
+  );
+});
+
+// ---------------------------------------------------------------------------
+// Known-event completeness (§5.1 step 4, adapter-system.md §4.2.1 canon)
+// ---------------------------------------------------------------------------
+
+// Regression: known_events previously listed only 8 of the 12 events the §5.1 step 4 known-event
+// set is pinned to (adapter-system.md §4.2.1's 10-event committed Claude<->Codex map plus
+// SessionEnd/Notification, which that map explicitly omits but which are still real Claude
+// events). A Claude payload for one of the missing events fell through to `unknown` instead of
+// `claude-code`.
+describe('payload-adapter — known-event completeness (§5.1 step 4, known_events regression)', () => {
+  it.each(['PermissionRequest', 'PostCompact', 'SessionEnd', 'Notification'])(
+    'detects claude-code for a %s payload with no Codex-additive fields',
+    (hookEventName) => {
+      const payload = { session_id: 'claude-session-known-events', hook_event_name: hookEventName };
+      // CODEX_HOME must be unset in the subprocess env so detection falls through to step 4
+      // (the known-event PascalCase match) rather than the step 3 secondary signal.
+      const { stdout, status } = runAdapter(JSON.stringify(payload), [], {
+        CODEX_HOME: undefined,
+      });
+      expect(status).toBe(0);
+      const parsed = JSON.parse(stdout) as { harness: { name: string } };
+      expect(parsed.harness).toStrictEqual({ name: 'claude-code' });
+    },
+  );
 });
 
 // ---------------------------------------------------------------------------

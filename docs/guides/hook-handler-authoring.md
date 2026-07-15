@@ -42,7 +42,7 @@ capability). Branch on the adapter's own `harness.name` discriminator instead of
 shape yourself:
 
 ```sh
-payload=$("$PLUGIN_ROOT/hooks/payload-adapter")
+payload=$("${CLAUDE_PLUGIN_ROOT:-$PLUGIN_ROOT}/hooks/payload-adapter")
 harness=$(jq -r '.harness.name' <<<"$payload")   # "claude-code" | "codex" | "unknown"
 
 case "$harness" in
@@ -66,7 +66,7 @@ Run the emitted adapter with `--schema` instead of piping a payload, to print th
 payload's JSON Schema plus the contract version it implements — no stdin required:
 
 ```sh
-"$PLUGIN_ROOT/hooks/payload-adapter" --schema
+"${CLAUDE_PLUGIN_ROOT:-$PLUGIN_ROOT}/hooks/payload-adapter" --schema
 ```
 
 ```json
@@ -76,17 +76,19 @@ payload's JSON Schema plus the contract version it implements — no stdin requi
     "$schema": "https://json-schema.org/draft/2020-12/schema",
     "$id": "https://ai-plugin-marketplace.dev/schemas/payload-adapter/canonical-payload.json",
     "title": "Canonical hook payload"
-    // ...full schema in docs/specs/payload-adapter.md §13
   }
 }
 ```
+
+(Trimmed for brevity — the full schema, with every canonical property documented, is in
+[`docs/specs/payload-adapter.md` §13](../specs/payload-adapter.md#13-canonical-payload-json-schema).)
 
 Use this in plugin CI to pin or assert the contract version your handlers were written against,
 so a future major bump (a canonical field renamed or removed) fails your build instead of silently
 producing a payload shape your handler no longer understands:
 
 ```sh
-version=$("$PLUGIN_ROOT/hooks/payload-adapter" --schema | jq -r '.contractVersion')
+version=$("${CLAUDE_PLUGIN_ROOT:-$PLUGIN_ROOT}/hooks/payload-adapter" --schema | jq -r '.contractVersion')
 [ "$version" = "1.0.0" ] || { echo "payload-adapter contract version drifted: $version" >&2; exit 1; }
 ```
 
@@ -118,17 +120,31 @@ A field marked "always" is safe to read unconditionally; a field marked "on \<ev
 read with `// empty` (or an equivalent guard) and checked for emptiness before use, since it will
 be absent on other events.
 
-## Worked example — a permission/grant layer keyed on session and agent type
+## Worked example — a permission/grant layer keyed on session and sub-agent
 
 A common toolsmith-style consumer is a **permission/grant hook**: a `PreToolUse` handler that
-decides allow/ask based on which session and which sub-agent is asking. Reading raw per-harness
-fields here is exactly where the near-parity trap bites — a handler that reads Claude's
-`agent_type` value `general-purpose` unconditionally would misread the same conceptual sub-agent
-on Codex, where the default is `default`, and grant (or deny) the wrong thing.
+decides allow/ask based on which session and which sub-agent is asking. The adapter's real value
+here is _structural_, not semantic: `is_subagent` is derived identically on both harnesses from
+`agent_id` (§6), and `session_id` / `tool_name` are read the same way regardless of which harness
+invoked the handler, so a handler that keys a grant on these fields doesn't have to special-case
+Codex's raw payload shape at all.
+
+`agent_type`, by contrast, is **not** normalized — only each harness's default vocabulary is
+documented, not translated (`general-purpose` on Claude Code vs. `default` on Codex; a plugin
+author's custom `agent_type` string passes through verbatim, §12). A handler that wants to key a
+grant on `agent_type` still owns that difference itself, e.g. by branching on `harness.name` or by
+treating the raw value as opaque per-harness input rather than assuming it's comparable across
+harnesses.
 
 ```sh
 #!/usr/bin/env bash
 set -euo pipefail
+
+# Stub — replace with your plugin's real grant lookup (e.g. reading a grant store file).
+grant_allows() {
+  local grant_key="$1" tool_name="$2"
+  [ -f "$CLAUDE_PLUGIN_ROOT/grants/${grant_key}:${tool_name}.granted" ]
+}
 
 payload=$("${CLAUDE_PLUGIN_ROOT:-$PLUGIN_ROOT}/hooks/payload-adapter")
 
@@ -137,11 +153,11 @@ event=$(jq -r '.hook_event_name' <<<"$payload")
 
 session_id=$(jq -r '.session_id' <<<"$payload")
 is_subagent=$(jq -r '.is_subagent' <<<"$payload")
-agent_type=$(jq -r '.agent_type // "root"' <<<"$payload")
 tool_name=$(jq -r '.tool_name' <<<"$payload")
 
-# Grants keyed on session_id x agent_type, e.g. loaded from a plugin-managed grant store.
-grant_key="${session_id}:${agent_type}"
+# Grants keyed on session_id x tool_name: both are read the same way on either harness (§5.2), so
+# a grant recorded on one harness is honored (or correctly re-asked) on the other.
+grant_key="${session_id}:${tool_name}"
 
 if [ "$is_subagent" = "true" ] && [ "$tool_name" = "Bash" ]; then
   if grant_allows "$grant_key" "$tool_name"; then
@@ -155,10 +171,13 @@ fi
 echo '{"decision": "allow"}'
 ```
 
-Because `session_id`, `is_subagent`, and `agent_type` are read from the adapter's canonical
-payload rather than harness-specific field names, `grant_key` is stable across Claude Code and
-Codex: the same sub-agent asks for the same tool under the same key on either harness, so a grant
-recorded on one harness is honored (or correctly re-asked) on the other. Without the adapter, a
-handler hard-coded to Claude's field names would silently drop `agent_type` on Codex the day its
-raw payload used a field the handler didn't know to read — turning a should-ask decision into a
-silent allow.
+Because `session_id`, `is_subagent`, and `tool_name` are read from the adapter's canonical payload
+rather than harness-specific field names, `grant_key` is stable across Claude Code and Codex: the
+same sub-agent asks for the same tool under the same key on either harness, so a grant recorded on
+one harness is honored (or correctly re-asked) on the other. The same structural stability applies
+to any handler that reads `tool_output` on `PostToolUse` — the adapter adds it additively from
+Codex's `tool_response` (§4, §5.2), so a post-tool handler reads one field name unconditionally on
+either harness instead of re-deriving the rename itself. What the adapter deliberately does
+**not** do is make `agent_type` _values_ comparable across harnesses (§12) — a handler that wants
+to branch on sub-agent _type_ (not just sub-agent _presence_, which `is_subagent` already covers)
+must account for the differing default vocab itself, for example by branching on `harness.name`.

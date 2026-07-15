@@ -60,7 +60,13 @@ export default defineRepoConfig({ pluginsRoot: 'agent-plugins', distDir: 'agent-
 
 ## Authoring hook handlers
 
-Any plugin that authors `hooks/claude.yaml` also gets a generated **[`hooks/payload-adapter`](./docs/specs/payload-adapter.md)**: a static `sh` + `jq` filter your handler pipes its stdin through to read one canonical payload shape regardless of whether Claude Code or Codex invoked it, instead of re-deriving per-harness field names by hand. See [**Authoring hook handlers with the payload adapter**](./docs/guides/hook-handler-authoring.md) for the copy-runnable patterns, the per-field assertability table, and a worked permission-layer example.
+Any plugin that authors `hooks/claude.yaml` also gets a generated `hooks/payload-adapter`: a static
+`sh` + `jq` filter your handler pipes its stdin through to read one canonical payload shape
+regardless of whether Claude Code or Codex invoked it, instead of re-deriving per-harness field
+names by hand. See [**the payload-adapter spec**](./docs/specs/payload-adapter.md) for the full
+normative contract, and [**Authoring hook handlers with the payload adapter**](./docs/guides/hook-handler-authoring.md)
+for the copy-runnable patterns, the per-field assertability table, and a worked permission-layer
+example.
 
 ## Architecture
 

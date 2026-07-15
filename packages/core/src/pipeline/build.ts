@@ -21,7 +21,11 @@ import * as path from 'node:path';
 import { performance } from 'node:perf_hooks';
 
 import { parseClaudeHooksYaml } from '../targets/claude/transform.js';
-import { convertClaudeHooksYamlToCursorJson } from '../targets/cursor/transform.js';
+import {
+  claudeSourceHasGatingHook,
+  convertClaudeHooksYamlToCursorJson,
+} from '../targets/cursor/transform.js';
+import { CURSOR_SHIM_FILENAME, CURSOR_SHIM_RUNNER_SOURCE } from '../targets/cursor/shim-runner.js';
 import { convertClaudeHooksYamlToGeminiJson } from '../targets/gemini/transform.js';
 import { bundleGeminiPlugin } from '../targets/gemini/bundle.js';
 import { bundleKiroPlugin } from '../targets/kiro/bundle.js';
@@ -31,7 +35,7 @@ import type { AipmWorkspace } from '../config.js';
 import { discoverPlugins } from './discover.js';
 import { createConfigCache, loadPluginConfig, loadWorkspaceConfig } from './load-config.js';
 import type { ConfigCache } from './load-config.js';
-import { applyJsonSentinel } from './sentinel.js';
+import { applyJsonSentinel, sidecarContent, sidecarPath } from './sentinel.js';
 import type { SentinelMode } from './sentinel.js';
 import { runValidate } from './validate.js';
 import type { BuildOptions, BuildResult, Finding, GeneratedFile, TargetId } from './types.js';
@@ -75,10 +79,14 @@ function findHooksYaml(pluginDir: string): { absPath: string; source: string } |
  *
  * - `claude` in envelope + a hooks YAML present → `hooks/claude.json` (Claude JSON + sentinel).
  * - `gemini` in envelope + a hooks YAML present → `hooks/hooks.json` (Gemini JSON + sentinel).
- * - `cursor` in envelope + a hooks YAML present → `hooks/cursor.json` (Cursor JSON + sentinel).
+ * - `cursor` in envelope + a hooks YAML present → `hooks/cursor.json` (Cursor JSON + sentinel), plus
+ *   — when ≥1 gating-event hook is present — the fail-closed shim runner `hooks/cursor-shim.mjs`
+ *   (static JS, sidecar-carried sentinel) and its `hooks/cursor-shim.mjs.generated` sidecar
+ *   (cursor-controller-shim.md §3.3/§3.4).
  *
- * The sentinel is applied to the **parsed object** so the on-disk file carries a top-level
- * `_generated` field (§4.3), serialized 2-space + trailing newline.
+ * The JSON sentinel is applied to the **parsed object** so the on-disk file carries a top-level
+ * `_generated` field (§4.3), serialized 2-space + trailing newline. The `.mjs` runner is pure
+ * executable JS and carries no inline sentinel — its companion `.generated` sidecar does.
  *
  * @throws {Error} If the hooks YAML is malformed or fails the Claude hooks schema.
  */
@@ -133,6 +141,29 @@ export function computePluginHookArtifacts(
       target: 'cursor',
       expectedContent: applyJsonSentinel(cursorObj, yaml.source),
     });
+
+    // Controller-hook shim (cursor-controller-shim.md §3.3/§3.4): when ≥1 gating-event hook is
+    // present, cursor.json's shimmed entries invoke `hooks/cursor-shim.mjs`, so emit that static
+    // runner plus its `.generated` sidecar sentinel (the .mjs is pure executable JS — the strict
+    // format can't host an inline sentinel, so the sidecar carrier holds it). Both are compared
+    // byte-for-byte by the freshness check. No shim files when no gating-event hook exists.
+    if (claudeSourceHasGatingHook(yamlContent)) {
+      const shimAbsPath = path.join(pluginDir, 'hooks', CURSOR_SHIM_FILENAME);
+      artifacts.push({
+        absPath: shimAbsPath,
+        source: yaml.source,
+        sentinelMode: 'sidecar',
+        target: 'cursor',
+        expectedContent: CURSOR_SHIM_RUNNER_SOURCE,
+      });
+      artifacts.push({
+        absPath: sidecarPath(shimAbsPath),
+        source: yaml.source,
+        sentinelMode: 'sidecar',
+        target: 'cursor',
+        expectedContent: sidecarContent(yaml.source),
+      });
+    }
   }
 
   return artifacts;

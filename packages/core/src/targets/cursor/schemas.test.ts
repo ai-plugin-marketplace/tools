@@ -284,6 +284,34 @@ describe('cursorHooksFileSchema — positive', () => {
     const doc = { version: 1, hooks: { stop: [{ command: './c.sh' }] } };
     expect(cursorHooksFileSchema.safeParse(doc).success).toBe(true);
   });
+
+  it('accepts a shimmed controller entry: a shim command with failClosed (§3.1)', () => {
+    // The gating path emits `{ command: "node ./hooks/cursor-shim.mjs …", matcher, failClosed }`.
+    const doc = {
+      version: 1,
+      hooks: {
+        preToolUse: [
+          {
+            command: 'node ./hooks/cursor-shim.mjs preToolUse -- ./gate.sh',
+            matcher: 'Shell',
+            failClosed: true,
+          },
+        ],
+        beforeSubmitPrompt: [
+          {
+            command: 'node ./hooks/cursor-shim.mjs beforeSubmitPrompt -- ./prompt.sh',
+            failClosed: true,
+          },
+        ],
+      },
+    };
+    expect(cursorHooksFileSchema.safeParse(doc).success).toBe(true);
+  });
+
+  it('rejects a non-boolean failClosed', () => {
+    const doc = { version: 1, hooks: { preToolUse: [{ command: './c.sh', failClosed: 'yes' }] } };
+    expect(cursorHooksFileSchema.safeParse(doc).success).toBe(false);
+  });
 });
 
 describe('cursorHooksFileSchema — negative', () => {

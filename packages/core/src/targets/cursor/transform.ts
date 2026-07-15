@@ -19,24 +19,27 @@
  * ({@link adaptMatcherBlockToCursorEntries}) so the event-rename layer and the entry-reshape
  * layer are independently testable (spec §3.1).
  *
- * **Scope caveat — observer hooks only.** This transform renames events, translates the matcher,
- * and reshapes structure; it does NOT translate a hook handler's stdin/stdout contract. That is
- * safe for *observer* hooks (side-effect only: log / notify / format-on-save — they ignore the
- * stdin envelope and emit no control output). It is NOT sufficient for *controller* hooks that
- * return a block/deny/updated-input decision: Cursor's handler contract diverges from Claude's on
- * every axis (stdin field names, stdout control shape, and an opposite fail-OPEN default that
- * silently allows on malformed JSON). A Claude-authored deny gate emitted through this transform
- * can therefore fail open on Cursor. Contract-translating controller hooks (a fail-closed shim)
- * is deferred — tracked in issue #37 (its design lives in the adapter-system spec, §4.2.1 D6b,
- * on PR #26 until merged).
+ * **Controller vs observer — by event.** For *observer* hooks (side-effect only: log / notify /
+ * format-on-save — they ignore the stdin envelope and emit no control output) the event-rename +
+ * matcher-translate + flatten is sufficient. For *controller* hooks that return a
+ * block/deny/updated-input decision it is NOT: Cursor's handler contract diverges from Claude's on
+ * every axis (stdin field names, stdout control shape, and an opposite fail-OPEN default). Since the
+ * toolkit cannot introspect an opaque `command` to classify it, classification is static, by event:
+ * the {@link GATING_EVENTS} set (`PreToolUse`, `UserPromptSubmit`) are treated as controllers and
+ * their entries are rewritten to invoke the generated fail-closed shim runner
+ * ({@link CURSOR_SHIM_FILENAME}) with `failClosed: true`. `PostToolUse`/`Stop` fire after the
+ * decision point, cannot block, and stay on the byte-identical observer path (issue #37, spec
+ * `cursor-controller-shim.md` §2.2 / §4).
  *
  * @see docs/specs/cursor-hooks-target.md §3 (architecture, committed tables, worked example)
+ * @see docs/specs/cursor-controller-shim.md §2.2 (classification), §3.1 (shimmed entry), §4 (tables)
  * @see docs/specs/architecture.md §7 (mechanical transformations), §12.4–§12.5 (module shape)
  * @see https://cursor.com/docs/hooks.md — Cursor hook format
  */
 
 import { parse as parseYaml } from 'yaml';
 
+import { CURSOR_SHIM_FILENAME } from './shim-runner.js';
 import type { CursorHookEvent } from './schemas.js';
 
 // ---------------------------------------------------------------------------
@@ -68,6 +71,19 @@ export const CLAUDE_TO_CURSOR_TOOLS: Readonly<Record<string, string>> = {
   Edit: 'Edit',
   Grep: 'Grep',
 };
+
+/**
+ * Committed set of Claude source events that are **controllers** (gating): they fire before the
+ * decision point and can deny an action, so their hooks are contract-translated through the
+ * fail-closed shim (spec `cursor-controller-shim.md` §2.2). Events NOT in this set
+ * (`PostToolUse`, `Stop`) are observers — they cannot block, so they keep the byte-identical
+ * event-rename path. This is the single source of the split; adding a future gating event (e.g.
+ * `PermissionRequest`) is a one-line addition here.
+ */
+export const GATING_EVENTS: ReadonlySet<string> = new Set<string>([
+  'PreToolUse',
+  'UserPromptSubmit',
+]);
 
 // ---------------------------------------------------------------------------
 // Local source/target types (no cross-target import — §3.4)
@@ -101,14 +117,18 @@ interface ClaudeHooksSource {
 }
 
 /**
- * A single flat Cursor hook entry. Key order is significant for byte-stable serialization:
- * `command`, then `type` (when carried from the source entry), then `matcher` (when the block
- * had one) — matching the worked example in spec §3.2.
+ * A single flat Cursor hook entry. Key order is significant for byte-stable serialization.
+ * Observer entries: `command`, then `type` (when carried from the source entry), then `matcher`
+ * (when the block had one) — matching the worked example in `cursor-hooks-target.md` §3.2. Shimmed
+ * (gating) entries: `command` (the shim invocation), then `matcher`, then `failClosed: true` —
+ * matching `cursor-controller-shim.md` §3.1 (they carry no `type`; Cursor defaults it to
+ * `command`).
  */
 interface CursorHookEntry {
   command: string;
   type?: string;
   matcher?: string;
+  failClosed?: boolean;
 }
 
 /** The top-level Cursor hooks document this transform emits: `{ version: 1, hooks: { … } }`. */
@@ -157,6 +177,50 @@ export function adaptMatcherBlockToCursorEntries(block: ClaudeHookMatcherBlock):
   });
 }
 
+/**
+ * Rewrite one observer-shaped Cursor entry into a **shimmed controller entry** for a gating event
+ * (spec `cursor-controller-shim.md` §3.1). The entry's `command` becomes an invocation of the
+ * generated shim runner — `node ./hooks/<shim> <cursorEvent> -- <original command>` — where the
+ * `--` sentinel separates the runner's own args from the handler command (which keeps any of its
+ * own args verbatim). The translated `matcher` is preserved; `failClosed: true` is added; `type`
+ * is dropped (Cursor defaults it to `command`). Key order: `command`, `matcher?`, `failClosed`.
+ *
+ * @param entry - An observer Cursor entry from {@link adaptMatcherBlockToCursorEntries}.
+ * @param cursorEvent - The (renamed) Cursor event this hook fires on — passed to the shim so it
+ *   selects the correct translation table.
+ * @returns The shimmed controller entry.
+ */
+function toShimmedEntry(entry: CursorHookEntry, cursorEvent: CursorHookEvent): CursorHookEntry {
+  const shimmed: CursorHookEntry = {
+    command: `node ./hooks/${CURSOR_SHIM_FILENAME} ${cursorEvent} -- ${entry.command}`,
+  };
+  if (entry.matcher !== undefined) shimmed.matcher = entry.matcher;
+  shimmed.failClosed = true;
+  return shimmed;
+}
+
+/**
+ * Whether the Claude hooks source carries at least one **gating-event** hook with a real entry —
+ * i.e. whether the build must additionally emit the shim runner + its sidecar (spec §3.3). Parses
+ * the YAML and adapts each {@link GATING_EVENTS} block through the same shape adapter used by the
+ * converter, so "has a gating hook" agrees exactly with "the converter emitted a shimmed entry".
+ *
+ * @param yamlContent - Raw `hooks/claude.yaml` contents.
+ * @returns `true` iff a gating event has ≥1 emittable entry.
+ * @throws {Error} If the YAML is malformed.
+ */
+export function claudeSourceHasGatingHook(yamlContent: string): boolean {
+  const parsed = (parseYaml(yamlContent) ?? {}) as ClaudeHooksSource;
+  const sourceHooks = parsed.hooks ?? {};
+  for (const [claudeEvent, blocks] of Object.entries(sourceHooks)) {
+    if (!GATING_EVENTS.has(claudeEvent) || !Array.isArray(blocks)) continue;
+    for (const block of blocks) {
+      if (adaptMatcherBlockToCursorEntries(block).length > 0) return true;
+    }
+  }
+  return false;
+}
+
 // ---------------------------------------------------------------------------
 // Top-level assembly + public API
 // ---------------------------------------------------------------------------
@@ -168,8 +232,9 @@ export function adaptMatcherBlockToCursorEntries(block: ClaudeHookMatcherBlock):
  * Assembly (spec §3.1): iterate the source `hooks` map; for each event PRESENT in
  * {@link CLAUDE_TO_CURSOR_EVENTS}, rename it, run its matcher blocks through
  * {@link adaptMatcherBlockToCursorEntries}, concatenate the results, and add them under the
- * renamed key. An event NOT in the map is dropped (not emitted). The result is wrapped in
- * `{ version: 1, hooks: { … } }`.
+ * renamed key. Entries for a {@link GATING_EVENTS} event are additionally rewritten to invoke the
+ * fail-closed shim ({@link toShimmedEntry}); observer events keep byte-identical entries. An event
+ * NOT in the map is dropped (not emitted). The result is wrapped in `{ version: 1, hooks: { … } }`.
  *
  * Output format: 2-space indent, trailing newline — byte-format identical to the Claude/Gemini
  * emitters so the pipeline freshness compare round-trips (spec §3.3).
@@ -196,7 +261,11 @@ export function convertClaudeHooksYamlToCursorJson(yamlContent: string): string 
     for (const block of blocks) {
       entries.push(...adaptMatcherBlockToCursorEntries(block));
     }
-    hooks[cursorEvent] = entries;
+    // Gating events are controllers: rewrite each entry to invoke the fail-closed shim (spec
+    // §3.1). Observer events (PostToolUse/Stop) keep their byte-identical entries.
+    hooks[cursorEvent] = GATING_EVENTS.has(claudeEvent)
+      ? entries.map((entry) => toShimmedEntry(entry, cursorEvent))
+      : entries;
   }
 
   const document: CursorHooksDocument = { version: 1, hooks };

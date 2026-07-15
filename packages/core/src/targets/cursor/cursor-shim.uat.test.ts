@@ -46,8 +46,19 @@ if (!CURSOR_AGENT_AVAILABLE) {
 const SOURCE_YAML =
   'hooks:\n  PreToolUse:\n    - matcher: Bash\n      hooks:\n        - { command: "node ./hooks/deny.mjs" }\n';
 
-/** A Claude-format handler that denies every shell tool call (exit 0 with a deny decision). */
-const DENY_HANDLER = `process.stdout.write(
+/**
+ * Build a Claude-format handler that denies every shell tool call (exit 0 with a deny decision).
+ *
+ * Before emitting the deny, it writes a "hook fired" marker at `firedMarker` — the positive control
+ * (spec §5): its presence proves the `preToolUse` gate was actually invoked (the shim reached and
+ * ran the wrapped handler), so the `touch` side-effect marker's ABSENCE means "blocked", not
+ * "cursor-agent never attempted the shell command". `firedMarker` is an absolute path baked in so
+ * the write does not depend on the handler's cwd.
+ */
+function denyHandlerSource(firedMarker: string): string {
+  return `import * as fs from 'node:fs';
+fs.writeFileSync(${JSON.stringify(firedMarker)}, 'fired');
+process.stdout.write(
   JSON.stringify({
     hookSpecificOutput: {
       permissionDecision: 'deny',
@@ -57,6 +68,7 @@ const DENY_HANDLER = `process.stdout.write(
 );
 process.exit(0);
 `;
+}
 
 describe.skipIf(!CURSOR_AGENT_AVAILABLE)('cursor-shim UAT — real Cursor enforcement', () => {
   let workspace: string | undefined;
@@ -68,6 +80,8 @@ describe.skipIf(!CURSOR_AGENT_AVAILABLE)('cursor-shim UAT — real Cursor enforc
   it('blocks a shell command through the generated deny gate (marker never created)', () => {
     workspace = fs.mkdtempSync(path.join(os.tmpdir(), 'aipm-cursor-uat-'));
     const marker = path.join(workspace, 'MARKER_SHOULD_NOT_EXIST');
+    // Positive control: the wrapped deny handler writes this when the gate actually fires.
+    const hookFiredMarker = path.join(workspace, 'HOOK_FIRED');
 
     // Project-level Cursor hooks doc = the toolkit's generated cursor.json body (sans sentinel).
     const cursorHooks = convertClaudeHooksYamlToCursorJson(SOURCE_YAML);
@@ -81,18 +95,38 @@ describe.skipIf(!CURSOR_AGENT_AVAILABLE)('cursor-shim UAT — real Cursor enforc
       CURSOR_SHIM_RUNNER_SOURCE,
       'utf8',
     );
-    fs.writeFileSync(path.join(workspace, 'hooks', 'deny.mjs'), DENY_HANDLER, 'utf8');
+    fs.writeFileSync(
+      path.join(workspace, 'hooks', 'deny.mjs'),
+      denyHandlerSource(hookFiredMarker),
+      'utf8',
+    );
 
     const prompt =
       `Use the shell tool to run exactly this command and nothing else: touch ${marker}. ` +
       `Do not ask for confirmation.`;
 
     // Headless Cursor run. A blocked gate means the shell command never executes.
-    spawnSync('cursor-agent', ['-p', prompt, '--trust', '--force', '--workspace', workspace], {
-      cwd: workspace,
-      encoding: 'utf8',
-      timeout: 120_000,
-    });
+    const result = spawnSync(
+      'cursor-agent',
+      ['-p', prompt, '--trust', '--force', '--workspace', workspace],
+      {
+        cwd: workspace,
+        encoding: 'utf8',
+        timeout: 120_000,
+      },
+    );
+
+    // Guard against a spurious pass: if cursor-agent never ran (spawn error) or was killed before
+    // exiting (null status, e.g. timeout signal), the side-effect marker would be absent for the
+    // WRONG reason. Require an actual completed run first. A non-zero status is fine — Cursor may
+    // legitimately exit non-zero when a tool call is blocked; the point is that it ran.
+    expect(result.error).toBeUndefined();
+    expect(result.status).not.toBeNull();
+
+    // Positive control (spec §5): the gate provably fired — the shim reached and ran the wrapped
+    // deny handler, which wrote HOOK_FIRED. Without this, "marker absent" could mean the shell
+    // command was simply never attempted rather than blocked.
+    expect(fs.existsSync(hookFiredMarker)).toBe(true);
 
     // Ground truth: the marker's absence proves the shell tool was gated (spec §5).
     expect(fs.existsSync(marker)).toBe(false);

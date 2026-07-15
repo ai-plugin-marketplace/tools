@@ -39,6 +39,7 @@ import type { ConfigCache } from './load-config.js';
 import { applyJsonSentinel, sidecarContent, sidecarPath } from './sentinel.js';
 import type { SentinelMode } from './sentinel.js';
 import { runValidate } from './validate.js';
+import { TARGET_IDS } from './types.js';
 import type { BuildOptions, BuildResult, Finding, GeneratedFile, TargetId } from './types.js';
 
 // ---------------------------------------------------------------------------
@@ -61,6 +62,29 @@ export interface PluginHookArtifact {
   target: TargetId;
   /** Exact bytes the build writes (sentinel included). */
   expectedContent: string;
+}
+
+/**
+ * `GeneratedFile.target` records which target's build step produced a file — but the payload
+ * adapter (and its sidecar) is emitted for **any** plugin authoring a hooks YAML, independent of
+ * the envelope (see {@link computePluginHookArtifacts} above), so there is no single build step
+ * that "owns" it. Attribute it deterministically: `claude` when present in the envelope (it is
+ * the source dialect the adapter's `sh`+`jq` filter is modeled after), otherwise the first
+ * envelope target in {@link TARGET_IDS}'s canonical order. This keeps `BuildResult.artifacts`
+ * truthful for envelopes that never include `claude` (e.g. a codex-only plugin) without adding a
+ * new "shared"/cross-target `TargetId` value.
+ *
+ * @throws {Error} If `envelope` is empty (a plugin with no declared targets never reaches this
+ *   path — {@link computePluginHookArtifacts} is only invoked with a non-empty envelope).
+ */
+function sharedHookArtifactTarget(envelope: readonly TargetId[]): TargetId {
+  if (envelope.includes('claude')) return 'claude';
+  const envelopeSet = new Set(envelope);
+  const firstCanonical = TARGET_IDS.find((id) => envelopeSet.has(id));
+  if (firstCanonical === undefined) {
+    throw new Error('sharedHookArtifactTarget: envelope must contain at least one target');
+  }
+  return firstCanonical;
 }
 
 /** First existing hooks YAML candidate (`claude.yaml`, then `claude.yml`), or `undefined`. */
@@ -113,18 +137,19 @@ export function computePluginHookArtifacts(
   // from the normalized cross-harness payload. A pure, plugin-independent script, so it carries a
   // sidecar sentinel (like the cursor shim) rather than an inline one.
   const payloadAdapterAbsPath = path.join(pluginDir, 'hooks', PAYLOAD_ADAPTER_FILENAME);
+  const sharedArtifactTarget = sharedHookArtifactTarget(envelope);
   artifacts.push({
     absPath: payloadAdapterAbsPath,
     source: yaml.source,
     sentinelMode: 'sidecar',
-    target: 'claude',
+    target: sharedArtifactTarget,
     expectedContent: PAYLOAD_ADAPTER_SOURCE,
   });
   artifacts.push({
     absPath: sidecarPath(payloadAdapterAbsPath),
     source: yaml.source,
     sentinelMode: 'sidecar',
-    target: 'claude',
+    target: sharedArtifactTarget,
     expectedContent: sidecarContent(yaml.source),
   });
 

@@ -233,6 +233,12 @@ jq -S --argjson codex_home_set "$CODEX_HOME_SET" '
   (if has("tool_response") and (has("tool_output") | not) then .tool_output = .tool_response else . end)
   | . as $normalized
   | $normalized
+  # harness and is_subagent are the adapter reserved, authoritative output keys (spec section 4,
+  # D2 clarification): always (re)written from the adapter own computation, even if the raw
+  # payload already carries a same-named field. D2 never-overwrite/remove/hide guarantee protects
+  # harness-emitted payload fields, not this reserved output namespace -- a raw harness or
+  # is_subagent field colliding with these names is untrusted input, and passing it through
+  # unnormalized would let a caller spoof the values a permission layer keys decisions on.
   | .harness = {name: ($normalized | harness_name)}
   | .is_subagent = ($normalized | is_subagent_val)
 ' "$tmp"

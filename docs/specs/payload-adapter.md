@@ -82,6 +82,16 @@ Concretely:
   dropped — consistent with issue #44's non-goal on papering over semantic divergence, §12).
 - The adapter never deletes a key present in the input, including unrecognized ones.
 
+> **D2 clarification — reserved output keys.** `harness` (§5) and `is_subagent` (§6) are the
+> adapter's own **reserved, authoritative output fields**, not raw payload fields — they are
+> always (re)written from the adapter's own computation regardless of what the raw payload
+> carried under those names. D2's never-overwrite/remove/hide guarantee protects
+> **harness-emitted** payload fields (Codex's `turn_id`, an unrecognized key, etc.); it does not
+> extend to this reserved output namespace. A raw payload that happens to carry a `harness` or
+> `is_subagent` key is untrusted input colliding with a reserved name — passing such a value
+> through unnormalized would let it spoof the very fields a permission-layer consumer keys
+> harness/agent-type decisions on, so the adapter overwrites it by design.
+
 ## 5. `harness` envelope and detection (criterion 3)
 
 > **D3 (normative).** The adapter adds a top-level `harness` envelope:

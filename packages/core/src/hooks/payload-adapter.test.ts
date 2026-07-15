@@ -252,6 +252,27 @@ describe('payload-adapter — additive normalization (§4, D2)', () => {
     expect(parsed.foo).toBe('bar');
     expect(parsed.nested).toStrictEqual({ baz: [1, 2, 3] });
   });
+
+  // Regression / spec clarification (docs/specs/payload-adapter.md §4, D2 reserved-keys note):
+  // `harness` and `is_subagent` are the adapter's reserved, authoritative output keys — D2's
+  // additive/never-overwrite guarantee governs harness-emitted payload fields, not this reserved
+  // output namespace. A raw payload carrying a spoofed `harness`/`is_subagent` must have both
+  // OVERWRITTEN with the adapter's own computation, never passed through, since a
+  // permission-layer consumer keys decisions on these fields being trustworthy.
+  it('overwrites a spoofed harness and is_subagent with its own computed values', () => {
+    const spoofed = {
+      ...CLAUDE_PRE_TOOL_USE,
+      harness: { name: 'spoofed' },
+      is_subagent: true,
+      // no agent_id present, so the real is_subagent computation is false.
+    };
+    const { stdout } = runAdapter(JSON.stringify(spoofed));
+    const parsed = JSON.parse(stdout) as { harness: { name: string }; is_subagent: boolean };
+    // Real detection: CLAUDE_PRE_TOOL_USE carries a known hook_event_name -> "claude-code".
+    expect(parsed.harness).toStrictEqual({ name: 'claude-code' });
+    // Real derivation: no agent_id -> false, not the spoofed `true`.
+    expect(parsed.is_subagent).toBe(false);
+  });
 });
 
 // ---------------------------------------------------------------------------

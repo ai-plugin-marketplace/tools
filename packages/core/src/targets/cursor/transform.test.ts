@@ -19,8 +19,8 @@ import {
   CLAUDE_TO_CURSOR_TOOLS,
   GATING_EVENTS,
   adaptMatcherBlockToCursorEntries,
-  claudeSourceHasGatingHook,
   convertClaudeHooksYamlToCursorJson,
+  cursorDocHasGatingHook,
 } from './transform.js';
 
 // ---------------------------------------------------------------------------
@@ -318,19 +318,19 @@ const WORKED_EXAMPLE_JSON = `{
   "hooks": {
     "preToolUse": [
       {
-        "command": "node ./hooks/cursor-shim.mjs preToolUse -- ./guard.sh",
+        "command": "node ./hooks/cursor-shim.mjs preToolUse -- './guard.sh'",
         "matcher": "Shell",
         "failClosed": true
       },
       {
-        "command": "node ./hooks/cursor-shim.mjs preToolUse -- ./log.sh",
+        "command": "node ./hooks/cursor-shim.mjs preToolUse -- './log.sh'",
         "matcher": "Shell",
         "failClosed": true
       }
     ],
     "beforeSubmitPrompt": [
       {
-        "command": "node ./hooks/cursor-shim.mjs beforeSubmitPrompt -- ./prompt.sh",
+        "command": "node ./hooks/cursor-shim.mjs beforeSubmitPrompt -- './prompt.sh'",
         "failClosed": true
       }
     ]
@@ -386,11 +386,12 @@ describe('convertClaudeHooksYamlToCursorJson — shimmed gating entries (§3.1)'
     const doc = convertToShimDoc(
       'hooks:\n  PreToolUse:\n    - matcher: Bash\n      hooks:\n        - { type: command, command: ./gate.sh }\n',
     );
-    // §3.1: command → `node ./hooks/cursor-shim.mjs preToolUse -- ./gate.sh`, matcher Bash→Shell,
-    // failClosed:true, and NO `type` key (Cursor defaults it to command).
+    // §3.1: command → `node ./hooks/cursor-shim.mjs preToolUse -- '<handler>'` (handler embedded as
+    // a single POSIX-single-quoted token), matcher Bash→Shell, failClosed:true, and NO `type` key
+    // (Cursor defaults it to command).
     expect(doc.hooks.preToolUse).toStrictEqual([
       {
-        command: 'node ./hooks/cursor-shim.mjs preToolUse -- ./gate.sh',
+        command: "node ./hooks/cursor-shim.mjs preToolUse -- './gate.sh'",
         matcher: 'Shell',
         failClosed: true,
       },
@@ -403,21 +404,33 @@ describe('convertClaudeHooksYamlToCursorJson — shimmed gating entries (§3.1)'
     );
     expect(doc.hooks.beforeSubmitPrompt).toStrictEqual([
       {
-        command: 'node ./hooks/cursor-shim.mjs beforeSubmitPrompt -- ./prompt.sh',
+        command: "node ./hooks/cursor-shim.mjs beforeSubmitPrompt -- './prompt.sh'",
         failClosed: true,
       },
     ]);
   });
 
-  it('preserves a handler command with its own args across the `--` boundary', () => {
+  it('preserves a handler command with its own args as one quoted token across the `--` boundary', () => {
     const doc = convertToShimDoc(
       'hooks:\n  PreToolUse:\n    - matcher: Bash\n      hooks:\n        - { command: "./gate.sh --strict foo" }\n',
     );
-    // The handler's own args survive verbatim after the `--` sentinel (§3.1).
+    // The handler's own args survive verbatim inside a single POSIX-single-quoted token after the
+    // `--` sentinel (§3.1), so the shell hands the whole command to the runner as one argument.
     expect(doc.hooks.preToolUse?.[0]?.command).toBe(
-      'node ./hooks/cursor-shim.mjs preToolUse -- ./gate.sh --strict foo',
+      "node ./hooks/cursor-shim.mjs preToolUse -- './gate.sh --strict foo'",
     );
     expect(doc.hooks.preToolUse?.[0]?.failClosed).toBe(true);
+  });
+
+  it('POSIX-escapes a single quote in the handler command so it round-trips through one token', () => {
+    // A handler command containing a single quote must be escaped as '\\'' (close, literal, reopen)
+    // so shell tokenization keeps it a single argument (spec §3.1, shell fidelity).
+    const doc = convertToShimDoc(
+      'hooks:\n  PreToolUse:\n    - matcher: Bash\n      hooks:\n        - { command: "./gate.sh --msg \'hi\'" }\n',
+    );
+    expect(doc.hooks.preToolUse?.[0]?.command).toBe(
+      "node ./hooks/cursor-shim.mjs preToolUse -- './gate.sh --msg '\\''hi'\\'''",
+    );
   });
 
   it('shims every entry when a gating block has multiple hooks[]', () => {
@@ -426,12 +439,12 @@ describe('convertClaudeHooksYamlToCursorJson — shimmed gating entries (§3.1)'
     );
     expect(doc.hooks.preToolUse).toStrictEqual([
       {
-        command: 'node ./hooks/cursor-shim.mjs preToolUse -- ./a.sh',
+        command: "node ./hooks/cursor-shim.mjs preToolUse -- './a.sh'",
         matcher: 'Shell',
         failClosed: true,
       },
       {
-        command: 'node ./hooks/cursor-shim.mjs preToolUse -- ./b.sh',
+        command: "node ./hooks/cursor-shim.mjs preToolUse -- './b.sh'",
         matcher: 'Shell',
         failClosed: true,
       },
@@ -459,34 +472,51 @@ describe('convertClaudeHooksYamlToCursorJson — observer events stay byte-ident
   });
 });
 
-describe('claudeSourceHasGatingHook — build gating-hook predicate (§3.3)', () => {
+describe('cursorDocHasGatingHook — build gating-hook predicate over the converted doc (§3.3)', () => {
+  /** Convert source YAML to the parsed Cursor doc, exactly as the build does (single parse). */
+  function toDoc(yaml: string): unknown {
+    return JSON.parse(convertClaudeHooksYamlToCursorJson(yaml)) as unknown;
+  }
+
   it('is true when a PreToolUse hook is present', () => {
     expect(
-      claudeSourceHasGatingHook(
-        'hooks:\n  PreToolUse:\n    - hooks:\n        - { command: ./g.sh }\n',
+      cursorDocHasGatingHook(
+        toDoc('hooks:\n  PreToolUse:\n    - hooks:\n        - { command: ./g.sh }\n'),
       ),
     ).toBe(true);
   });
 
   it('is true when a UserPromptSubmit hook is present', () => {
     expect(
-      claudeSourceHasGatingHook(
-        'hooks:\n  UserPromptSubmit:\n    - hooks:\n        - { command: ./p.sh }\n',
+      cursorDocHasGatingHook(
+        toDoc('hooks:\n  UserPromptSubmit:\n    - hooks:\n        - { command: ./p.sh }\n'),
       ),
     ).toBe(true);
   });
 
   it('is false for observer-only sources (PostToolUse/Stop)', () => {
     expect(
-      claudeSourceHasGatingHook(
-        'hooks:\n  PostToolUse:\n    - matcher: Write\n      hooks:\n        - { command: ./log.sh }\n  Stop:\n    - hooks:\n        - { command: ./c.sh }\n',
+      cursorDocHasGatingHook(
+        toDoc(
+          'hooks:\n  PostToolUse:\n    - matcher: Write\n      hooks:\n        - { command: ./log.sh }\n  Stop:\n    - hooks:\n        - { command: ./c.sh }\n',
+        ),
       ),
     ).toBe(false);
   });
 
   it('is false when a gating event has no emittable entry (empty/commandless block)', () => {
     expect(
-      claudeSourceHasGatingHook('hooks:\n  PreToolUse:\n    - matcher: Bash\n      hooks: []\n'),
+      cursorDocHasGatingHook(
+        toDoc('hooks:\n  PreToolUse:\n    - matcher: Bash\n      hooks: []\n'),
+      ),
     ).toBe(false);
+  });
+
+  it('is false for non-object / malformed input (defensive)', () => {
+    expect(cursorDocHasGatingHook(undefined)).toBe(false);
+    expect(cursorDocHasGatingHook(null)).toBe(false);
+    expect(cursorDocHasGatingHook('not a doc')).toBe(false);
+    expect(cursorDocHasGatingHook({})).toBe(false);
+    expect(cursorDocHasGatingHook({ hooks: null })).toBe(false);
   });
 });

@@ -4,14 +4,15 @@
  * A Claude-authored *controller* hook (a block/deny gate) emitted through the observer transform
  * fails OPEN on Cursor: the two harnesses' handler contracts diverge on tool identity
  * (`Shell` vs `Bash`), event casing, control-output shape, and failure default. This module holds
- * the byte-exact static Node script the build emits per plugin (once, when ≥1 gating-event hook is
+ * the byte-exact Node script the build emits per plugin (once, when ≥1 gating-event hook is
  * present) to translate a gating hook's stdin/stdout contract and enforce fail-closed.
  *
- * The runner is a **static asset**: {@link CURSOR_SHIM_RUNNER_SOURCE} is a committed constant, not
- * templated per hook, so every plugin emits identical bytes and the freshness check round-trips it.
- * Because it is static (not generated from the transform's tables), {@link CURSOR_TO_CLAUDE_TOOLS}
- * is duplicated here for the TypeScript side and a test asserts it is the exact inverse of the
- * transform's `CLAUDE_TO_CURSOR_TOOLS` (spec §3.2 / §5).
+ * The runner is a **static asset**: {@link CURSOR_SHIM_RUNNER_SOURCE} is a deterministic constant,
+ * not templated per hook, so every plugin emits identical bytes and the freshness check round-trips
+ * it. Its inverse tool table is **generated from {@link CURSOR_TO_CLAUDE_TOOLS}** at module load
+ * (stable, sorted key order) — a single source of truth for both the TypeScript side and the
+ * emitted `.mjs`, so the two can never drift (spec §3.2 / §5). The exported const stays the exact
+ * inverse of the transform's `CLAUDE_TO_CURSOR_TOOLS`, guarded by a test (§5).
  *
  * @see docs/specs/cursor-controller-shim.md §3.2 (runner contract), §4 (translation tables),
  *   §4.4 (fail-closed rules)
@@ -20,7 +21,9 @@
 /**
  * Committed inverse tool table (Cursor tool type → Claude tool name), the mirror of the transform's
  * `CLAUDE_TO_CURSOR_TOOLS`: `Shell → Bash`, identity for `Read`/`Write`/`Edit`/`Grep`. Unknown tool
- * names pass through unchanged (spec §4.3). Exported for the exact-inverse sync test (§5).
+ * names pass through unchanged (spec §4.3). This is the **single source of truth**: the emitted
+ * runner's copy is generated from it (see {@link CURSOR_SHIM_RUNNER_SOURCE}). Exported for the
+ * exact-inverse sync test (§5).
  */
 export const CURSOR_TO_CLAUDE_TOOLS: Readonly<Record<string, string>> = {
   Shell: 'Bash',
@@ -34,21 +37,42 @@ export const CURSOR_TO_CLAUDE_TOOLS: Readonly<Record<string, string>> = {
 export const CURSOR_SHIM_FILENAME = 'cursor-shim.mjs';
 
 /**
- * Byte-exact source of the emitted `hooks/cursor-shim.mjs`. A static, plugin-independent ESM Node
- * script — the committed constant the build writes verbatim (freshness compares it byte-for-byte).
+ * Generous `maxBuffer` (bytes) for the handler `spawnSync`. `spawnSync`'s 1 MB default would set
+ * `error` + `status === null` on a handler that legitimately emits >1 MB of stdout, which the runner
+ * would misread as a spawn failure and deny (spec §4.4). 64 MB comfortably exceeds any realistic
+ * hook output while still bounding memory.
+ */
+const HANDLER_MAX_BUFFER = 64 * 1024 * 1024;
+
+/**
+ * Render {@link CURSOR_TO_CLAUDE_TOOLS} as a deterministic JS object-literal string for splicing
+ * into the runner source. Keys are sorted so the emitted bytes are stable regardless of the const's
+ * authoring order — the `.mjs` MUST stay byte-deterministic so the sidecar-sentinel freshness
+ * compare round-trips (spec §3.2 / §5). Keys and values are JSON-quoted so an arbitrary future tool
+ * name can never produce invalid JS.
+ */
+function renderInverseToolTableLiteral(table: Readonly<Record<string, string>>): string {
+  const lines = Object.keys(table)
+    .sort()
+    .map((key) => `  ${JSON.stringify(key)}: ${JSON.stringify(table[key])},`);
+  return `{\n${lines.join('\n')}\n}`;
+}
+
+/**
+ * Byte-exact source of the emitted `hooks/cursor-shim.mjs`. A deterministic, plugin-independent ESM
+ * Node script (freshness compares it byte-for-byte). Its inverse tool table is generated from
+ * {@link CURSOR_TO_CLAUDE_TOOLS} (single source of truth — no hand-duplicated literal to drift).
  *
  * Contract (spec §3.2):
- *  1. Parse `argv`: `<cursorEvent> -- <handler> [handlerArgs...]`.
- *  2. Read Cursor's hook payload from stdin, translate Cursor → Claude (§4.1), and spawn the
- *     handler with the Claude payload piped to its stdin.
+ *  1. Parse `argv`: `<cursorEvent> -- <handler command string>`. Everything after `--` is the
+ *     handler command, run through a shell exactly as Claude runs hook commands (`sh -c`).
+ *  2. Read Cursor's hook payload from stdin, translate Cursor → Claude (§4.1), and run the handler
+ *     with the Claude payload piped to its stdin.
  *  3. Translate the handler's stdout back to Cursor's flat control JSON (§4.2) and print it.
  *  4. Fail closed (§4.4): a non-zero handler exit, malformed handler stdout, bad argv, spawn error,
  *     or any internal error emits a deny (`{"permission":"deny",…}`, or `{"continue":false,…}` for
  *     `beforeSubmitPrompt`) and exits 2. Output is always valid JSON; the process never throws
- *     uncaught.
- *
- * The runner carries its own copy of {@link CURSOR_TO_CLAUDE_TOOLS} — kept in sync with the
- * transform's table by the §5 test.
+ *     uncaught; stdout is always fully flushed before exit (no truncation of an allow decision).
  */
 export const CURSOR_SHIM_RUNNER_SOURCE = `// Generated Cursor controller-hook shim runner. Do not edit directly.
 // Translates a Claude-authored gating hook's stdin/stdout contract to Cursor's and enforces
@@ -57,13 +81,8 @@ export const CURSOR_SHIM_RUNNER_SOURCE = `// Generated Cursor controller-hook sh
 import { spawnSync } from 'node:child_process';
 
 // Inverse of the transform's CLAUDE_TO_CURSOR_TOOLS (Shell -> Bash; identity otherwise).
-const CURSOR_TO_CLAUDE_TOOLS = {
-  Shell: 'Bash',
-  Read: 'Read',
-  Write: 'Write',
-  Edit: 'Edit',
-  Grep: 'Grep',
-};
+// Generated from the exported CURSOR_TO_CLAUDE_TOOLS const — the single source of truth.
+const CURSOR_TO_CLAUDE_TOOLS = ${renderInverseToolTableLiteral(CURSOR_TO_CLAUDE_TOOLS)};
 
 // The two gating Cursor events this shim handles, mapped to their Claude event names.
 const CURSOR_TO_CLAUDE_EVENTS = {
@@ -88,13 +107,17 @@ function allowControl() {
   return { permission: 'allow' };
 }
 
-function emit(control) {
-  process.stdout.write(JSON.stringify(control));
+// Write the control JSON, then exit ONLY after stdout has flushed. A bare process.exit() right after
+// a write can truncate a pipe-buffered payload — on the allow path that yields malformed JSON and
+// Cursor blocks a legitimately-allowed tool. Exiting from the write callback drains it first.
+function emitAndExit(control, code) {
+  process.stdout.write(JSON.stringify(control), () => {
+    process.exit(code);
+  });
 }
 
 function failClosed(reason) {
-  emit(denyControl(reason));
-  process.exit(2);
+  emitAndExit(denyControl(reason), 2);
 }
 
 function readStdin() {
@@ -199,7 +222,7 @@ function extractHandlerReason(stdout) {
 }
 
 async function main() {
-  // argv shape: <cursorEvent> -- <handler> [handlerArgs...]
+  // argv shape: <cursorEvent> -- <handler command string>
   const sep = argv.indexOf('--');
   if (
     cursorEvent === undefined ||
@@ -207,10 +230,13 @@ async function main() {
     sep < 1 ||
     sep === argv.length - 1
   ) {
-    failClosed('cursor-shim: invalid arguments; expected <cursorEvent> -- <handler> [args...]');
+    failClosed('cursor-shim: invalid arguments; expected <cursorEvent> -- <handler command>');
     return;
   }
-  const handler = argv.slice(sep + 1);
+  // Everything after '--' is the handler command string. Under real Cursor it arrives as a single
+  // POSIX-single-quoted token (the transform quotes it), so this is one element; joining is a no-op
+  // there and reconstitutes a space-joined command in any other invocation.
+  const handlerCommand = argv.slice(sep + 1).join(' ');
 
   let rawStdin;
   try {
@@ -230,14 +256,20 @@ async function main() {
 
   const claudePayload = translateCursorToClaude(cursorPayload);
 
-  const result = spawnSync(handler[0], handler.slice(1), {
+  // Run the handler through a shell (shell: true) to match Claude's own 'sh -c' hook execution, so a
+  // handler command using env-var refs, quoting, or other shell features execs correctly. The
+  // command is the plugin author's own trusted hook (exactly as under Claude) — shell execution is
+  // intended. An explicit generous maxBuffer avoids the default-1MB spawn-failure misread (spec 4.4).
+  const result = spawnSync(handlerCommand, {
+    shell: true,
     input: JSON.stringify(claudePayload),
     encoding: 'utf8',
+    maxBuffer: ${String(HANDLER_MAX_BUFFER)},
   });
 
-  // Distinguish a genuine spawn failure (the process never ran -> null status, e.g. ENOENT) from a
-  // benign stdin write error (EPIPE) when a handler exits before draining stdin. Only the former is
-  // a spawn failure; the latter still yields a valid exit status and stdout to translate.
+  // A genuine spawn failure (the shell itself never ran -> null status) is a fail-closed condition.
+  // A handler that runs and exits non-zero yields a real status and is handled below; a benign stdin
+  // write error (EPIPE) when a handler exits before draining stdin also keeps a valid exit status.
   if (result.error && result.status === null) {
     failClosed('cursor-shim: handler spawn failed: ' + String(result.error.message));
     return;
@@ -256,8 +288,7 @@ async function main() {
   const trimmed = stdout.trim();
   // Exit 0 with no output: the handler declined to gate -> allow / continue.
   if (trimmed === '') {
-    emit(allowControl());
-    process.exit(0);
+    emitAndExit(allowControl(), 0);
     return;
   }
 
@@ -269,8 +300,7 @@ async function main() {
     return;
   }
 
-  emit(interpret(parsed));
-  process.exit(0);
+  emitAndExit(interpret(parsed), 0);
 }
 
 main().catch((err) => {

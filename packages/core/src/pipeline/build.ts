@@ -22,8 +22,8 @@ import { performance } from 'node:perf_hooks';
 
 import { parseClaudeHooksYaml } from '../targets/claude/transform.js';
 import {
-  claudeSourceHasGatingHook,
   convertClaudeHooksYamlToCursorJson,
+  cursorDocHasGatingHook,
 } from '../targets/cursor/transform.js';
 import { CURSOR_SHIM_FILENAME, CURSOR_SHIM_RUNNER_SOURCE } from '../targets/cursor/shim-runner.js';
 import { convertClaudeHooksYamlToGeminiJson } from '../targets/gemini/transform.js';
@@ -134,6 +134,10 @@ export function computePluginHookArtifacts(
     // matching the transform's own format, so the body round-trips byte-for-byte.
     const cursorJson = convertClaudeHooksYamlToCursorJson(yamlContent);
     const cursorObj = JSON.parse(cursorJson) as unknown;
+    // "Has a gating hook?" is derived from the just-parsed converted document (a non-empty gating
+    // Cursor event key), so the source YAML is parsed exactly ONCE for Cursor — no redundant
+    // re-parse (spec §3.3).
+    const hasGatingHook = cursorDocHasGatingHook(cursorObj);
     artifacts.push({
       absPath: path.join(pluginDir, 'hooks', 'cursor.json'),
       source: yaml.source,
@@ -147,7 +151,7 @@ export function computePluginHookArtifacts(
     // runner plus its `.generated` sidecar sentinel (the .mjs is pure executable JS — the strict
     // format can't host an inline sentinel, so the sidecar carrier holds it). Both are compared
     // byte-for-byte by the freshness check. No shim files when no gating-event hook exists.
-    if (claudeSourceHasGatingHook(yamlContent)) {
+    if (hasGatingHook) {
       const shimAbsPath = path.join(pluginDir, 'hooks', CURSOR_SHIM_FILENAME);
       artifacts.push({
         absPath: shimAbsPath,

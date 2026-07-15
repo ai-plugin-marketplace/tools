@@ -47,6 +47,9 @@ function runShim(
   const result = spawnSync(process.execPath, [shimPath, cursorEvent, '--', ...handlerArgs], {
     input: stdin,
     encoding: 'utf8',
+    // Generous buffer so this harness can itself capture the shim's large allow-path stdout (the
+    // >1MB no-truncation / maxBuffer tests) — otherwise this spawnSync would ENOBUFS-truncate it.
+    maxBuffer: 64 * 1024 * 1024,
   });
   return { stdout: result.stdout, status: result.status };
 }
@@ -74,12 +77,26 @@ const MALFORMED_HANDLER = `process.stdout.write('this is <<< not json');
 process.exit(0);
 `;
 
+/** Byte size of the large allow-path payload (well over spawnSync's default 1 MB maxBuffer). */
+const BIG_CONTEXT_SIZE = 2 * 1024 * 1024;
+// A handler emitting a large VALID allow decision: additionalContext of BIG_CONTEXT_SIZE bytes,
+// exit 0. Exercises both the no-truncation flush (§2) and the explicit maxBuffer (§3) — under the
+// old 1 MB default this stdout would have set error+status=null and been misread as a spawn failure.
+const BIG_ALLOW_HANDLER = `const big = 'x'.repeat(${String(BIG_CONTEXT_SIZE)});
+// Flush before exit so the handler's own large stdout is not truncated (the very bug the runner
+// guards against on the shim side — the stub must not reintroduce it here).
+process.stdout.write(JSON.stringify({ hookSpecificOutput: { additionalContext: big } }), () => {
+  process.exit(0);
+});
+`;
+
 let captureHandler: string[];
 let denyHandler: string[];
 let blockHandler: string[];
 let allowHandler: string[];
 let exit1Handler: string[];
 let malformedHandler: string[];
+let bigAllowHandler: string[];
 
 beforeAll(() => {
   tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'aipm-cursor-shim-'));
@@ -91,6 +108,7 @@ beforeAll(() => {
   allowHandler = writeHandler('allow.mjs', ALLOW_HANDLER);
   exit1Handler = writeHandler('exit1.mjs', EXIT1_HANDLER);
   malformedHandler = writeHandler('malformed.mjs', MALFORMED_HANDLER);
+  bigAllowHandler = writeHandler('big-allow.mjs', BIG_ALLOW_HANDLER);
 });
 
 afterAll(() => {
@@ -138,6 +156,77 @@ describe('cursor-shim — Cursor → Claude stdin translation (§4.1)', () => {
     runShim('preToolUse', [...captureHandler, outFile], cursorStdin);
     const claudePayload = JSON.parse(fs.readFileSync(outFile, 'utf8')) as { session_id: string };
     expect(claudePayload.session_id).toBe('conv-42');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Shell fidelity — the handler command runs through a shell (§1, spec §3.2)
+// ---------------------------------------------------------------------------
+
+describe('cursor-shim — shell fidelity: handler command runs through a shell (§1)', () => {
+  const preStdin = JSON.stringify({
+    hook_event_name: 'preToolUse',
+    tool_name: 'Shell',
+    tool_input: { command: 'ls' },
+  });
+
+  it('expands an env-var reference in the handler command and honors its deny (§1)', () => {
+    // Under real Cursor the handler arrives as one POSIX-single-quoted token; here it is a single
+    // post-`--` argument that uses a shell env-var ref. The runner must run it through a shell
+    // (matching Claude's `sh -c`) for `$GATE_DIR` to expand — a bare no-shell spawn would fail to
+    // exec and (fail-safe) deny, masking the availability bug this guards against.
+    fs.writeFileSync(path.join(tmpDir, 'envdeny.mjs'), DENY_DECISION_HANDLER, 'utf8');
+    const handlerCommand = `${process.execPath} "$GATE_DIR/envdeny.mjs"`;
+    const result = spawnSync(process.execPath, [shimPath, 'preToolUse', '--', handlerCommand], {
+      input: preStdin,
+      encoding: 'utf8',
+      env: { ...process.env, GATE_DIR: tmpDir },
+    });
+    expect(result.status).toBe(0);
+    // The env-referenced handler ran and its deny decision was honored (not a silent exec failure).
+    expect(JSON.parse(result.stdout)).toStrictEqual({
+      permission: 'deny',
+      agent_message: 'not allowed',
+    });
+  });
+
+  it('honors an allow from a handler command invoked with its own args through the shell (§1)', () => {
+    // A handler command with its own args, run as one shell command string → allow is honored.
+    const result = spawnSync(
+      process.execPath,
+      [shimPath, 'preToolUse', '--', `${process.execPath} "${allowHandler[1] ?? ''}"`],
+      { input: preStdin, encoding: 'utf8' },
+    );
+    expect(result.status).toBe(0);
+    expect(JSON.parse(result.stdout)).toStrictEqual({ permission: 'allow' });
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Large stdout — neither truncated (§2) nor misread as a spawn failure (§3)
+// ---------------------------------------------------------------------------
+
+describe('cursor-shim — large stdout is fully flushed and allowed (§2/§3)', () => {
+  const preStdin = JSON.stringify({
+    hook_event_name: 'preToolUse',
+    tool_name: 'Shell',
+    tool_input: { command: 'ls' },
+  });
+
+  it('allows (not denies) when the handler emits >1MB of stdout (§3 explicit maxBuffer)', () => {
+    // Under spawnSync's default 1 MB maxBuffer this stdout sets error+status=null, which the runner
+    // would misread as a spawn failure and DENY. With the explicit 64 MB maxBuffer it is allowed.
+    const { stdout, status } = runShim('preToolUse', bigAllowHandler, preStdin);
+    expect(status).toBe(0);
+    expect((JSON.parse(stdout) as { permission: string }).permission).toBe('allow');
+  });
+
+  it('does not truncate the allow-path stdout write — full JSON round-trips (§2)', () => {
+    const { stdout } = runShim('preToolUse', bigAllowHandler, preStdin);
+    // Valid, complete JSON (a truncated pipe write would fail to parse) with the full context.
+    const parsed = JSON.parse(stdout) as { permission: string; additional_context: string };
+    expect(parsed.permission).toBe('allow');
+    expect(parsed.additional_context).toHaveLength(BIG_CONTEXT_SIZE);
   });
 });
 
@@ -278,5 +367,39 @@ describe('CURSOR_TO_CLAUDE_TOOLS — exact inverse of CLAUDE_TO_CURSOR_TOOLS (§
     for (const [cursor, claude] of Object.entries(CURSOR_TO_CLAUDE_TOOLS)) {
       expect(CLAUDE_TO_CURSOR_TOOLS[claude]).toBe(cursor);
     }
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Runner tool table is GENERATED from the exported const — single source of truth (§5)
+// ---------------------------------------------------------------------------
+
+/** Extract the body of the runner's `const CURSOR_TO_CLAUDE_TOOLS = { … }` literal. */
+function runnerToolTableBlock(): string {
+  const marker = 'const CURSOR_TO_CLAUDE_TOOLS = {';
+  const start = CURSOR_SHIM_RUNNER_SOURCE.indexOf(marker);
+  expect(start).toBeGreaterThanOrEqual(0);
+  const end = CURSOR_SHIM_RUNNER_SOURCE.indexOf('};', start);
+  expect(end).toBeGreaterThan(start);
+  return CURSOR_SHIM_RUNNER_SOURCE.slice(start, end);
+}
+
+describe('CURSOR_SHIM_RUNNER_SOURCE — inverse tool table generated from the exported const (§5)', () => {
+  it('embeds exactly the mapping from CURSOR_TO_CLAUDE_TOOLS — no drift possible', () => {
+    const block = runnerToolTableBlock();
+    // Every exported entry appears as a JSON-quoted line in the emitted literal…
+    for (const [cursor, claude] of Object.entries(CURSOR_TO_CLAUDE_TOOLS)) {
+      expect(block).toContain(`"${cursor}": "${claude}"`);
+    }
+    // …and there are no extra entries: exactly as many mapping lines as the const has keys.
+    const mappingLines = block.split('\n').filter((l) => /^ {2}"[^"]+": "[^"]+",$/.test(l));
+    expect(mappingLines).toHaveLength(Object.keys(CURSOR_TO_CLAUDE_TOOLS).length);
+  });
+
+  it('emits the table with stable, sorted key order (byte-deterministic .mjs)', () => {
+    const block = runnerToolTableBlock();
+    const keys = [...block.matchAll(/ {2}"([^"]+)":/g)].map((m) => m[1]);
+    expect(keys.length).toBe(Object.keys(CURSOR_TO_CLAUDE_TOOLS).length);
+    expect(keys).toStrictEqual([...keys].sort());
   });
 });

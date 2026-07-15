@@ -92,7 +92,7 @@ export const GATING_EVENTS: ReadonlySet<string> = new Set<string>([
  * {@link cursorDocHasGatingHook} inspects — so "has a gating hook" is derived from the single parse
  * the converter already did, not a second re-parse of the source YAML.
  */
-export const GATING_CURSOR_EVENTS: ReadonlySet<CursorHookEvent> = new Set<CursorHookEvent>(
+const GATING_CURSOR_EVENTS: ReadonlySet<CursorHookEvent> = new Set<CursorHookEvent>(
   [...GATING_EVENTS]
     .map((claudeEvent) => CLAUDE_TO_CURSOR_EVENTS[claudeEvent])
     .filter((cursorEvent): cursorEvent is CursorHookEvent => cursorEvent !== undefined),

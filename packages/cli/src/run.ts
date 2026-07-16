@@ -8,6 +8,7 @@
  *   aipm init [dir]
  *   aipm build [path]
  *   aipm validate [path]
+ *   aipm lint [path]
  *   aipm scaffold <name>
  *   aipm migrate [path]
  *   aipm check-support <plugin>
@@ -21,22 +22,30 @@ import { fileURLToPath } from 'node:url';
 
 import {
   addTarget,
+  applyRuleSeverityOverrides,
   build,
   checkSupport,
   init,
+  lint,
   listTargets,
   migrate,
   refreshScaffold,
+  registeredRuleIds,
   scaffold,
+  unknownRuleOverrideDiagnostics,
   validate,
 } from '@ai-plugin-marketplace/core';
 import type {
+  Diagnostic,
   Finding,
   RefreshOutcome,
+  RuleSeverityOverride,
   SupportReport,
   TargetId,
   ValidationResult,
 } from '@ai-plugin-marketplace/core';
+import { buildLintJson, buildLintSarif, formatLintText, lintExitCode } from './lint-format.js';
+import type { LintFormat } from './lint-format.js';
 
 interface RunOptions {
   stdout?: NodeJS.WritableStream;
@@ -54,6 +63,7 @@ Commands:
   init --refresh [dir]          Update toolkit-owned scaffold files in an existing repo
   build [path]                  Build plugin artifacts (default: cwd)
   validate [path]               Run validators on plugins (default: cwd)
+  lint [path]                   Run the lint engine on plugins (default: cwd)
   scaffold <name>               Create a new plugin from templates
   migrate [path]                Apply schema migrations (no-op in this version)
   check-support <plugin>        Diagnose a plugin's target support envelope
@@ -66,6 +76,11 @@ Options:
                                 Must be unique across marketplaces.
   --refresh                     With init: refresh an existing repo instead of creating one
   --force                       With init --refresh: overwrite locally-modified scaffold files
+  --as <mode>                   With lint: discovery mode (only 'aipm-repo' is supported today)
+  --format <text|json|sarif>    With lint: output format (default: text)
+  --rule <id>=<severity>        With lint: override a rule's severity (error|warn|info|off);
+                                repeatable
+  --verbose                     With lint --format text: append each diagnostic's docs URL
   --help, -h                    Show this help message
   --version, -V                 Print toolkit version
 `;
@@ -78,16 +93,28 @@ function toolkitVersion(): string {
 }
 
 /**
- * Extract the value of a `--flag <value>` option from an argument list (supports both
- * `--flag value` and `--flag=value`). Returns the value and the set of indices it consumed so the
- * positional-argument finder can skip them. Returns `undefined` when the flag is absent or trailing
- * with no value.
+ * Extract every occurrence of a `--flag <value>` option from an argument list (supports both
+ * `--flag value` and `--flag=value` per occurrence). Always consumes every matching token —
+ * including a flag occurrence with no following value — regardless of how many times the flag
+ * appears: a caller expecting at most one value still needs every occurrence's tokens consumed,
+ * or a second/dangling occurrence's value token leaks through as an unconsumed positional argument
+ * (the `lint` case below treats more than one `--format`/`--as` as a usage error precisely to
+ * catch this, rather than silently dropping the second value and misreading it as the target
+ * path). `missingValueIndices` records occurrences with no following value token at all — the
+ * flag was last on the command line, or immediately followed by another flag — so callers that
+ * require a value (e.g. `--rule`) can treat that as a usage error instead of silently ignoring
+ * the flag. `--flag=` (empty string after `=`) is a deliberate, explicit empty value, not a
+ * missing one — it is pushed to `values` as `''` so a caller can still reject it on its own terms
+ * (e.g. `init --name=` fails downstream because an empty name is invalid, not because parsing
+ * treated it as absent).
  */
-function takeOptionValue(
+function takeOptionValues(
   args: readonly string[],
   flag: string,
-): { value: string | undefined; consumed: Set<number> } {
+): { values: string[]; consumed: Set<number>; missingValueIndices: number[] } {
   const consumed = new Set<number>();
+  const values: string[] = [];
+  const missingValueIndices: number[] = [];
   for (let i = 0; i < args.length; i++) {
     const arg = args[i];
     if (arg === undefined) continue;
@@ -96,17 +123,22 @@ function takeOptionValue(
       const next = args[i + 1];
       if (next !== undefined && !next.startsWith('-')) {
         consumed.add(i + 1);
-        return { value: next, consumed };
+        values.push(next);
+      } else {
+        missingValueIndices.push(i);
       }
-      return { value: undefined, consumed };
+      continue;
     }
     if (arg.startsWith(`${flag}=`)) {
       consumed.add(i);
-      return { value: arg.slice(flag.length + 1), consumed };
+      values.push(arg.slice(flag.length + 1));
     }
   }
-  return { value: undefined, consumed };
+  return { values, consumed, missingValueIndices };
 }
+
+const RULE_SEVERITIES = new Set<RuleSeverityOverride>(['error', 'warn', 'info', 'off']);
+const LINT_FORMATS = new Set<LintFormat>(['text', 'json', 'sarif']);
 
 /** Resolve a `<plugin>` CLI argument to a plugin directory: an explicit path, else `<cwd>/plugins/<arg>`. */
 function resolvePluginDir(arg: string): string {
@@ -178,7 +210,8 @@ export async function run(argv: readonly string[], opts: RunOptions = {}): Promi
       case 'init': {
         const refresh = rest.includes('--refresh');
         const force = rest.includes('--force');
-        const { value: nameOpt, consumed: nameConsumed } = takeOptionValue(rest, '--name');
+        const { values: nameValues, consumed: nameConsumed } = takeOptionValues(rest, '--name');
+        const nameOpt = nameValues[0];
         // First non-flag argument that wasn't consumed as a `--name` value is the target dir.
         const dir =
           rest.find((arg, i) => !arg.startsWith('-') && !nameConsumed.has(i)) ?? process.cwd();
@@ -219,6 +252,102 @@ export async function run(argv: readonly string[], opts: RunOptions = {}): Promi
         const result = await validate(target);
         const passed = reportValidation(result, out);
         return passed ? 0 : 1;
+      }
+
+      case 'lint': {
+        // --as/--format take at most one value: a duplicate is a usage error rather than
+        // silently keeping the first occurrence, which would otherwise leave the second
+        // occurrence's *value* token unconsumed for the positional-path scan below to
+        // misinterpret as the target path (see takeOptionValues's doc comment).
+        const { values: asValues, consumed: asConsumed } = takeOptionValues(rest, '--as');
+        if (asValues.length > 1) {
+          err.write(
+            `aipm: lint --as may only be specified once (got ${String(asValues.length)}).\n`,
+          );
+          return 2;
+        }
+
+        const { values: formatValues, consumed: formatConsumed } = takeOptionValues(
+          rest,
+          '--format',
+        );
+        if (formatValues.length > 1) {
+          err.write(
+            `aipm: lint --format may only be specified once (got ${String(formatValues.length)}).\n`,
+          );
+          return 2;
+        }
+
+        const {
+          values: ruleOpts,
+          consumed: ruleConsumed,
+          missingValueIndices: ruleMissingValueIndices,
+        } = takeOptionValues(rest, '--rule');
+        if (ruleMissingValueIndices.length > 0) {
+          err.write('aipm: lint --rule requires a value of the form <id>=<severity>.\n');
+          return 2;
+        }
+
+        const verbose = rest.includes('--verbose');
+
+        // §4.1/non-goals: only 'aipm-repo' discovery is implemented; foreign modes are issue 3.
+        const asMode = asValues[0] ?? 'aipm-repo';
+        if (asMode !== 'aipm-repo') {
+          err.write(
+            `aipm: lint --as '${asMode}' is not supported yet; only 'aipm-repo' is available.\n`,
+          );
+          return 2;
+        }
+
+        const format = (formatValues[0] ?? 'text') as LintFormat;
+        if (!LINT_FORMATS.has(format)) {
+          err.write(`aipm: lint --format must be one of text|json|sarif, got '${format}'.\n`);
+          return 2;
+        }
+
+        const overrides = new Map<string, RuleSeverityOverride>();
+        for (const raw of ruleOpts) {
+          const eq = raw.indexOf('=');
+          if (eq <= 0) {
+            err.write(`aipm: lint --rule '${raw}' must be of the form <id>=<severity>.\n`);
+            return 2;
+          }
+          const ruleId = raw.slice(0, eq);
+          const severity = raw.slice(eq + 1);
+          if (!RULE_SEVERITIES.has(severity as RuleSeverityOverride)) {
+            err.write(`aipm: lint --rule '${raw}': severity must be one of error|warn|info|off.\n`);
+            return 2;
+          }
+          overrides.set(ruleId, severity as RuleSeverityOverride);
+        }
+
+        const consumed = new Set<number>([...asConsumed, ...formatConsumed, ...ruleConsumed]);
+        const target =
+          rest.find((arg, i) => !arg.startsWith('-') && !consumed.has(i)) ?? process.cwd();
+
+        const result = await lint(target);
+        // L-D6: an unrecognized --rule ruleId (typo) is itself a warn diagnostic, checked against
+        // both this run's diagnostics and the full registry — see the function's doc comment for
+        // why it must run against result.diagnostics BEFORE applyRuleSeverityOverrides.
+        const unknownRuleDiagnostics = unknownRuleOverrideDiagnostics(
+          overrides,
+          result.diagnostics,
+          registeredRuleIds(),
+        );
+        const diagnostics: Diagnostic[] = [
+          ...applyRuleSeverityOverrides(result.diagnostics, overrides),
+          ...unknownRuleDiagnostics,
+        ];
+        const exitCode = lintExitCode(diagnostics);
+
+        if (format === 'json') {
+          out.write(`${JSON.stringify(buildLintJson(diagnostics), null, 2)}\n`);
+        } else if (format === 'sarif') {
+          out.write(`${JSON.stringify(buildLintSarif(diagnostics, toolkitVersion()), null, 2)}\n`);
+        } else {
+          out.write(`${formatLintText(diagnostics, { verbose })}\n`);
+        }
+        return exitCode;
       }
 
       case 'scaffold': {

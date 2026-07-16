@@ -52,6 +52,9 @@ export interface AipmWorkspaceInput {
 }
 
 // @public
+export function applyRuleSeverityOverrides(diagnostics: readonly Diagnostic[], overrides: ReadonlyMap<string, RuleSeverityOverride>): Diagnostic[];
+
+// @public
 export function build(targetPath: string, opts?: BuildOptions): Promise<BuildResult[]>;
 
 // @public
@@ -232,6 +235,9 @@ export interface RefreshOutcome {
 export function refreshScaffold(targetDir: string, opts?: RefreshOptions): Promise<RefreshOutcome[]>;
 
 // @public
+export function registeredRuleIds(): readonly string[];
+
+// @public
 export interface Rule {
     // (undocumented)
     check(ctx: RuleContext): Diagnostic[] | Promise<Diagnostic[]>;
@@ -256,6 +262,9 @@ export interface RuleContext {
     readonly repoRoot: string;
     readonly workspace: AipmWorkspace | undefined;
 }
+
+// @public
+export type RuleSeverityOverride = 'error' | 'warn' | 'info' | 'off';
 
 // @public
 export function scaffold(name: string, opts?: ScaffoldOptions): Promise<void>;
@@ -283,6 +292,9 @@ export interface SupportReport {
 
 // @public
 export type TargetId = 'claude' | 'codex' | 'cursor' | 'gemini' | 'kiro' | 'open-plugins' | 'vercel';
+
+// @public
+export function unknownRuleOverrideDiagnostics(overrides: ReadonlyMap<string, RuleSeverityOverride>, diagnosticsBeforeOverrides: readonly Diagnostic[], registeredRuleIds: readonly string[]): Diagnostic[];
 
 // @public
 export function validate(targetPath: string, opts?: ValidateOptions): Promise<ValidationResult>;

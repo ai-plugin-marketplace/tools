@@ -69,3 +69,22 @@ export const REPO_SCOPED_RULES: readonly Rule[] = [
   registryFreshnessRule,
   rootArtifactFreshnessRule,
 ];
+
+/**
+ * Every rule the engine knows about, regardless of when/whether it actually runs for a given
+ * lint invocation (`PER_PLUGIN_RULES`/`REPO_SCOPED_RULES` above already encode that gating).
+ * `envelopeShapeRule`/`targetSchemaRule` (run first and separately by `engine.ts`) and the three
+ * cross-target consistency rules (run only when `envelope.length > 1`) are excluded from those
+ * two arrays for gating reasons, not because they aren't real rules, so this is their own
+ * assembled superset. Backs `registeredRuleIds()` (`registered-rules.ts`), which `--rule
+ * <id>=<severity>` typo-detection (L-D6) needs the full registry for.
+ */
+export const ALL_RULES: readonly Rule[] = [
+  envelopeShapeRule,
+  targetSchemaRule,
+  ...PER_PLUGIN_RULES,
+  ...REPO_SCOPED_RULES,
+  nameConsistencyRule,
+  mcpKeySyncRule,
+  marketplaceRegistrationRule,
+];

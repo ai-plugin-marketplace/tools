@@ -33,6 +33,9 @@
   "dependencies": {
     "@ai-plugin-marketplace/core": "workspace:^"
   },
+  "devDependencies": {
+    "@cfworker/json-schema": "^4.1.1"
+  },
   "publishConfig": {
     "access": "public"
   },

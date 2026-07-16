@@ -1,5 +1,91 @@
 # @ai-plugin-marketplace/core
 
+## 0.7.0
+
+### Minor Changes
+
+- [#40](https://github.com/ai-plugin-marketplace/tools/pull/40) [`8251430`](https://github.com/ai-plugin-marketplace/tools/commit/825143089227710e6174ac8a71804381aa48c3fa) Thanks [@mike-north](https://github.com/mike-north)! - Contract-translate Cursor controller hooks with a generated fail-closed shim. The shipped Cursor
+  hooks transform is observer-only: a Claude-authored block/deny gate emitted through it fails OPEN on
+  Cursor, because the two harnesses' handler contracts diverge on tool identity (`Shell` vs `Bash`),
+  event casing, control-output shape, and failure default. `aipm build` now translates that contract
+  for gating events so controller hooks enforce correctly.
+
+  Classification is static, by event: a committed `GATING_EVENTS` set (`PreToolUse`,
+  `UserPromptSubmit`) is treated as controllers; `PostToolUse`/`Stop` fire after the decision point,
+  cannot block, and stay on the byte-identical observer path. For a gating event, each generated
+  `hooks/cursor.json` entry's `command` becomes `node ./hooks/cursor-shim.mjs <cursorEvent> --
+<original handler command>` with `failClosed: true` (the handler keeps its own args verbatim after
+  the `--` boundary).
+
+  When a plugin has at least one gating-event hook, the build additionally emits a static Node runner
+  `hooks/cursor-shim.mjs` plus its `hooks/cursor-shim.mjs.generated` sidecar sentinel (the runner is
+  pure executable JS, so the sentinel lives in the companion file). The runner reads Cursor's hook
+  stdin, translates it to a Claude envelope (`Shell` → `Bash`, PascalCase event, `session_id` /
+  `tool_input.command` pass-through), spawns the handler, and translates the handler's Claude control
+  output back to Cursor's flat control JSON (`permissionDecision` → `permission`; `decision:"block"` +
+  reason → `permission:"deny"` + `agent_message`; `beforeSubmitPrompt` block →
+  `{ continue: false, user_message }`). It is fail-closed: a non-zero handler exit, malformed handler
+  output, bad arguments, or a spawn error emit a deny and exit 2, always as valid JSON. The
+  `cursorHooksFileSchema` now accepts `failClosed` on an entry, and all three artifacts are
+  freshness-checked byte-for-byte.
+
+- [#54](https://github.com/ai-plugin-marketplace/tools/pull/54) [`600e3a0`](https://github.com/ai-plugin-marketplace/tools/commit/600e3a015359fc012731c0bc7dc871c1e3d7bed5) Thanks [@mike-north](https://github.com/mike-north)! - `GeneratedFile.target` now accepts `'shared'` in addition to a `TargetId` (the new
+  `GeneratedFileTarget = TargetId | 'shared'` type). Two build artifacts genuinely have no single
+  owning target — `hooks/payload-adapter` (and its sidecar), emitted for any plugin authoring hooks
+  regardless of which targets it declares, and the generated-root sidecar manifest
+  (`.aipm/generated-root.json`), which spans every emitted single-artifact-host/registry owner — and
+  were previously attributed to an arbitrary, deterministically-chosen single target as a workaround.
+  Both now report `target: 'shared'` instead.
+
+  Consumers reading `BuildResult.artifacts[].target` and narrowing on `TargetId` should account for
+  the new `'shared'` value; a `switch` over `TargetId` alone will no longer be exhaustive against
+  `GeneratedFileTarget`.
+
+- [#49](https://github.com/ai-plugin-marketplace/tools/pull/49) [`feabd3b`](https://github.com/ai-plugin-marketplace/tools/commit/feabd3b54debf89cef04d19725bf3975b7b95e40) Thanks [@mike-north](https://github.com/mike-north)! - Emit a generated cross-harness hook payload adapter (`hooks/payload-adapter`) for every plugin
+  that authors `hooks/claude.yaml`. `hooks/claude.yaml` is authored once in the Claude Code dialect;
+  Codex is near-identical but not quite (`tool_response` vs `tool_output`, extra additive fields), so
+  plugin hook handler code previously had to re-derive those deltas by hand. The adapter is a static
+  `sh` + `jq` filter, emitted regardless of which target(s) the plugin's envelope declares, that
+  normalizes any supported harness's raw hook stdin payload into one documented canonical shape (the
+  Claude Code hook envelope, additively extended) — see `docs/specs/payload-adapter.md`.
+
+  Behavior: the canonical shape is the Claude Code hook envelope; Codex's `tool_response` gains a
+  canonical `tool_output` alongside it (never removing the original field); a `harness: {name}`
+  envelope is added, detected from Codex's additive-only fields (`turn_id`/`model`/`tool_response`/
+  `agent_transcript_path`), then the `CODEX_HOME` environment variable as a secondary signal, then a
+  recognized PascalCase `hook_event_name`, else `"unknown"`; `is_subagent` is added for every payload
+  from a non-empty `agent_id`; `payload-adapter --schema` prints the canonical JSON Schema plus a
+  single-sourced contract version and exits 0 without reading stdin; a missing `jq` on `PATH`
+  degrades to a byte-for-byte stdin passthrough, exit 0 (never breaks a hook chain); output key order
+  is sorted at every nesting level for deterministic, golden-able output.
+
+  The adapter is a byte-exact static asset (like the existing Cursor controller-hook shim) — every
+  plugin that authors hooks receives identical bytes, and `hooks/payload-adapter.generated` carries
+  its sidecar sentinel so freshness compares it byte-for-byte alongside the existing generated hook
+  artifacts.
+
+### Patch Changes
+
+- [#43](https://github.com/ai-plugin-marketplace/tools/pull/43) [`9937b99`](https://github.com/ai-plugin-marketplace/tools/commit/9937b99019c42789fe3d29bc7e6d84decc4776a5) Thanks [@mike-north](https://github.com/mike-north)! - Harden the generated Cursor controller-hook shim (`hooks/cursor-shim.mjs`).
+  - **Shell fidelity.** The transform now embeds the original Claude handler command as a single
+    POSIX-single-quoted token after the `--` sentinel, and the runner executes everything after `--`
+    through a shell (`spawnSync(cmd, { shell: true, … })`) — matching Claude's own `sh -c` hook
+    model. A handler command using env-var refs, quoting, or its own args now execs correctly on
+    Cursor instead of failing to run (and denying).
+  - **No stdout truncation.** The runner flushes stdout before exiting
+    (`process.stdout.write(json, () => process.exit(code))`) on the fail-closed, allow/continue, and
+    interpret paths, so a large allow decision is never truncated into malformed JSON.
+  - **Explicit spawn `maxBuffer` (64 MB).** A handler emitting more than the default 1 MB of stdout is
+    no longer misread as a spawn failure and denied.
+  - **Single YAML parse for Cursor.** "Has a gating hook?" is derived from the already-converted
+    Cursor document rather than a second parse of the source.
+  - **Single source of truth for the tool table.** The runner's `CURSOR_TO_CLAUDE_TOOLS` is generated
+    from the exported const at emit time (stable, sorted key order — the `.mjs` stays
+    byte-deterministic), so the two copies cannot drift.
+
+  Fail-closed safety is unchanged: a non-zero handler exit, malformed handler output, bad argv, spawn
+  failure, or internal error still emits a deny and exits 2, always as valid JSON.
+
 ## 0.6.0
 
 ### Minor Changes

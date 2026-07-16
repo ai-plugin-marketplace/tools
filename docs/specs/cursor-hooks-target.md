@@ -172,10 +172,13 @@ emits entries with no `matcher` key; `description` dropped.
 > **Superseded for gating events (controller shim, issue #37).** This example predates the
 > controller-hook shim. `PreToolUse` and `UserPromptSubmit` are **gating** events, so each emitted
 > entry's `command` is now rewritten to invoke `hooks/cursor-shim.mjs` with `failClosed: true` (and
-> no `type` key) — e.g. `"node ./hooks/cursor-shim.mjs preToolUse -- ./guard.sh"`. The event-rename,
-> matcher-translate, and flatten shown above are unchanged; only the gating entries' `command` gains
-> the shim wrapper. Observer events (`PostToolUse`, `Stop`) stay byte-identical to the output above.
-> See `cursor-controller-shim.md` §3.1/§4.
+> no `type` key) — e.g. `"node \"${CLAUDE_PLUGIN_ROOT:-.}/hooks/cursor-shim.mjs\" preToolUse -- './guard.sh'"`.
+> The `${CLAUDE_PLUGIN_ROOT:-.}` fallback anchors to the plugin root for installed plugins and falls
+> back to cwd (project root) when Cursor does not set the variable, as it does not for
+> project-level/colocated hooks — see `cursor-controller-shim.md` §3.1 for the full grounding. The
+> event-rename, matcher-translate, and flatten shown above are unchanged; only the gating entries'
+> `command` gains the shim wrapper. Observer events (`PostToolUse`, `Stop`) stay byte-identical to the
+> output above. See `cursor-controller-shim.md` §3.1/§4.
 
 ### 3.3 Pipeline wiring: `packages/core/src/pipeline/build.ts`
 

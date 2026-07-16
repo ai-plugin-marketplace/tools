@@ -96,12 +96,30 @@ For a plugin with a `hooks/claude.yaml` and `cursor` in its envelope:
 
   ```json
   {
-    "command": "node ./hooks/cursor-shim.mjs preToolUse -- './gate.sh'",
+    "command": "node \"${CLAUDE_PLUGIN_ROOT:-.}/hooks/cursor-shim.mjs\" preToolUse -- './gate.sh'",
     "matcher": "Shell",
     "failClosed": true
   }
   ```
 
+  - `"${CLAUDE_PLUGIN_ROOT:-.}/hooks/cursor-shim.mjs"` — the shim path uses a **fallback-anchored**
+    form, double-quoted so a plugin root containing spaces survives shell expansion (issue #56).
+    Cursor's official docs ([cursor.com/docs/hooks](https://cursor.com/docs/hooks)) document no
+    plugin-root variable at all. `${CLAUDE_PLUGIN_ROOT}` — and the Cursor-native
+    `${CURSOR_PLUGIN_ROOT}` — are confirmed only by Cursor staff forum posts
+    ([forum.cursor.com/t/153236](https://forum.cursor.com/t/153236), deanrie, 2026-02-28; and
+    [forum.cursor.com/t/157195](https://forum.cursor.com/t/157195), Colin, 2026-04-13), which also
+    state plugin-hook cwd = the plugin install path, **except** the `stop` hook (project root,
+    intentional). Empirically verified 2026-07-16 against a real `cursor-agent` 2026.07.09 build:
+    **project-level** hooks (a project's own `.cursor/hooks.json`, not an installed plugin) get
+    **no** plugin-root variable and **no** template substitution — commands run through a real shell
+    where POSIX `${VAR:-fallback}` expansion works, and cwd = project root. So an unconditional
+    `${CLAUDE_PLUGIN_ROOT}` anchor would expand to an empty string for project-level consumers and,
+    because the entry is `failClosed: true`, deny **every** gated tool call. The `:-.` fallback
+    resolves to `.` when the variable is unset, which — with cwd = project root — is
+    byte-equivalent to the toolkit's previously-proven colocated behavior; when the variable **is**
+    set (installed-plugin layout, per the staff-forum statements above), the fallback is unused and
+    the invocation anchors to the plugin root as before.
   - `preToolUse` — the Cursor event, so the runner knows which translation table to apply.
   - `-- './gate.sh'` — the original Claude handler command (including any of its own args), embedded
     after a `--` sentinel as a **single POSIX-single-quoted token** (any embedded `'` escaped as
@@ -255,7 +273,7 @@ Per the repo's spec-first, multi-layer testing rules. Expected values are hand-d
 
 **Unit — transform (`cursor/transform.test.ts`, extend):**
 
-- A `PreToolUse` source hook produces a shimmed entry: `command` is `node ./hooks/cursor-shim.mjs preToolUse -- <handler>`, `failClosed:true`, matcher translated.
+- A `PreToolUse` source hook produces a shimmed entry: `command` is `node "${CLAUDE_PLUGIN_ROOT:-.}/hooks/cursor-shim.mjs" preToolUse -- <handler>`, `failClosed:true`, matcher translated.
 - A `UserPromptSubmit` source hook → `beforeSubmitPrompt` shimmed entry.
 - `PostToolUse`/`Stop` → unchanged observer entries (no shim, no `failClosed`) — regression guard on the shipped path.
 - A handler command with its own args survives the `--` boundary intact.

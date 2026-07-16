@@ -318,19 +318,19 @@ const WORKED_EXAMPLE_JSON = `{
   "hooks": {
     "preToolUse": [
       {
-        "command": "node ./hooks/cursor-shim.mjs preToolUse -- './guard.sh'",
+        "command": "node \\"\${CLAUDE_PLUGIN_ROOT:-.}/hooks/cursor-shim.mjs\\" preToolUse -- './guard.sh'",
         "matcher": "Shell",
         "failClosed": true
       },
       {
-        "command": "node ./hooks/cursor-shim.mjs preToolUse -- './log.sh'",
+        "command": "node \\"\${CLAUDE_PLUGIN_ROOT:-.}/hooks/cursor-shim.mjs\\" preToolUse -- './log.sh'",
         "matcher": "Shell",
         "failClosed": true
       }
     ],
     "beforeSubmitPrompt": [
       {
-        "command": "node ./hooks/cursor-shim.mjs beforeSubmitPrompt -- './prompt.sh'",
+        "command": "node \\"\${CLAUDE_PLUGIN_ROOT:-.}/hooks/cursor-shim.mjs\\" beforeSubmitPrompt -- './prompt.sh'",
         "failClosed": true
       }
     ]
@@ -348,7 +348,7 @@ describe('convertClaudeHooksYamlToCursorJson — worked example (shimmed gating 
 // Controller-hook shim — gating events (cursor-controller-shim.md §2.2, §3.1, §4)
 //
 // Expected values are hand-derived from cursor-controller-shim.md §3.1 (the shimmed-entry shape:
-// `{ command: "node ./hooks/cursor-shim.mjs <cursorEvent> -- <handler>", matcher?, failClosed:
+// `{ command: "node \"\${CLAUDE_PLUGIN_ROOT:-.}/hooks/cursor-shim.mjs\" <cursorEvent> -- <handler>", matcher?, failClosed:
 // true }`) — not captured from program output.
 // @see docs/specs/cursor-controller-shim.md
 // ---------------------------------------------------------------------------
@@ -386,16 +386,49 @@ describe('convertClaudeHooksYamlToCursorJson — shimmed gating entries (§3.1)'
     const doc = convertToShimDoc(
       'hooks:\n  PreToolUse:\n    - matcher: Bash\n      hooks:\n        - { type: command, command: ./gate.sh }\n',
     );
-    // §3.1: command → `node ./hooks/cursor-shim.mjs preToolUse -- '<handler>'` (handler embedded as
-    // a single POSIX-single-quoted token), matcher Bash→Shell, failClosed:true, and NO `type` key
+    // §3.1: command → `node "${CLAUDE_PLUGIN_ROOT:-.}/hooks/cursor-shim.mjs" preToolUse -- '<handler>'`
+    // (shim path anchored to the plugin root — issue #56; handler embedded as a single
+    // POSIX-single-quoted token), matcher Bash→Shell, failClosed:true, and NO `type` key
     // (Cursor defaults it to command).
     expect(doc.hooks.preToolUse).toStrictEqual([
       {
-        command: "node ./hooks/cursor-shim.mjs preToolUse -- './gate.sh'",
+        command:
+          'node "${CLAUDE_PLUGIN_ROOT:-.}/hooks/cursor-shim.mjs" preToolUse -- \'./gate.sh\'',
         matcher: 'Shell',
         failClosed: true,
       },
     ]);
+  });
+
+  it('anchors the shim path to "${CLAUDE_PLUGIN_ROOT:-.}", never a bare cwd-relative path (issue #56)', () => {
+    // Regression: 0.7.0 emitted `node ./hooks/cursor-shim.mjs …`, which assumed Cursor runs plugin
+    // hook commands with cwd = plugin root. When that assumption fails, `node` exits "Cannot find
+    // module" and — because the entry is failClosed — EVERY gated tool call is denied. The shim
+    // path must reference `${CLAUDE_PLUGIN_ROOT:-.}` (double-quoted for space-safe shell expansion):
+    // installed-plugin consumers get the variable set (Cursor staff forum posts, not official docs)
+    // and anchor to the plugin root; project-level/colocated consumers get no variable at all
+    // (empirically verified against a real cursor-agent build) and fall back to `.`, which resolves
+    // relative to cwd = project root — preserving the previously-working colocated behavior.
+    const doc = convertToShimDoc(
+      'hooks:\n  PreToolUse:\n    - matcher: Bash\n      hooks:\n        - { command: ./gate.sh }\n',
+    );
+    const command = doc.hooks.preToolUse?.[0]?.command;
+    expect(command?.startsWith('node "${CLAUDE_PLUGIN_ROOT:-.}/hooks/cursor-shim.mjs" ')).toBe(
+      true,
+    );
+    expect(command).not.toContain('node ./hooks/');
+  });
+
+  it('emits the ${CLAUDE_PLUGIN_ROOT:-.} fallback form, not an unconditional-anchor form that denies every project-level gated call', () => {
+    // Regression guard for the project-level catastrophe: Cursor does not set CLAUDE_PLUGIN_ROOT for
+    // project-level/colocated hooks, so an unconditional `${CLAUDE_PLUGIN_ROOT}` anchor would expand
+    // to an empty string and — because the entry is failClosed — deny every gated call for those
+    // consumers.
+    const doc = convertToShimDoc(
+      'hooks:\n  PreToolUse:\n    - matcher: Bash\n      hooks:\n        - { command: ./gate.sh }\n',
+    );
+    const command = doc.hooks.preToolUse?.[0]?.command;
+    expect(command).toContain('"${CLAUDE_PLUGIN_ROOT:-.}/hooks/');
   });
 
   it('rewrites a UserPromptSubmit hook (no matcher) to a beforeSubmitPrompt shim invocation', () => {
@@ -404,7 +437,8 @@ describe('convertClaudeHooksYamlToCursorJson — shimmed gating entries (§3.1)'
     );
     expect(doc.hooks.beforeSubmitPrompt).toStrictEqual([
       {
-        command: "node ./hooks/cursor-shim.mjs beforeSubmitPrompt -- './prompt.sh'",
+        command:
+          'node "${CLAUDE_PLUGIN_ROOT:-.}/hooks/cursor-shim.mjs" beforeSubmitPrompt -- \'./prompt.sh\'',
         failClosed: true,
       },
     ]);
@@ -417,7 +451,7 @@ describe('convertClaudeHooksYamlToCursorJson — shimmed gating entries (§3.1)'
     // The handler's own args survive verbatim inside a single POSIX-single-quoted token after the
     // `--` sentinel (§3.1), so the shell hands the whole command to the runner as one argument.
     expect(doc.hooks.preToolUse?.[0]?.command).toBe(
-      "node ./hooks/cursor-shim.mjs preToolUse -- './gate.sh --strict foo'",
+      'node "${CLAUDE_PLUGIN_ROOT:-.}/hooks/cursor-shim.mjs" preToolUse -- \'./gate.sh --strict foo\'',
     );
     expect(doc.hooks.preToolUse?.[0]?.failClosed).toBe(true);
   });
@@ -429,7 +463,7 @@ describe('convertClaudeHooksYamlToCursorJson — shimmed gating entries (§3.1)'
       'hooks:\n  PreToolUse:\n    - matcher: Bash\n      hooks:\n        - { command: "./gate.sh --msg \'hi\'" }\n',
     );
     expect(doc.hooks.preToolUse?.[0]?.command).toBe(
-      "node ./hooks/cursor-shim.mjs preToolUse -- './gate.sh --msg '\\''hi'\\'''",
+      "node \"${CLAUDE_PLUGIN_ROOT:-.}/hooks/cursor-shim.mjs\" preToolUse -- './gate.sh --msg '\\''hi'\\'''",
     );
   });
 
@@ -439,12 +473,12 @@ describe('convertClaudeHooksYamlToCursorJson — shimmed gating entries (§3.1)'
     );
     expect(doc.hooks.preToolUse).toStrictEqual([
       {
-        command: "node ./hooks/cursor-shim.mjs preToolUse -- './a.sh'",
+        command: 'node "${CLAUDE_PLUGIN_ROOT:-.}/hooks/cursor-shim.mjs" preToolUse -- \'./a.sh\'',
         matcher: 'Shell',
         failClosed: true,
       },
       {
-        command: "node ./hooks/cursor-shim.mjs preToolUse -- './b.sh'",
+        command: 'node "${CLAUDE_PLUGIN_ROOT:-.}/hooks/cursor-shim.mjs" preToolUse -- \'./b.sh\'',
         matcher: 'Shell',
         failClosed: true,
       },

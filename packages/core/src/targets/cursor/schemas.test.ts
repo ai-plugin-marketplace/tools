@@ -286,14 +286,15 @@ describe('cursorHooksFileSchema — positive', () => {
   });
 
   it('accepts a shimmed controller entry: a shim command with failClosed (§3.1)', () => {
-    // The gating path emits `{ command: "node \"${CLAUDE_PLUGIN_ROOT}/hooks/cursor-shim.mjs\" …",
+    // The gating path emits `{ command: "node \"${CLAUDE_PLUGIN_ROOT:-.}/hooks/cursor-shim.mjs\" …",
     // matcher, failClosed }`.
     const doc = {
       version: 1,
       hooks: {
         preToolUse: [
           {
-            command: 'node "${CLAUDE_PLUGIN_ROOT}/hooks/cursor-shim.mjs" preToolUse -- ./gate.sh',
+            command:
+              'node "${CLAUDE_PLUGIN_ROOT:-.}/hooks/cursor-shim.mjs" preToolUse -- ./gate.sh',
             matcher: 'Shell',
             failClosed: true,
           },
@@ -301,7 +302,7 @@ describe('cursorHooksFileSchema — positive', () => {
         beforeSubmitPrompt: [
           {
             command:
-              'node "${CLAUDE_PLUGIN_ROOT}/hooks/cursor-shim.mjs" beforeSubmitPrompt -- ./prompt.sh',
+              'node "${CLAUDE_PLUGIN_ROOT:-.}/hooks/cursor-shim.mjs" beforeSubmitPrompt -- ./prompt.sh',
             failClosed: true,
           },
         ],

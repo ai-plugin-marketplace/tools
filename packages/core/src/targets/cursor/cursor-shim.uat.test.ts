@@ -42,13 +42,14 @@ if (!CURSOR_AGENT_AVAILABLE) {
 
 /**
  * Source hooks/claude.yaml: a Bash gate whose handler is a Claude-format deny gate. The handler
- * command is `${CLAUDE_PLUGIN_ROOT}`-anchored, exactly as real plugins author it (a cwd-relative
- * handler would break in the installed-plugin layout for the same reason as a cwd-relative shim
- * path — issue #56). The shim runs the handler through `sh -c`, which expands the variable from
- * the hook process environment.
+ * command uses the `${CLAUDE_PLUGIN_ROOT:-.}` fallback form, exactly as real plugins author it (an
+ * unconditional `${CLAUDE_PLUGIN_ROOT}` would expand to an empty string — and, combined with
+ * `failClosed: true`, deny every gated call — when Cursor does not set the variable, as it does not
+ * for project-level/colocated hooks; issue #56). The shim runs the handler through `sh -c`, which
+ * expands the variable from the hook process environment, so the fallback resolves in both layouts.
  */
 const SOURCE_YAML =
-  'hooks:\n  PreToolUse:\n    - matcher: Bash\n      hooks:\n        - { command: "node \\"${CLAUDE_PLUGIN_ROOT}/hooks/deny.mjs\\"" }\n';
+  'hooks:\n  PreToolUse:\n    - matcher: Bash\n      hooks:\n        - { command: "node \\"${CLAUDE_PLUGIN_ROOT:-.}/hooks/deny.mjs\\"" }\n';
 
 /**
  * Build a Claude-format handler that denies every shell tool call (exit 0 with a deny decision).
@@ -86,11 +87,16 @@ describe.skipIf(!CURSOR_AGENT_AVAILABLE)('cursor-shim UAT — real Cursor enforc
 
   /**
    * Emit the generated hooks doc into `<workspace>/.cursor/hooks.json` and the shim runner + deny
-   * handler into `<shimRoot>/hooks/`, then run headless Cursor with `CLAUDE_PLUGIN_ROOT=<shimRoot>`
-   * (the emitted command anchors the shim to `${CLAUDE_PLUGIN_ROOT}` — issue #56; Cursor sets the
-   * variable for installed-plugin hooks, and the UAT provides it via the environment).
+   * handler into `<shimRoot>/hooks/`, then run headless Cursor with an explicitly-constructed
+   * environment. `configureEnv` decides whether `CLAUDE_PLUGIN_ROOT` is present in that environment
+   * — the two scenarios below exercise the variable ABSENT (project-level/colocated) and SET
+   * (installed-plugin) cases the `${CLAUDE_PLUGIN_ROOT:-.}` fallback must handle correctly.
    */
-  function runDenyGateScenario(ws: string, shimRoot: string) {
+  function runDenyGateScenario(
+    ws: string,
+    shimRoot: string,
+    configureEnv: (env: NodeJS.ProcessEnv) => void,
+  ) {
     const marker = path.join(ws, 'MARKER_SHOULD_NOT_EXIST');
     // Positive control: the wrapped deny handler writes this when the gate actually fires.
     const hookFiredMarker = path.join(ws, 'HOOK_FIRED');
@@ -109,23 +115,31 @@ describe.skipIf(!CURSOR_AGENT_AVAILABLE)('cursor-shim UAT — real Cursor enforc
       `Use the shell tool to run exactly this command and nothing else: touch ${marker}. ` +
       `Do not ask for confirmation.`;
 
+    // Build the spawn environment explicitly rather than relying on omission: the test harness's
+    // own process.env may already carry a CLAUDE_PLUGIN_ROOT, so the "variable absent" scenario
+    // must delete it, not merely decline to set it.
+    const env: NodeJS.ProcessEnv = { ...process.env };
+    configureEnv(env);
+
     // Headless Cursor run. A blocked gate means the shell command never executes.
     const result = spawnSync(
       'cursor-agent',
       ['-p', prompt, '--trust', '--force', '--workspace', ws],
-      {
-        cwd: ws,
-        env: { ...process.env, CLAUDE_PLUGIN_ROOT: shimRoot },
-        encoding: 'utf8',
-        timeout: 120_000,
-      },
+      { cwd: ws, env, encoding: 'utf8', timeout: 120_000 },
     );
     return { result, marker, hookFiredMarker };
   }
 
-  it('blocks a shell command through the generated deny gate (marker never created)', () => {
+  it('blocks a shell command through the generated deny gate when CLAUDE_PLUGIN_ROOT is absent (colocated/project-level layout, issue #56)', () => {
+    // Regression guard for the project-level catastrophe: Cursor does NOT set CLAUDE_PLUGIN_ROOT
+    // for project-level/colocated hooks (empirically verified against a real cursor-agent build —
+    // see cursor-controller-shim.md §3.1). Against an unconditional `${CLAUDE_PLUGIN_ROOT}` anchor
+    // this fails at the positive control (the variable expands to empty, node can't find the
+    // module); with the `:-.` fallback it resolves relative to cwd = workspace and passes.
     workspace = createTempDir('aipm-cursor-uat-');
-    const { result, marker, hookFiredMarker } = runDenyGateScenario(workspace, workspace);
+    const { result, marker, hookFiredMarker } = runDenyGateScenario(workspace, workspace, (env) => {
+      delete env.CLAUDE_PLUGIN_ROOT;
+    });
 
     // Guard against a spurious pass: if cursor-agent never ran (spawn error) or was killed before
     // exiting (null status, e.g. timeout signal), the side-effect marker would be absent for the
@@ -143,22 +157,28 @@ describe.skipIf(!CURSOR_AGENT_AVAILABLE)('cursor-shim UAT — real Cursor enforc
     expect(fs.existsSync(marker)).toBe(false);
   });
 
-  it('enforces with an installed-plugin layout where cwd ≠ shim directory (issue #56)', () => {
+  it('enforces with an installed-plugin layout where cwd ≠ shim directory and CLAUDE_PLUGIN_ROOT is set (issue #56)', () => {
     // Regression for issue #56: 0.7.0 emitted a cwd-relative `node ./hooks/cursor-shim.mjs …`,
     // which only worked when the hook's cwd happened to be the directory holding `hooks/` — a
     // coincidence the original UAT baked in by placing the shim inside the workspace. Real
-    // installed plugins live OUTSIDE the workspace and Cursor does not guarantee hook cwd = plugin
-    // root. Here the shim + handler live in a separate "installed plugin" root while cwd is the
-    // workspace; the ${CLAUDE_PLUGIN_ROOT}-anchored invocation must still find the shim (positive
-    // control HOOK_FIRED) and enforce the deny (marker absent). Against the pre-fix relative path,
-    // this test fails at the positive control: node cannot resolve the shim from the workspace.
+    // installed plugins live OUTSIDE the workspace. This scenario SIMULATES Cursor's
+    // installed-plugin behavior — setting CLAUDE_PLUGIN_ROOT to the plugin's install path — which is
+    // confirmed only by Cursor staff forum posts (not the official docs); cursor-agent's headless
+    // `--plugin-dir` path could not be made to fire hooks to observe this directly. Here the shim +
+    // handler live in a separate "installed plugin" root while cwd is the workspace; the
+    // `${CLAUDE_PLUGIN_ROOT:-.}`-anchored invocation must still find the shim (positive control
+    // HOOK_FIRED) and enforce the deny (marker absent). Against the pre-fix relative path, this test
+    // fails at the positive control: node cannot resolve the shim from the workspace.
     workspace = createTempDir('aipm-cursor-uat-ws-');
-    pluginRoot = createTempDir('aipm-cursor-uat-plugin-');
-    const { result, marker, hookFiredMarker } = runDenyGateScenario(workspace, pluginRoot);
+    const plugin = createTempDir('aipm-cursor-uat-plugin-');
+    pluginRoot = plugin;
+    const { result, marker, hookFiredMarker } = runDenyGateScenario(workspace, plugin, (env) => {
+      env.CLAUDE_PLUGIN_ROOT = plugin;
+    });
 
     expect(result.error).toBeUndefined();
     expect(result.status).not.toBeNull();
-    // Positive control: the shim resolved via ${CLAUDE_PLUGIN_ROOT} and ran the wrapped handler.
+    // Positive control: the shim resolved via ${CLAUDE_PLUGIN_ROOT:-.} and ran the wrapped handler.
     expect(fs.existsSync(hookFiredMarker)).toBe(true);
     // Ground truth: the deny still enforced with cwd ≠ shim directory.
     expect(fs.existsSync(marker)).toBe(false);

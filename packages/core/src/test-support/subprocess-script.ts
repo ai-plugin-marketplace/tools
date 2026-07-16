@@ -8,10 +8,11 @@
  * the `spawnSync` subprocess wrapper, and the `which`/`where` PATH probe.
  *
  * `emitScript` never chmods a file unless a caller explicitly opts in via `executable: true` — it
- * mirrors the real build's write path (`fs.writeFileSync` — mode 0o644 by default — and only
- * `fs.chmodSync(…, 0o755)` for files the build marks executable, see `pipeline/build.ts`) rather
- * than unconditionally granting the executable bit, which would mask a regression like the one
- * fixed in #53 (an emitted adapter shipping non-executable).
+ * mirrors the real build's write path (`fs.writeFileSync` — mode `0o666` masked by the process
+ * umask, commonly `0o644` — and only `fs.chmodSync(…, 0o755)` for files the build marks
+ * executable, see `pipeline/build.ts`) rather than unconditionally granting the executable bit,
+ * which would mask a regression like the one fixed in #53 (an emitted adapter shipping
+ * non-executable).
  */
 
 import { spawnSync } from 'node:child_process';
@@ -110,6 +111,8 @@ export function resolveBinary(name: string): string | undefined {
     encoding: 'utf8',
   });
   if (probe.status !== 0 || typeof probe.stdout !== 'string') return undefined;
-  const resolved = probe.stdout.trim().split('\n')[0];
+  // `where` on Windows emits CRLF line endings; splitting on `\n` alone would leave a trailing
+  // `\r` on the first path (e.g. `C:\path\bin.exe\r`), producing an invalid path.
+  const resolved = probe.stdout.trim().split(/\r?\n/)[0]?.trim();
   return resolved === '' || resolved === undefined ? undefined : resolved;
 }

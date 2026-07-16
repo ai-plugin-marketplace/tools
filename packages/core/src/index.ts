@@ -31,7 +31,12 @@ export {
   listTargets,
 } from './pipeline/operations.js';
 
-export { applyRuleSeverityOverrides, lint } from './lint/index.js';
+export {
+  applyRuleSeverityOverrides,
+  lint,
+  registeredRuleIds,
+  unknownRuleOverrideDiagnostics,
+} from './lint/index.js';
 export type {
   Diagnostic,
   DiscoveryMode,

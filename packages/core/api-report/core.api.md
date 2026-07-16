@@ -235,6 +235,9 @@ export interface RefreshOutcome {
 export function refreshScaffold(targetDir: string, opts?: RefreshOptions): Promise<RefreshOutcome[]>;
 
 // @public
+export function registeredRuleIds(): readonly string[];
+
+// @public
 export interface Rule {
     // (undocumented)
     check(ctx: RuleContext): Diagnostic[] | Promise<Diagnostic[]>;
@@ -289,6 +292,9 @@ export interface SupportReport {
 
 // @public
 export type TargetId = 'claude' | 'codex' | 'cursor' | 'gemini' | 'kiro' | 'open-plugins' | 'vercel';
+
+// @public
+export function unknownRuleOverrideDiagnostics(overrides: ReadonlyMap<string, RuleSeverityOverride>, diagnosticsBeforeOverrides: readonly Diagnostic[], registeredRuleIds: readonly string[]): Diagnostic[];
 
 // @public
 export function validate(targetPath: string, opts?: ValidateOptions): Promise<ValidationResult>;

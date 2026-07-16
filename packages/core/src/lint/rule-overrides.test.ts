@@ -5,7 +5,7 @@
  */
 
 import { describe, expect, it } from 'vitest';
-import { applyRuleSeverityOverrides } from './rule-overrides.js';
+import { applyRuleSeverityOverrides, unknownRuleOverrideDiagnostics } from './rule-overrides.js';
 import type { Diagnostic } from './types.js';
 
 function diagnostic(ruleId: string, severity: Diagnostic['severity']): Diagnostic {
@@ -71,5 +71,72 @@ describe('applyRuleSeverityOverrides()', () => {
     const diagnostics = [diagnostic('a/one', 'error')];
     const result = applyRuleSeverityOverrides(diagnostics, new Map([['a/one', 'off']]));
     expect(result).toEqual([]);
+  });
+});
+
+describe('unknownRuleOverrideDiagnostics()', () => {
+  const registered = ['correctness/broken-file-ref', 'schema/target-conformance'];
+
+  it('warns when an override ruleId matches neither a produced diagnostic nor a registered rule (typo)', () => {
+    const result = unknownRuleOverrideDiagnostics(
+      new Map([['correctness/borken-file-ref', 'off']]),
+      [],
+      registered,
+    );
+    expect(result).toHaveLength(1);
+    expect(result[0]).toMatchObject({
+      ruleId: 'config/unknown-rule',
+      severity: 'warn',
+      file: '(cli)',
+    });
+    expect(result[0]?.message).toContain("'correctness/borken-file-ref'");
+  });
+
+  it('does not warn for a registered rule that produced no diagnostics this run', () => {
+    // The negative case L-D6 typo detection must not false-positive on: a real, valid rule id
+    // that simply had nothing to report this run.
+    const result = unknownRuleOverrideDiagnostics(
+      new Map([['correctness/broken-file-ref', 'off']]),
+      [],
+      registered,
+    );
+    expect(result).toEqual([]);
+  });
+
+  it('does not warn for a ruleId that produced a diagnostic even if absent from the registry', () => {
+    // Defensive OR-match: an override is accepted if it matches EITHER the static registry OR
+    // something this run actually produced, in case the registry is ever incomplete.
+    const produced = [diagnostic('agent-ux/some-new-rule', 'info')];
+    const result = unknownRuleOverrideDiagnostics(
+      new Map([['agent-ux/some-new-rule', 'error']]),
+      produced,
+      registered,
+    );
+    expect(result).toEqual([]);
+  });
+
+  it('checks against diagnostics from BEFORE severity overrides were applied', () => {
+    // If checked against the post-filter list, overriding a rule to 'off' would remove its own
+    // diagnostics and make the override look unmatched — a false positive on a real rule.
+    const beforeOverrides = [diagnostic('correctness/broken-file-ref', 'error')];
+    const result = unknownRuleOverrideDiagnostics(
+      new Map([['correctness/broken-file-ref', 'off']]),
+      beforeOverrides,
+      [], // Not even in the registry — only the produced-diagnostic match should save it here.
+    );
+    expect(result).toEqual([]);
+  });
+
+  it('emits one warning per unmatched override, not one per diagnostic', () => {
+    const result = unknownRuleOverrideDiagnostics(
+      new Map([
+        ['typo/one', 'off'],
+        ['typo/two', 'warn'],
+      ]),
+      [],
+      registered,
+    );
+    expect(result.map((d) => d.ruleId)).toEqual(['config/unknown-rule', 'config/unknown-rule']);
+    expect(result).toHaveLength(2);
   });
 });

@@ -31,6 +31,23 @@ export {
   listTargets,
 } from './pipeline/operations.js';
 
+export { lint } from './lint/index.js';
+export type {
+  Diagnostic,
+  DiscoveryMode,
+  Document,
+  Fix,
+  FrontmatterDocument,
+  JsonDocument,
+  LintOptions,
+  LintResult,
+  Position,
+  Range,
+  Rule,
+  RuleContext,
+  YamlDocument,
+} from './lint/index.js';
+
 export type {
   TargetId,
   BuildOptions,

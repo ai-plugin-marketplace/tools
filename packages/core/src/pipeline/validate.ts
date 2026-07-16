@@ -50,6 +50,20 @@ import {
 import type { ConfigCache } from './load-config.js';
 import type { AipmWorkspace } from '../config.js';
 import type { Finding, TargetId, ValidateOptions, ValidationResult } from './types.js';
+import { createRuleContext } from '../lint/context.js';
+import { diagnosticToFinding } from '../lint/diagnostic.js';
+import {
+  defaultMarketplaceNameRule,
+  envelopeAdherenceRule,
+  frontmatterParsesRule,
+  marketplaceRegistrationRule,
+  mcpKeySyncRule,
+  nameConsistencyRule,
+  pluginFreshnessRule,
+  registryFreshnessRule,
+  rootArtifactFreshnessRule,
+  targetSchemaRule,
+} from '../lint/rules/index.js';
 
 // ---------------------------------------------------------------------------
 // Module-level artifact mappings
@@ -432,6 +446,26 @@ export function checkDefaultMarketplaceName(
  *
  * `pluginName` is used to populate Finding.plugin.
  */
+/**
+ * Format a Zod validation failure's issues as `envelope-invalid` findings, one per issue. Shared
+ * by {@link validateEnvelopeShape} (validates a raw value directly) and the `schema/envelope-shape`
+ * lint rule (which instead catches the `ZodError` `defineConfig` throws via `loadPluginConfig`, so
+ * the config is transpiled/validated exactly once per invocation rather than twice).
+ */
+export function zodEnvelopeIssuesToFindings(
+  issues: z.core.$ZodIssue[],
+  pluginName: string,
+): Finding[] {
+  return issues.map((issue) => {
+    const issuePath = issue.path.length > 0 ? issue.path.join('.') : '(root)';
+    return hard(
+      'envelope-invalid',
+      pluginName,
+      `Invalid aipm.config: [${issuePath}] ${issue.message}`,
+    );
+  });
+}
+
 export function validateEnvelopeShape(rawConfig: unknown, pluginName: string): Finding[] {
   try {
     // defineConfig calls aipmConfigSchema.parse() internally — reuses the canonical validator
@@ -441,14 +475,7 @@ export function validateEnvelopeShape(rawConfig: unknown, pluginName: string): F
   } catch (err) {
     // ZodError carries .issues[] with path, code, message
     if (err instanceof z.ZodError) {
-      return err.issues.map((issue) => {
-        const issuePath = issue.path.length > 0 ? issue.path.join('.') : '(root)';
-        return hard(
-          'envelope-invalid',
-          pluginName,
-          `Invalid aipm.config: [${issuePath}] ${issue.message}`,
-        );
-      });
+      return zodEnvelopeIssuesToFindings(err.issues, pluginName);
     }
     // Non-ZodError (e.g. JSON parse) — emit a single finding
     const message = err instanceof Error ? err.message : String(err);
@@ -975,7 +1002,10 @@ const TARGET_VALIDATORS: Record<TargetId, (pluginDir: string) => Finding[]> = {
  * Run per-target schema validation for every target in the envelope (§10.1 step 2). Each
  * declared target's `validate.ts` validator is invoked; absent targets are skipped.
  */
-function validatePerTargetSchemas(pluginDir: string, envelope: readonly TargetId[]): Finding[] {
+export function validatePerTargetSchemas(
+  pluginDir: string,
+  envelope: readonly TargetId[],
+): Finding[] {
   const findings: Finding[] = [];
   for (const target of envelope) {
     findings.push(...TARGET_VALIDATORS[target](pluginDir));
@@ -1020,7 +1050,7 @@ function freshnessFinding(
  * Generation logic is shared with `runBuild` via `computePluginHookArtifacts` / `computeDistBundles`
  * so build output and the freshness oracle cannot drift.
  */
-function checkFreshness(
+export function checkFreshness(
   pluginDir: string,
   distDir: string,
   envelope: readonly TargetId[],
@@ -1112,7 +1142,7 @@ function checkFreshness(
  * Generation logic is shared with `runBuild` via `collectRegistryPlugins`/`computeRegistryArtifacts`
  * so the build output and the freshness oracle cannot drift. Findings are repo-scoped (no `plugin`).
  */
-async function checkRegistryFreshness(
+export async function checkRegistryFreshness(
   repoRoot: string,
   pluginDirs: readonly string[],
   workspace: AipmWorkspace,
@@ -1211,7 +1241,7 @@ async function checkRegistryFreshness(
  * `serializeRootManifest`, so the build output and the freshness oracle cannot drift. Findings are
  * repo-scoped (no `plugin`).
  */
-async function checkRootArtifactFreshness(
+export async function checkRootArtifactFreshness(
   repoRoot: string,
   pluginDirs: readonly string[],
   workspace: AipmWorkspace,
@@ -1469,34 +1499,54 @@ export async function runValidate(
       continue;
     }
 
+    const ctx = createRuleContext({
+      pluginDir,
+      repoRoot,
+      distDir,
+      envelope,
+      allPluginDirs: pluginDirs,
+      workspace,
+      ci,
+      skipFreshness,
+      configCache,
+    });
+
     // ── 2. Per-target schema validation ─────────────────────────────────────
-    const schemaFindings = validatePerTargetSchemas(pluginDir, envelope);
+    const schemaFindings = (await targetSchemaRule.check(ctx)).map((d) =>
+      diagnosticToFinding(d, ci),
+    );
     findings.push(...schemaFindings);
     const hasBlockingSchemaError = schemaFindings.some((f) => f.severity === 'hard');
 
     // ── 3. Envelope adherence ───────────────────────────────────────────────
-    findings.push(...validateEnvelopeAdherence(pluginDir, envelope));
+    findings.push(
+      ...(await envelopeAdherenceRule.check(ctx)).map((d) => diagnosticToFinding(d, ci)),
+    );
 
     // ── 3b. Frontmatter validity ────────────────────────────────────────────
     // Host-agnostic: invalid YAML frontmatter loads on lenient hosts (Claude) but fails on
     // strict ones (Codex). Runs for every plugin regardless of target envelope.
-    findings.push(...validateFrontmatterParses(pluginDir, pluginName));
+    findings.push(
+      ...(await frontmatterParsesRule.check(ctx)).map((d) => diagnosticToFinding(d, ci)),
+    );
 
     // ── 4. Cross-target consistency (§10.1 step 4: multi-target only; §10.3: schema blocks) ──
     if (envelope.length > 1 && !hasBlockingSchemaError) {
-      findings.push(...validateNameConsistency(pluginDir, envelope));
-      findings.push(...validateMcpKeySync(pluginDir, envelope));
+      findings.push(
+        ...(await nameConsistencyRule.check(ctx)).map((d) => diagnosticToFinding(d, ci)),
+      );
+      findings.push(...(await mcpKeySyncRule.check(ctx)).map((d) => diagnosticToFinding(d, ci)));
       // When registries are generated, their correctness is enforced by freshness below — skip the
       // hand-authored-registry check to avoid double findings (design spec, locked decision 2).
       if (!generatesRegistries) {
-        findings.push(...validateMarketplaceRegistration(pluginDir, repoRoot, envelope));
+        findings.push(
+          ...(await marketplaceRegistrationRule.check(ctx)).map((d) => diagnosticToFinding(d, ci)),
+        );
       }
     }
 
     // ── 5. Freshness ─────────────────────────────────────────────────────────
-    if (!skipFreshness) {
-      findings.push(...checkFreshness(pluginDir, distDir, envelope, ci));
-    }
+    findings.push(...(await pluginFreshnessRule.check(ctx)).map((d) => diagnosticToFinding(d, ci)));
   }
 
   // ── 6. Repo-level default/placeholder marketplace-name check (always SOFT) ──
@@ -1507,7 +1557,22 @@ export async function runValidate(
   // `name`/`owner.name`. A placeholder name collides with the upstream marketplace and strands
   // plugins, so warn — but never fail (soft, does not flip `passed`).
   if (path.resolve(targetPath) === repoRoot) {
-    findings.push(...checkDefaultMarketplaceName(repoRoot, workspace));
+    const repoLevelCtx = createRuleContext({
+      pluginDir: repoRoot,
+      repoRoot,
+      distDir,
+      envelope: [],
+      allPluginDirs: pluginDirs,
+      workspace,
+      ci,
+      skipFreshness,
+      configCache,
+    });
+    findings.push(
+      ...(await defaultMarketplaceNameRule.check(repoLevelCtx)).map((d) =>
+        diagnosticToFinding(d, ci),
+      ),
+    );
   }
 
   // ── 7. Repo-level generation checks (only when generation is opted in) ──────
@@ -1526,20 +1591,28 @@ export async function runValidate(
     // repo-wide re-scan so the oracle stays repo-complete.
     const isRepoRoot = path.resolve(targetPath) === repoRoot;
     const allPluginDirs = isRepoRoot ? pluginDirs : (await discoverPlugins(repoRoot)).pluginDirs;
+    const repoScopedCtx = createRuleContext({
+      pluginDir: repoRoot,
+      repoRoot,
+      distDir,
+      envelope: [],
+      allPluginDirs,
+      workspace,
+      ci,
+      skipFreshness,
+      configCache,
+    });
     if (!skipFreshness) {
       findings.push(
-        ...(await checkRegistryFreshness(repoRoot, allPluginDirs, workspace, ci, configCache)),
+        ...(await registryFreshnessRule.check(repoScopedCtx)).map((d) =>
+          diagnosticToFinding(d, ci),
+        ),
       );
     }
     findings.push(
-      ...(await checkRootArtifactFreshness(
-        repoRoot,
-        allPluginDirs,
-        workspace,
-        ci,
-        skipFreshness,
-        configCache,
-      )),
+      ...(await rootArtifactFreshnessRule.check(repoScopedCtx)).map((d) =>
+        diagnosticToFinding(d, ci),
+      ),
     );
   }
 

@@ -1,0 +1,129 @@
+/**
+ * End-to-end test for the public `lint()` entry point: discovers a plugin under a repo root and
+ * runs every rule against it, producing both migrated-legacy diagnostics (carrying `legacyCode`)
+ * and new-rule diagnostics.
+ *
+ * @see docs/specs/lint-engine.md §4.1
+ */
+
+import * as fs from 'node:fs';
+import * as os from 'node:os';
+import * as path from 'node:path';
+import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { runBuild } from '../pipeline/build.js';
+import { synthRegistryRepo } from '../test-support/synth-plugin.js';
+import type { SynthRegistryRepo } from '../test-support/synth-plugin.js';
+import { lint } from './engine.js';
+
+let repoRoot: string;
+
+beforeEach(() => {
+  repoRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'aipm-lint-engine-'));
+});
+
+afterEach(() => {
+  fs.rmSync(repoRoot, { recursive: true, force: true });
+});
+
+function write(rel: string, content: string | object): void {
+  const full = path.join(repoRoot, rel);
+  fs.mkdirSync(path.dirname(full), { recursive: true });
+  fs.writeFileSync(
+    full,
+    typeof content === 'string' ? content : JSON.stringify(content, null, 2),
+    'utf-8',
+  );
+}
+
+describe('lint()', () => {
+  it('runs both migrated and new rules against a discovered plugin', async () => {
+    write(
+      'plugins/my-plugin/aipm.config.ts',
+      `import { defineConfig } from '@ai-plugin-marketplace/core';\n` +
+        `export default defineConfig({ version: '1.0.0', targets: ['claude'] });\n`,
+    );
+    // A manifest field referencing a nonexistent agent file — should surface both the legacy
+    // schema-invalid-style path-existence check AND the new broken-file-ref rule.
+    write('plugins/my-plugin/.claude-plugin/plugin.json', {
+      name: 'my-plugin',
+      agents: './agents/missing.md',
+    });
+
+    const result = await lint(repoRoot);
+
+    // A migrated-legacy diagnostic (from the per-target schema/adherence rules) carries legacyCode.
+    const legacyDiagnostics = result.diagnostics.filter((d) => d.legacyCode !== undefined);
+    expect(legacyDiagnostics.length).toBeGreaterThan(0);
+
+    // A new-rule diagnostic (broken-file-ref) has no legacyCode.
+    const brokenRefDiagnostics = result.diagnostics.filter(
+      (d) => d.ruleId === 'correctness/broken-file-ref',
+    );
+    expect(brokenRefDiagnostics).toHaveLength(1);
+    expect(brokenRefDiagnostics[0]?.legacyCode).toBeUndefined();
+    expect(brokenRefDiagnostics[0]?.message).toContain('./agents/missing.md');
+  });
+
+  it('is silent (no diagnostics) for a fully conformant single-target plugin', async () => {
+    write(
+      'plugins/clean-plugin/aipm.config.ts',
+      `import { defineConfig } from '@ai-plugin-marketplace/core';\n` +
+        `export default defineConfig({ version: '1.0.0', targets: ['claude'] });\n`,
+    );
+    write('plugins/clean-plugin/.claude-plugin/plugin.json', { name: 'clean-plugin' });
+    write('.claude-plugin/marketplace.json', {
+      name: 'test-marketplace',
+      plugins: [{ name: 'clean-plugin', source: './plugins/clean-plugin' }],
+    });
+
+    const result = await lint(repoRoot);
+    expect(result.diagnostics).toEqual([]);
+  });
+
+  describe('cross-target consistency gating (matches validate())', () => {
+    let repo: SynthRegistryRepo | undefined;
+
+    afterEach(() => {
+      repo?.cleanup();
+    });
+
+    it('does not double-report marketplace-registration when registry generation is opted in', async () => {
+      // Multi-target (so the cross-target step that would run marketplace-registration is
+      // reached) with an `aipm.workspace.ts` (registry generation opted in) — mirrors
+      // `pipeline/registry-codegen.test.ts`'s "does NOT also emit marketplace-registration when
+      // generation is opted in" test for `validate()`, proving `lint()` applies the identical
+      // gating (§10.1 step 4 comment in `pipeline/validate.ts`: "design spec, locked decision 2").
+      repo = synthRegistryRepo([{ name: 'alpha', targets: ['claude', 'cursor'] }], { name: 'm' });
+      await runBuild(repo.repoRoot); // generates the registries, so they start out fresh
+
+      const result = await lint(repo.repoRoot);
+
+      // The hand-authored-registry check must be skipped entirely...
+      const marketplaceRegistrationDiagnostics = result.diagnostics.filter(
+        (d) => d.ruleId === 'correctness/marketplace-registration',
+      );
+      expect(marketplaceRegistrationDiagnostics).toEqual([]);
+
+      // ...while the registry-freshness rule (which owns registry correctness in this mode) still
+      // ran and found the freshly-built registries fresh — proving this isn't just "no rules ran
+      // at all" but the specific intended gating.
+      const freshnessDiagnostics = result.diagnostics.filter((d) => d.legacyCode === 'freshness');
+      expect(freshnessDiagnostics).toEqual([]);
+    });
+
+    it('still runs marketplace-registration (hand-authored path) when no workspace is present', async () => {
+      // Same multi-target shape but WITHOUT a workspace (registry generation not opted in) — the
+      // historical hand-authored-registry check must still fire when the plugin isn't listed
+      // anywhere, proving the gate is genuinely conditional on workspace presence and not always
+      // skipping this rule.
+      repo = synthRegistryRepo([{ name: 'alpha', targets: ['claude', 'cursor'] }]); // no workspace
+      await runBuild(repo.repoRoot);
+
+      const result = await lint(repo.repoRoot);
+      const marketplaceRegistrationDiagnostics = result.diagnostics.filter(
+        (d) => d.ruleId === 'correctness/marketplace-registration',
+      );
+      expect(marketplaceRegistrationDiagnostics.length).toBeGreaterThan(0);
+    });
+  });
+});

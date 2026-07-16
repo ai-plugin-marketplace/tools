@@ -46,7 +46,7 @@ disk: a hand-written Claude Code plugin, a bare `skills/` directory, an Open Plu
 - **No auto-fix in v1** beyond the `fix` field being present in the diagnostic model (L-D2);
   fix application is follow-on work.
 - **No normalization of user-authored semantics** — e.g. the agent-UX rules judge description
-  *quality signals*, they do not rewrite descriptions.
+  _quality signals_, they do not rewrite descriptions.
 - **No new authoring format.** The engine lints existing formats; it does not introduce one
   (architecture.md §14 holds).
 
@@ -60,16 +60,16 @@ disk: a hand-written Claude Code plugin, a bare `skills/` directory, an Open Plu
 >
 > ```ts
 > interface Diagnostic {
->   ruleId: string;              // e.g. 'correctness/broken-file-ref'
+>   ruleId: string; // e.g. 'correctness/broken-file-ref'
 >   category: 'schema' | 'correctness' | 'security' | 'agent-ux' | 'portability';
 >   severity: 'error' | 'warn' | 'info';
 >   message: string;
->   file: string;                // repo-relative path
->   range?: Range;               // { start: {line, col}, end: {line, col} }, 1-indexed
->   docsUrl: string;             // generated per-rule docs page
+>   file: string; // repo-relative path
+>   range?: Range; // { start: {line, col}, end: {line, col} }, 1-indexed
+>   docsUrl: string; // generated per-rule docs page
 >   hint?: string;
->   fix?: Fix;                   // reserved; not applied in v1
->   legacyCode?: FindingCode;    // present when the rule migrates an existing check
+>   fix?: Fix; // reserved; not applied in v1
+>   legacyCode?: FindingCode; // present when the rule migrates an existing check
 > }
 > ```
 >
@@ -100,11 +100,11 @@ reference, and quality warning lands on a clickable `file:line:col`.
 > ```ts
 > interface Rule {
 >   meta: {
->     id: string;                       // '<category>/<kebab-name>'
+>     id: string; // '<category>/<kebab-name>'
 >     category: Diagnostic['category'];
 >     defaultSeverity: 'error' | 'warn' | 'info' | 'off';
->     description: string;              // one-liner, feeds generated docs
->     appliesTo: DiscoveryMode[];       // which discovery modes run it (§2.4)
+>     description: string; // one-liner, feeds generated docs
+>     appliesTo: DiscoveryMode[]; // which discovery modes run it (§2.4)
 >   };
 >   check(ctx: RuleContext): Diagnostic[] | Promise<Diagnostic[]>;
 > }
@@ -119,13 +119,13 @@ reference, and quality warning lands on a clickable `file:line:col`.
 > **L-D5 (normative).** The engine discovers lintable units via pluggable modes, auto-detected
 > from the target path and forceable via `--as`:
 >
-> | Mode | Detection signal | Unit |
-> |---|---|---|
-> | `aipm-repo` | `aipm.config.ts` / `aipm.repo.ts` (existing discovery) | full repo, all checks |
-> | `claude-plugin` | `.claude-plugin/plugin.json` | one plugin tree |
-> | `open-plugin` | `.plugin/plugin.json` | one Open Plugins tree |
-> | `skills-dir` | directory of `*/SKILL.md` (or a single `SKILL.md`) | skills only |
-> | `claude-user-config` | `settings.json` + any of `skills/`, `agents/`, `commands/`, `hooks/` in a `.claude`-shaped dir | user/project config |
+> | Mode                 | Detection signal                                                                               | Unit                  |
+> | -------------------- | ---------------------------------------------------------------------------------------------- | --------------------- |
+> | `aipm-repo`          | `aipm.config.ts` / `aipm.repo.ts` (existing discovery)                                         | full repo, all checks |
+> | `claude-plugin`      | `.claude-plugin/plugin.json`                                                                   | one plugin tree       |
+> | `open-plugin`        | `.plugin/plugin.json`                                                                          | one Open Plugins tree |
+> | `skills-dir`         | directory of `*/SKILL.md` (or a single `SKILL.md`)                                             | skills only           |
+> | `claude-user-config` | `settings.json` + any of `skills/`, `agents/`, `commands/`, `hooks/` in a `.claude`-shaped dir | user/project config   |
 >
 > Detection is ordered top-to-bottom; first match wins; ambiguity is an explicit diagnostic, not
 > a guess. Cross-file semantic rules that require the aipm workspace model (freshness,
@@ -156,6 +156,7 @@ through L-D3 so every issue has a range. Zod remains the sole authority (L-D8).
 Migrations of every existing check (`envelope-adherence`, `name-consistency`, `mcp-key-sync`,
 `freshness`, path safety, frontmatter parse, marketplace registration, root-artifact rules) plus
 new rules:
+
 - `correctness/broken-file-ref` — manifest and frontmatter references to files that don't exist.
 - `correctness/unknown-hook-event` — event names outside the host's recognized set.
 - `correctness/invalid-matcher` — hook matchers that are not valid regexes.

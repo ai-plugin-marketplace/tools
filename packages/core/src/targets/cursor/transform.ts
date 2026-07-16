@@ -39,6 +39,7 @@
 
 import { parse as parseYaml } from 'yaml';
 
+import { posixSingleQuote } from '../../shell-quoting.js';
 import { CURSOR_SHIM_FILENAME } from './shim-runner.js';
 import type { CursorHookEvent } from './schemas.js';
 
@@ -188,17 +189,6 @@ export function adaptMatcherBlockToCursorEntries(block: ClaudeHookMatcherBlock):
     if (translatedMatcher !== undefined) cursorEntry.matcher = translatedMatcher;
     return [cursorEntry];
   });
-}
-
-/**
- * POSIX-single-quote a string so it survives a shell's tokenization as a **single** argument.
- * Wraps the whole string in single quotes and escapes any embedded single quote as `'\''` (close
- * quote, escaped literal quote, reopen quote) — the standard shell-safe encoding. Used to embed the
- * original Claude handler command as one token after the shim's `--` sentinel (spec §3.1) so shell
- * metacharacters and spaces in the handler command cannot be split into extra argv by Cursor.
- */
-function posixSingleQuote(value: string): string {
-  return `'${value.replace(/'/g, "'\\''")}'`;
 }
 
 /**

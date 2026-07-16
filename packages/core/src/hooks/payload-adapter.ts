@@ -24,6 +24,8 @@
  * @see docs/specs/payload-adapter.md §11 (emit trigger and sidecar sentinel)
  */
 
+import { escapeForShSingleQuotes } from '../shell-quoting.js';
+
 /**
  * The canonical hook-payload contract version (spec §8, D7). A semver string identifying the
  * *canonical-payload contract* documented in `docs/specs/payload-adapter.md` — evolving on its own
@@ -116,15 +118,6 @@ export const PAYLOAD_ADAPTER_SCHEMA = {
   },
   additionalProperties: true,
 } as const;
-
-/**
- * Escape a string for embedding as a POSIX `sh` single-quoted literal: every `'` becomes
- * `'\''` (end the quote, an escaped literal quote, resume the quote) — the standard POSIX
- * technique, since `sh` single quotes have no escape character of their own.
- */
-function escapeForShSingleQuotes(value: string): string {
-  return value.replace(/'/g, `'\\''`);
-}
 
 /**
  * Render the `--schema` response body as a canonical (sorted-key, no-whitespace-drift) JSON string

@@ -170,4 +170,68 @@ describe('aipm lint (subprocess)', () => {
     expect(code).toBe(0);
     expect(stdout).toContain('OK');
   });
+
+  it('exits 2 when --rule is given with no value (e.g. immediately followed by another flag)', () => {
+    const { code, stderr } = runCli(['lint', cleanRepo, '--rule', '--format', 'json'], cleanRepo);
+    expect(code).toBe(2);
+    expect(stderr).toContain('<id>=<severity>');
+  });
+
+  it('exits 2 when --rule is the last, valueless argument', () => {
+    const { code, stderr } = runCli(['lint', cleanRepo, '--rule'], cleanRepo);
+    expect(code).toBe(2);
+    expect(stderr).toContain('<id>=<severity>');
+  });
+
+  it('exits 2 for a duplicate --format, never leaking the second value as the target path (regression)', () => {
+    // Before the fix: only the first `--format`+value pair was consumed, so the second
+    // `--format json` left its value token `json` unconsumed — the positional scanner then picked
+    // `json` up as the target path and silently dropped `cleanRepo`, running lint against a
+    // nonexistent `<cwd>/json` instead of erroring. Now it must be a clean usage error, never a
+    // "path not found"-style failure.
+    const { code, stderr } = runCli(
+      ['lint', '--format', 'text', '--format', 'json', cleanRepo],
+      cleanRepo,
+    );
+    expect(code).toBe(2);
+    expect(stderr).toContain('--format may only be specified once');
+    expect(stderr).not.toContain('ENOENT');
+  });
+
+  it('exits 2 for a duplicate --as', () => {
+    const { code, stderr } = runCli(
+      ['lint', '--as', 'aipm-repo', '--as', 'claude-plugin', cleanRepo],
+      cleanRepo,
+    );
+    expect(code).toBe(2);
+    expect(stderr).toContain('--as may only be specified once');
+  });
+
+  it("warns with a stable synthetic diagnostic when --rule targets a typo'd/unknown rule id (L-D6)", () => {
+    const { code, stdout } = runCli(
+      ['lint', brokenRepo, '--format', 'json', '--rule', 'correctness/borken-file-ref=off'],
+      brokenRepo,
+    );
+    // The typo'd override matches nothing, so it neither silences anything nor blocks; the real
+    // broken-file-ref error is still present and still fails the run.
+    expect(code).toBe(1);
+    const parsed = JSON.parse(stdout) as JsonLintOutput;
+    const unknownRuleDiagnostics = parsed.diagnostics.filter(
+      (d) => d.ruleId === 'config/unknown-rule',
+    );
+    expect(unknownRuleDiagnostics).toHaveLength(1);
+    expect(unknownRuleDiagnostics[0]?.severity).toBe('warn');
+  });
+
+  it('does NOT warn when --rule targets a valid registered rule id that produced nothing this run', () => {
+    // Negative case for L-D6: a real rule id that simply had no diagnostics this run (clean repo)
+    // must not be flagged as unknown.
+    const { code, stdout } = runCli(
+      ['lint', cleanRepo, '--format', 'json', '--rule', 'correctness/broken-file-ref=off'],
+      cleanRepo,
+    );
+    expect(code).toBe(0);
+    const parsed = JSON.parse(stdout) as JsonLintOutput;
+    expect(parsed.diagnostics.some((d) => d.ruleId === 'config/unknown-rule')).toBe(false);
+  });
 });

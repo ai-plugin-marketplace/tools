@@ -34,8 +34,7 @@
     "@ai-plugin-marketplace/core": "workspace:^"
   },
   "devDependencies": {
-    "ajv": "^8.17.1",
-    "ajv-formats": "^3.0.1"
+    "@cfworker/json-schema": "^4.1.1"
   },
   "publishConfig": {
     "access": "public"

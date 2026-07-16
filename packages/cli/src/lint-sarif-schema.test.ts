@@ -10,11 +10,10 @@
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 import { fileURLToPath } from 'node:url';
-// Named import, not default: without `esModuleInterop` (avoided in libraries per repo convention),
-// ajv's CJS default export isn't constructable through NodeNext resolution — the named `Ajv`
-// class export is.
-import { Ajv } from 'ajv';
-import addFormats from 'ajv-formats';
+// `@cfworker/json-schema`, not `ajv`: ajv compiles schemas by generating and evaluating code
+// strings (`new Function`), which gets flagged/blocked in locked-down environments. `Validator`
+// is pure-evaluation — no codegen, no `eval`/`new Function` — so it stays usable there.
+import { Validator } from '@cfworker/json-schema';
 import { describe, expect, it } from 'vitest';
 import type { Diagnostic } from '@ai-plugin-marketplace/core';
 import { buildLintSarif } from './lint-format.js';
@@ -24,11 +23,8 @@ const schema = JSON.parse(
   fs.readFileSync(path.join(HERE, 'lint', 'sarif-2.1.0.schema.json'), 'utf-8'),
 ) as object;
 
-// `unicodeRegExp: false`: the schema's `language` property pattern is not valid under the `u`
-// regex flag ajv otherwise compiles with — this only affects that unrelated property.
-const ajv = new Ajv({ strict: false, allowUnionTypes: true, unicodeRegExp: false });
-addFormats(ajv);
-const validate = ajv.compile(schema);
+// Draft '7': the vendored schema's own `$schema` is `http://json-schema.org/draft-07/schema#`.
+const validator = new Validator(schema, '7');
 
 const RANGED: Diagnostic = {
   ruleId: 'correctness/broken-file-ref',
@@ -52,15 +48,15 @@ const FILE_SCOPED: Diagnostic = {
 describe('buildLintSarif() output against the SARIF 2.1.0 schema', () => {
   it('validates a log containing ranged and range-less results', () => {
     const sarif = buildLintSarif([RANGED, FILE_SCOPED], '1.2.3');
-    const valid = validate(sarif);
-    expect(validate.errors ?? []).toEqual([]);
-    expect(valid).toBe(true);
+    const result = validator.validate(sarif);
+    expect(result.errors).toEqual([]);
+    expect(result.valid).toBe(true);
   });
 
   it('validates an empty-results log (a clean lint run)', () => {
     const sarif = buildLintSarif([], '1.2.3');
-    const valid = validate(sarif);
-    expect(validate.errors ?? []).toEqual([]);
-    expect(valid).toBe(true);
+    const result = validator.validate(sarif);
+    expect(result.errors).toEqual([]);
+    expect(result.valid).toBe(true);
   });
 });

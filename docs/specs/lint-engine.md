@@ -88,7 +88,10 @@ disk: a hand-written Claude Code plugin, a bare `skills/` directory, an Open Plu
 > positions: JSON via `jsonc-parser` (offset→line/col), YAML via the `yaml` package's CST,
 > markdown frontmatter via offset-tracked extraction. Zod validation runs against the plain
 > values, and zod issue `path`s are resolved back to document nodes to produce ranges. No rule
-> re-parses files ad hoc.
+> re-parses files ad hoc. `jsonc-parser` is used **only for position tracking**: host-conformant
+> JSON manifests remain strict JSON, and comments encountered in them are themselves a
+> `schema/*` diagnostic, not tolerated input (which is also why JSON has no inline-suppression
+> channel, L-D6).
 
 This layer is the single largest enabler of "best available": every schema error, broken
 reference, and quality warning lands on a clickable `file:line:col`.
@@ -123,12 +126,16 @@ reference, and quality warning lands on a clickable `file:line:col`.
 > | -------------------- | ---------------------------------------------------------------------------------------------- | --------------------- |
 > | `aipm-repo`          | `aipm.config.ts` / `aipm.repo.ts` (existing discovery)                                         | full repo, all checks |
 > | `claude-plugin`      | `.claude-plugin/plugin.json`                                                                   | one plugin tree       |
-> | `open-plugin`        | `.plugin/plugin.json`                                                                          | one Open Plugins tree |
+> | `open-plugins`       | `.plugin/plugin.json`                                                                          | one Open Plugins tree |
 > | `skills-dir`         | directory of `*/SKILL.md` (or a single `SKILL.md`)                                             | skills only           |
 > | `claude-user-config` | `settings.json` + any of `skills/`, `agents/`, `commands/`, `hooks/` in a `.claude`-shaped dir | user/project config   |
 >
-> Detection is ordered top-to-bottom; first match wins; ambiguity is an explicit diagnostic, not
-> a guess. Cross-file semantic rules that require the aipm workspace model (freshness,
+> Detection evaluates **all** signals at the target path. `aipm-repo` takes precedence when it
+> matches (it subsumes the other shapes: an aipm repo legitimately contains plugin trees and
+> skills). Absent an `aipm-repo` match, exactly one remaining signal must match; if more than one
+> does, detection emits an explicit ambiguity diagnostic (usage exit) telling the user to pass
+> `--as` — it never guesses. Discovery-mode names reuse established vocabulary (`open-plugins`
+> matches the `TargetId` spelling). Cross-file semantic rules that require the aipm workspace model (freshness,
 > mcp-key-sync, name-consistency, envelope adherence) declare `appliesTo: ['aipm-repo']` and are
 > silently absent in foreign modes — foreign configs get every rule whose inputs exist.
 
@@ -203,7 +210,8 @@ Default severity: `info` (advisory; these are judgment heuristics).
 `aipm lint [path] [--as <mode>] [--format text|json|sarif] [--rule <id>=<severity> ...]`
 
 - `text` (default): grouped by file, `file:line:col ruleId severity message`, docs URL on
-  verbose.
+  verbose. Diagnostics without a `range` (file-scoped, L-D1) render as
+  `file ruleId severity message` — the position segment is omitted, never zero-filled.
 - `json`: the `Diagnostic[]` array plus a summary envelope.
 - `sarif`: SARIF 2.1.0, one `rule` per rule id — direct GitHub code-scanning upload.
 - Exit codes: `0` no `error`-severity diagnostics, `1` errors present, `2` usage error —

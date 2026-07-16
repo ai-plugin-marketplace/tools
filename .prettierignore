@@ -11,6 +11,10 @@ packages/*/docs
 packages/*/api-report
 packages/*/temp
 
+# Vendored third-party spec fixture (SARIF 2.1.0 JSON Schema) — kept byte-identical to the OASIS
+# source so it stays diffable against upstream; see lint-sarif-schema.test.ts.
+packages/cli/src/lint/sarif-2.1.0.schema.json
+
 # Embedded AI plugin marketplace (this repo dogfoods its own toolchain). This content is authored
 # and generated under `aipm` and validated by `aipm validate`'s freshness check — formatting the
 # generated artifacts would fight that check. The toolchain's own source under packages/ is still

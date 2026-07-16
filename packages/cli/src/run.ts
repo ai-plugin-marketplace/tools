@@ -8,6 +8,7 @@
  *   aipm init [dir]
  *   aipm build [path]
  *   aipm validate [path]
+ *   aipm lint [path]
  *   aipm scaffold <name>
  *   aipm migrate [path]
  *   aipm check-support <plugin>
@@ -21,9 +22,11 @@ import { fileURLToPath } from 'node:url';
 
 import {
   addTarget,
+  applyRuleSeverityOverrides,
   build,
   checkSupport,
   init,
+  lint,
   listTargets,
   migrate,
   refreshScaffold,
@@ -31,12 +34,16 @@ import {
   validate,
 } from '@ai-plugin-marketplace/core';
 import type {
+  Diagnostic,
   Finding,
   RefreshOutcome,
+  RuleSeverityOverride,
   SupportReport,
   TargetId,
   ValidationResult,
 } from '@ai-plugin-marketplace/core';
+import { buildLintJson, buildLintSarif, formatLintText, lintExitCode } from './lint-format.js';
+import type { LintFormat } from './lint-format.js';
 
 interface RunOptions {
   stdout?: NodeJS.WritableStream;
@@ -54,6 +61,7 @@ Commands:
   init --refresh [dir]          Update toolkit-owned scaffold files in an existing repo
   build [path]                  Build plugin artifacts (default: cwd)
   validate [path]               Run validators on plugins (default: cwd)
+  lint [path]                   Run the lint engine on plugins (default: cwd)
   scaffold <name>               Create a new plugin from templates
   migrate [path]                Apply schema migrations (no-op in this version)
   check-support <plugin>        Diagnose a plugin's target support envelope
@@ -66,6 +74,11 @@ Options:
                                 Must be unique across marketplaces.
   --refresh                     With init: refresh an existing repo instead of creating one
   --force                       With init --refresh: overwrite locally-modified scaffold files
+  --as <mode>                   With lint: discovery mode (only 'aipm-repo' is supported today)
+  --format <text|json|sarif>    With lint: output format (default: text)
+  --rule <id>=<severity>        With lint: override a rule's severity (error|warn|info|off);
+                                repeatable
+  --verbose                     With lint --format text: append each diagnostic's docs URL
   --help, -h                    Show this help message
   --version, -V                 Print toolkit version
 `;
@@ -107,6 +120,41 @@ function takeOptionValue(
   }
   return { value: undefined, consumed };
 }
+
+/**
+ * Extract every occurrence of a repeatable `--flag <value>` option (supports both `--flag value`
+ * and `--flag=value` per occurrence). Returns all captured values in order plus the set of
+ * consumed indices, mirroring {@link takeOptionValue} but for flags like `--rule` that may appear
+ * more than once.
+ */
+function takeRepeatedOptionValues(
+  args: readonly string[],
+  flag: string,
+): { values: string[]; consumed: Set<number> } {
+  const consumed = new Set<number>();
+  const values: string[] = [];
+  for (let i = 0; i < args.length; i++) {
+    const arg = args[i];
+    if (arg === undefined) continue;
+    if (arg === flag) {
+      consumed.add(i);
+      const next = args[i + 1];
+      if (next !== undefined && !next.startsWith('-')) {
+        consumed.add(i + 1);
+        values.push(next);
+      }
+      continue;
+    }
+    if (arg.startsWith(`${flag}=`)) {
+      consumed.add(i);
+      values.push(arg.slice(flag.length + 1));
+    }
+  }
+  return { values, consumed };
+}
+
+const RULE_SEVERITIES = new Set<RuleSeverityOverride>(['error', 'warn', 'info', 'off']);
+const LINT_FORMATS = new Set<LintFormat>(['text', 'json', 'sarif']);
 
 /** Resolve a `<plugin>` CLI argument to a plugin directory: an explicit path, else `<cwd>/plugins/<arg>`. */
 function resolvePluginDir(arg: string): string {
@@ -219,6 +267,64 @@ export async function run(argv: readonly string[], opts: RunOptions = {}): Promi
         const result = await validate(target);
         const passed = reportValidation(result, out);
         return passed ? 0 : 1;
+      }
+
+      case 'lint': {
+        const { value: asOpt, consumed: asConsumed } = takeOptionValue(rest, '--as');
+        const { value: formatOpt, consumed: formatConsumed } = takeOptionValue(rest, '--format');
+        const { values: ruleOpts, consumed: ruleConsumed } = takeRepeatedOptionValues(
+          rest,
+          '--rule',
+        );
+        const verbose = rest.includes('--verbose');
+
+        // §4.1/non-goals: only 'aipm-repo' discovery is implemented; foreign modes are issue 3.
+        const asMode = asOpt ?? 'aipm-repo';
+        if (asMode !== 'aipm-repo') {
+          err.write(
+            `aipm: lint --as '${asMode}' is not supported yet; only 'aipm-repo' is available.\n`,
+          );
+          return 2;
+        }
+
+        const format = (formatOpt ?? 'text') as LintFormat;
+        if (!LINT_FORMATS.has(format)) {
+          err.write(`aipm: lint --format must be one of text|json|sarif, got '${format}'.\n`);
+          return 2;
+        }
+
+        const overrides = new Map<string, RuleSeverityOverride>();
+        for (const raw of ruleOpts) {
+          const eq = raw.indexOf('=');
+          if (eq <= 0) {
+            err.write(`aipm: lint --rule '${raw}' must be of the form <id>=<severity>.\n`);
+            return 2;
+          }
+          const ruleId = raw.slice(0, eq);
+          const severity = raw.slice(eq + 1);
+          if (!RULE_SEVERITIES.has(severity as RuleSeverityOverride)) {
+            err.write(`aipm: lint --rule '${raw}': severity must be one of error|warn|info|off.\n`);
+            return 2;
+          }
+          overrides.set(ruleId, severity as RuleSeverityOverride);
+        }
+
+        const consumed = new Set<number>([...asConsumed, ...formatConsumed, ...ruleConsumed]);
+        const target =
+          rest.find((arg, i) => !arg.startsWith('-') && !consumed.has(i)) ?? process.cwd();
+
+        const result = await lint(target);
+        const diagnostics: Diagnostic[] = applyRuleSeverityOverrides(result.diagnostics, overrides);
+        const exitCode = lintExitCode(diagnostics);
+
+        if (format === 'json') {
+          out.write(`${JSON.stringify(buildLintJson(diagnostics), null, 2)}\n`);
+        } else if (format === 'sarif') {
+          out.write(`${JSON.stringify(buildLintSarif(diagnostics, toolkitVersion()), null, 2)}\n`);
+        } else {
+          out.write(`${formatLintText(diagnostics, { verbose })}\n`);
+        }
+        return exitCode;
       }
 
       case 'scaffold': {

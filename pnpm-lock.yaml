@@ -74,6 +74,13 @@ importers:
       '@ai-plugin-marketplace/core':
         specifier: workspace:^
         version: link:../core
+    devDependencies:
+      ajv:
+        specifier: ^8.17.1
+        version: 8.18.0
+      ajv-formats:
+        specifier: ^3.0.1
+        version: 3.0.1(ajv@8.18.0)
 
   packages/core:
     dependencies:

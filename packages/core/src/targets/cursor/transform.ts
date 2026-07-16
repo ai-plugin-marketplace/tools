@@ -194,7 +194,11 @@ export function adaptMatcherBlockToCursorEntries(block: ClaudeHookMatcherBlock):
 /**
  * Rewrite one observer-shaped Cursor entry into a **shimmed controller entry** for a gating event
  * (spec `cursor-controller-shim.md` §3.1). The entry's `command` becomes an invocation of the
- * generated shim runner — `node ./hooks/<shim> <cursorEvent> -- '<original command>'` — where the
+ * generated shim runner — `node "${CLAUDE_PLUGIN_ROOT}/hooks/<shim>" <cursorEvent> -- '<original
+ * command>'` — where the shim path is anchored to `${CLAUDE_PLUGIN_ROOT}` (double-quoted, expanded
+ * by the shell Cursor runs hook commands through) because Cursor does not guarantee plugin hook
+ * commands run with cwd = plugin root; with `failClosed: true`, a relative path that failed to
+ * resolve would deny every gated tool call (issue #56). In the invocation, the
  * `--` sentinel separates the runner's own args from the handler command, and the handler command
  * is embedded as a **single POSIX-single-quoted token** so Cursor's shell tokenization preserves it
  * (with any of its own args and shell features) as one argument. The runner then runs that command
@@ -209,7 +213,7 @@ export function adaptMatcherBlockToCursorEntries(block: ClaudeHookMatcherBlock):
  */
 function toShimmedEntry(entry: CursorHookEntry, cursorEvent: CursorHookEvent): CursorHookEntry {
   const shimmed: CursorHookEntry = {
-    command: `node ./hooks/${CURSOR_SHIM_FILENAME} ${cursorEvent} -- ${posixSingleQuote(entry.command)}`,
+    command: `node "\${CLAUDE_PLUGIN_ROOT}/hooks/${CURSOR_SHIM_FILENAME}" ${cursorEvent} -- ${posixSingleQuote(entry.command)}`,
   };
   if (entry.matcher !== undefined) shimmed.matcher = entry.matcher;
   shimmed.failClosed = true;

@@ -40,9 +40,15 @@ if (!CURSOR_AGENT_AVAILABLE) {
   );
 }
 
-/** Source hooks/claude.yaml: a Bash gate whose handler is a Claude-format deny gate. */
+/**
+ * Source hooks/claude.yaml: a Bash gate whose handler is a Claude-format deny gate. The handler
+ * command is `${CLAUDE_PLUGIN_ROOT}`-anchored, exactly as real plugins author it (a cwd-relative
+ * handler would break in the installed-plugin layout for the same reason as a cwd-relative shim
+ * path — issue #56). The shim runs the handler through `sh -c`, which expands the variable from
+ * the hook process environment.
+ */
 const SOURCE_YAML =
-  'hooks:\n  PreToolUse:\n    - matcher: Bash\n      hooks:\n        - { command: "node ./hooks/deny.mjs" }\n';
+  'hooks:\n  PreToolUse:\n    - matcher: Bash\n      hooks:\n        - { command: "node \\"${CLAUDE_PLUGIN_ROOT}/hooks/deny.mjs\\"" }\n';
 
 /**
  * Build a Claude-format handler that denies every shell tool call (exit 0 with a deny decision).
@@ -70,26 +76,34 @@ process.exit(0);
 
 describe.skipIf(!CURSOR_AGENT_AVAILABLE)('cursor-shim UAT — real Cursor enforcement', () => {
   let workspace: string | undefined;
+  let pluginRoot: string | undefined;
 
   afterEach(() => {
     removeTempDir(workspace);
+    removeTempDir(pluginRoot);
+    pluginRoot = undefined;
   });
 
-  it('blocks a shell command through the generated deny gate (marker never created)', () => {
-    workspace = createTempDir('aipm-cursor-uat-');
-    const marker = path.join(workspace, 'MARKER_SHOULD_NOT_EXIST');
+  /**
+   * Emit the generated hooks doc into `<workspace>/.cursor/hooks.json` and the shim runner + deny
+   * handler into `<shimRoot>/hooks/`, then run headless Cursor with `CLAUDE_PLUGIN_ROOT=<shimRoot>`
+   * (the emitted command anchors the shim to `${CLAUDE_PLUGIN_ROOT}` — issue #56; Cursor sets the
+   * variable for installed-plugin hooks, and the UAT provides it via the environment).
+   */
+  function runDenyGateScenario(ws: string, shimRoot: string) {
+    const marker = path.join(ws, 'MARKER_SHOULD_NOT_EXIST');
     // Positive control: the wrapped deny handler writes this when the gate actually fires.
-    const hookFiredMarker = path.join(workspace, 'HOOK_FIRED');
+    const hookFiredMarker = path.join(ws, 'HOOK_FIRED');
 
     // Project-level Cursor hooks doc = the toolkit's generated cursor.json body (sans sentinel).
     const cursorHooks = convertClaudeHooksYamlToCursorJson(SOURCE_YAML);
-    fs.mkdirSync(path.join(workspace, '.cursor'), { recursive: true });
-    emitScript(path.join(workspace, '.cursor'), 'hooks.json', cursorHooks);
+    fs.mkdirSync(path.join(ws, '.cursor'), { recursive: true });
+    emitScript(path.join(ws, '.cursor'), 'hooks.json', cursorHooks);
 
     // Emit the shim runner + the Claude-format deny handler the shim wraps.
-    fs.mkdirSync(path.join(workspace, 'hooks'), { recursive: true });
-    emitScript(path.join(workspace, 'hooks'), CURSOR_SHIM_FILENAME, CURSOR_SHIM_RUNNER_SOURCE);
-    emitScript(path.join(workspace, 'hooks'), 'deny.mjs', denyHandlerSource(hookFiredMarker));
+    fs.mkdirSync(path.join(shimRoot, 'hooks'), { recursive: true });
+    emitScript(path.join(shimRoot, 'hooks'), CURSOR_SHIM_FILENAME, CURSOR_SHIM_RUNNER_SOURCE);
+    emitScript(path.join(shimRoot, 'hooks'), 'deny.mjs', denyHandlerSource(hookFiredMarker));
 
     const prompt =
       `Use the shell tool to run exactly this command and nothing else: touch ${marker}. ` +
@@ -98,13 +112,20 @@ describe.skipIf(!CURSOR_AGENT_AVAILABLE)('cursor-shim UAT — real Cursor enforc
     // Headless Cursor run. A blocked gate means the shell command never executes.
     const result = spawnSync(
       'cursor-agent',
-      ['-p', prompt, '--trust', '--force', '--workspace', workspace],
+      ['-p', prompt, '--trust', '--force', '--workspace', ws],
       {
-        cwd: workspace,
+        cwd: ws,
+        env: { ...process.env, CLAUDE_PLUGIN_ROOT: shimRoot },
         encoding: 'utf8',
         timeout: 120_000,
       },
     );
+    return { result, marker, hookFiredMarker };
+  }
+
+  it('blocks a shell command through the generated deny gate (marker never created)', () => {
+    workspace = createTempDir('aipm-cursor-uat-');
+    const { result, marker, hookFiredMarker } = runDenyGateScenario(workspace, workspace);
 
     // Guard against a spurious pass: if cursor-agent never ran (spawn error) or was killed before
     // exiting (null status, e.g. timeout signal), the side-effect marker would be absent for the
@@ -119,6 +140,27 @@ describe.skipIf(!CURSOR_AGENT_AVAILABLE)('cursor-shim UAT — real Cursor enforc
     expect(fs.existsSync(hookFiredMarker)).toBe(true);
 
     // Ground truth: the marker's absence proves the shell tool was gated (spec §5).
+    expect(fs.existsSync(marker)).toBe(false);
+  });
+
+  it('enforces with an installed-plugin layout where cwd ≠ shim directory (issue #56)', () => {
+    // Regression for issue #56: 0.7.0 emitted a cwd-relative `node ./hooks/cursor-shim.mjs …`,
+    // which only worked when the hook's cwd happened to be the directory holding `hooks/` — a
+    // coincidence the original UAT baked in by placing the shim inside the workspace. Real
+    // installed plugins live OUTSIDE the workspace and Cursor does not guarantee hook cwd = plugin
+    // root. Here the shim + handler live in a separate "installed plugin" root while cwd is the
+    // workspace; the ${CLAUDE_PLUGIN_ROOT}-anchored invocation must still find the shim (positive
+    // control HOOK_FIRED) and enforce the deny (marker absent). Against the pre-fix relative path,
+    // this test fails at the positive control: node cannot resolve the shim from the workspace.
+    workspace = createTempDir('aipm-cursor-uat-ws-');
+    pluginRoot = createTempDir('aipm-cursor-uat-plugin-');
+    const { result, marker, hookFiredMarker } = runDenyGateScenario(workspace, pluginRoot);
+
+    expect(result.error).toBeUndefined();
+    expect(result.status).not.toBeNull();
+    // Positive control: the shim resolved via ${CLAUDE_PLUGIN_ROOT} and ran the wrapped handler.
+    expect(fs.existsSync(hookFiredMarker)).toBe(true);
+    // Ground truth: the deny still enforced with cwd ≠ shim directory.
     expect(fs.existsSync(marker)).toBe(false);
   });
 });

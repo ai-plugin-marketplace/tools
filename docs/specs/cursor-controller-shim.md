@@ -96,12 +96,17 @@ For a plugin with a `hooks/claude.yaml` and `cursor` in its envelope:
 
   ```json
   {
-    "command": "node ./hooks/cursor-shim.mjs preToolUse -- './gate.sh'",
+    "command": "node \"${CLAUDE_PLUGIN_ROOT}/hooks/cursor-shim.mjs\" preToolUse -- './gate.sh'",
     "matcher": "Shell",
     "failClosed": true
   }
   ```
 
+  - `"${CLAUDE_PLUGIN_ROOT}/hooks/cursor-shim.mjs"` — the shim path is **anchored to the plugin
+    root**, never cwd-relative (issue #56). Cursor does not guarantee plugin hook commands run with
+    cwd = plugin root (its own guidance is to use `${CLAUDE_PLUGIN_ROOT}`), and because the entry is
+    `failClosed: true`, a shim path that failed to resolve would deny **every** gated tool call for
+    the plugin. Double-quoted so a plugin root containing spaces survives shell expansion.
   - `preToolUse` — the Cursor event, so the runner knows which translation table to apply.
   - `-- './gate.sh'` — the original Claude handler command (including any of its own args), embedded
     after a `--` sentinel as a **single POSIX-single-quoted token** (any embedded `'` escaped as
@@ -255,7 +260,7 @@ Per the repo's spec-first, multi-layer testing rules. Expected values are hand-d
 
 **Unit — transform (`cursor/transform.test.ts`, extend):**
 
-- A `PreToolUse` source hook produces a shimmed entry: `command` is `node ./hooks/cursor-shim.mjs preToolUse -- <handler>`, `failClosed:true`, matcher translated.
+- A `PreToolUse` source hook produces a shimmed entry: `command` is `node "${CLAUDE_PLUGIN_ROOT}/hooks/cursor-shim.mjs" preToolUse -- <handler>`, `failClosed:true`, matcher translated.
 - A `UserPromptSubmit` source hook → `beforeSubmitPrompt` shimmed entry.
 - `PostToolUse`/`Stop` → unchanged observer entries (no shim, no `failClosed`) — regression guard on the shipped path.
 - A handler command with its own args survives the `--` boundary intact.

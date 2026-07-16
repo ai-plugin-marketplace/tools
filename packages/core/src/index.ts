@@ -36,6 +36,7 @@ export type {
   BuildOptions,
   BuildResult,
   GeneratedFile,
+  GeneratedFileTarget,
   ValidateOptions,
   ValidationResult,
   Finding,

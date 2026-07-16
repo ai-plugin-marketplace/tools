@@ -122,6 +122,17 @@ No-op in v0.1.0 per §8.1 of the spec. Always returns `status: 'no-migrations-ne
 </td></tr>
 <tr><td>
 
+[refreshScaffold(targetDir, opts)](./core.refreshscaffold.md)
+
+
+</td><td>
+
+Refresh the toolkit-owned scaffold files (CI workflow, `.gitignore`<!-- -->) of an existing marketplace repo at `targetDir` to match the installed tooling — the upgrade path after `pnpm up @ai-plugin-marketplace/*`<!-- -->. Guarded by the `.aipm/scaffold.json` content-hash sidecar: user-modified files are reported as conflicts and left untouched unless `opts.force` is set. Returns one outcome per managed file; never rejects on conflict.
+
+
+</td></tr>
+<tr><td>
+
 [scaffold(name, opts)](./core.scaffold.md)
 
 
@@ -271,6 +282,28 @@ Result of running [migrate()](./core.migrate.md)<!-- -->.
 </td></tr>
 <tr><td>
 
+[RefreshOptions](./core.refreshoptions.md)
+
+
+</td><td>
+
+Options for [refreshScaffold()](./core.refreshscaffold.md)<!-- -->.
+
+
+</td></tr>
+<tr><td>
+
+[RefreshOutcome](./core.refreshoutcome.md)
+
+
+</td><td>
+
+Per-file outcome of a [refreshScaffold()](./core.refreshscaffold.md) run. Returned (one per managed scaffold file) so the CLI can report what changed without re-deriving it.
+
+
+</td></tr>
+<tr><td>
+
 [ScaffoldOptions](./core.scaffoldoptions.md)
 
 
@@ -373,6 +406,23 @@ Enumerated finding codes. Additive — new codes arrive in toolkit MINOR release
 `single-artifact-host` — a "single-artifact host" (`gemini` or `kiro`<!-- -->), which installs ONE extension/power per repo from the repo ROOT and has no marketplace concept, is declared by MORE THAN ONE plugin in the repo. The root artifact for that host is NOT emitted while the ambiguity stands (the toolkit can't choose which plugin owns the single root slot).
 
 `root-artifact-collision` — a generated repo-root path the toolkit would write is already occupied by a file the toolkit does NOT track as previously-generated (i.e. it belongs to the host software / the author). Generation refuses to overwrite it rather than clobber repo-root state.
+
+`default-marketplace-name` — the repo's effective marketplace `name` (or `owner.name`<!-- -->) is still a template placeholder (e.g. `ai-plugin-marketplace`<!-- -->, `my-ai-plugins`<!-- -->, `Your Name`<!-- -->). Two marketplaces registered under the same name collide on install — the later one shadows/strands the earlier one's plugins — so a placeholder must be renamed to a unique value. Always SOFT: a warning, never a build failure.
+
+`metadata-dir-isolation` — the Open Plugins metadata directory (`.plugin/`<!-- -->) contains an entry other than `plugin.json`<!-- -->. The Open Plugins v1.0.0 spec requires the metadata directory to contain ONLY `plugin.json`<!-- -->; any sibling file/dir violates that MUST. Fires HARD, and only for the `open-plugins` target — the native vendor dirs (`.claude-plugin/`<!-- -->, `.cursor-plugin/`<!-- -->) are allowed to hold a `marketplace.json`<!-- -->, so this check is scoped to `.plugin/` specifically.
+
+
+</td></tr>
+<tr><td>
+
+[GeneratedFileTarget](./core.generatedfiletarget.md)
+
+
+</td><td>
+
+The target(s) responsible for producing a [GeneratedFile](./core.generatedfile.md)<!-- -->: either the single [TargetId](./core.targetid.md) whose build step owns the file, or the literal `'shared'` marking an artifact that a build step emits for the whole envelope with no single owning target (e.g. the payload adapter, emitted for any plugin authoring hooks regardless of which targets it declares, or the generated-root sidecar manifest spanning every emitted single-artifact-host/registry owner).
+
+`'shared'` is a value of this field only — it is never added to [TargetId](./core.targetid.md) or `TARGET_IDS`<!-- -->, so real per-target iteration (envelope checks, registry lookups, etc.) is unaffected.
 
 
 </td></tr>

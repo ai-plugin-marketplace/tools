@@ -97,8 +97,11 @@ export type FindingCode = 'envelope-invalid' | 'repo-config-invalid' | 'envelope
 export interface GeneratedFile {
     path: string;
     source?: string;
-    target: TargetId;
+    target: GeneratedFileTarget;
 }
+
+// @public
+export type GeneratedFileTarget = TargetId | 'shared';
 
 // @public
 export function init(targetDir: string, opts?: InitOptions): Promise<void>;

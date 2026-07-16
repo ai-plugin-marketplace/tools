@@ -165,6 +165,24 @@ describe('single-artifact-host — root emission (workspace present, N=1)', () =
     const parsed = JSON.parse(raw) as { version: number };
     expect(parsed.version).toBe(1);
   });
+
+  // Regression: the sidecar manifest spans every emitted single-artifact-host/registry owner
+  // (gemini AND kiro here), so `GeneratedFile.target` previously had to attribute it to one of
+  // them (a deterministically-chosen, arbitrary owner). It must report `target: 'shared'` instead
+  // of picking one of the actual owners.
+  it("records the sidecar manifest artifact with target `'shared'` when multiple hosts emit", async () => {
+    repo = synthRegistryRepo([geminiPlugin('gem'), kiroPlugin('kir')], WORKSPACE);
+    const results = await runBuild(repo.repoRoot);
+
+    const manifestAbs = path.join(repo.repoRoot, ...SIDECAR_REL);
+    const sidecarArtifacts = results.flatMap((r) =>
+      r.artifacts.filter((a) => a.path === manifestAbs),
+    );
+    expect(sidecarArtifacts.length).toBeGreaterThan(0);
+    for (const artifact of sidecarArtifacts) {
+      expect(artifact.target).toBe('shared');
+    }
+  });
 });
 
 describe('single-artifact-host — N=1 gate (two plugins, same host)', () => {

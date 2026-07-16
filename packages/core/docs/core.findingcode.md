@@ -10,8 +10,12 @@ Enumerated finding codes. Additive — new codes arrive in toolkit MINOR release
 
 `root-artifact-collision` — a generated repo-root path the toolkit would write is already occupied by a file the toolkit does NOT track as previously-generated (i.e. it belongs to the host software / the author). Generation refuses to overwrite it rather than clobber repo-root state.
 
+`default-marketplace-name` — the repo's effective marketplace `name` (or `owner.name`<!-- -->) is still a template placeholder (e.g. `ai-plugin-marketplace`<!-- -->, `my-ai-plugins`<!-- -->, `Your Name`<!-- -->). Two marketplaces registered under the same name collide on install — the later one shadows/strands the earlier one's plugins — so a placeholder must be renamed to a unique value. Always SOFT: a warning, never a build failure.
+
+`metadata-dir-isolation` — the Open Plugins metadata directory (`.plugin/`<!-- -->) contains an entry other than `plugin.json`<!-- -->. The Open Plugins v1.0.0 spec requires the metadata directory to contain ONLY `plugin.json`<!-- -->; any sibling file/dir violates that MUST. Fires HARD, and only for the `open-plugins` target — the native vendor dirs (`.claude-plugin/`<!-- -->, `.cursor-plugin/`<!-- -->) are allowed to hold a `marketplace.json`<!-- -->, so this check is scoped to `.plugin/` specifically.
+
 **Signature:**
 
 ```typescript
-export type FindingCode = 'envelope-invalid' | 'repo-config-invalid' | 'envelope-adherence' | 'schema-invalid' | 'name-consistency' | 'mcp-key-sync' | 'marketplace-registration' | 'freshness' | 'single-artifact-host' | 'root-artifact-collision';
+export type FindingCode = 'envelope-invalid' | 'repo-config-invalid' | 'envelope-adherence' | 'schema-invalid' | 'name-consistency' | 'mcp-key-sync' | 'marketplace-registration' | 'freshness' | 'single-artifact-host' | 'root-artifact-collision' | 'default-marketplace-name' | 'frontmatter-invalid' | 'metadata-dir-isolation' | 'open-plugins-conformance';
 ```

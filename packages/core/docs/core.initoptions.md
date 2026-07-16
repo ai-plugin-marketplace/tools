@@ -37,6 +37,46 @@ Description
 </th></tr></thead>
 <tbody><tr><td>
 
+[cliVersion?](./core.initoptions.cliversion.md)
+
+
+</td><td>
+
+
+</td><td>
+
+string
+
+
+</td><td>
+
+_(Optional)_ Version of `@ai-plugin-marketplace/cli` to pin the generated `package.json`<!-- -->'s `cli` dev dependency to (as `^<cliVersion>`<!-- -->). The cli entrypoint supplies its own version here; cli and core ship independently and may differ (e.g. `cli 0.1.1` ships with `core 0.2.0`<!-- -->). When omitted, falls back to core's own version (the historical lockstep assumption).
+
+
+</td></tr>
+<tr><td>
+
+[marketplaceName?](./core.initoptions.marketplacename.md)
+
+
+</td><td>
+
+
+</td><td>
+
+string
+
+
+</td><td>
+
+_(Optional)_ Marketplace name written into the generated repo-root registries' top-level `name` (and used for the registries' `owner.name`<!-- -->). This is the identity host platforms register the marketplace under, and it MUST be unique across marketplaces — two marketplaces sharing a name collide on install, with the later one shadowing/stranding the earlier one's plugins.
+
+Distinct from [InitOptions.name](./core.initoptions.name.md) (the `package.json` name). When omitted, `runInit` resolves a default at the I/O boundary (`${USER}-ai-plugins`<!-- -->, falling back to `my-ai-plugins` when `USER` is unset). `init-template.ts` is a pure function of its inputs, so the resolved value is passed in rather than read from the environment there.
+
+
+</td></tr>
+<tr><td>
+
 [name?](./core.initoptions.name.md)
 
 

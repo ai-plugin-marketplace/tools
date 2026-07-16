@@ -4,10 +4,10 @@
 
 ## GeneratedFile.target property
 
-Which target's build step produced this file.
+Which target's build step produced this file, or `'shared'` when the artifact has no single owning target (see [GeneratedFileTarget](./core.generatedfiletarget.md)<!-- -->).
 
 **Signature:**
 
 ```typescript
-target: TargetId;
+target: GeneratedFileTarget;
 ```

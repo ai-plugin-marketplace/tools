@@ -323,11 +323,13 @@ describe('computePluginHookArtifacts — cursor branch', () => {
     pluginDir = writePluginWithHooks(HOOKS_YAML);
     const artifacts = computePluginHookArtifacts(pluginDir, ['cursor']);
 
-    // Select by target: the shared payload-adapter artifacts are attributed to `'shared'` (not a
-    // real TargetId), so `target === 'cursor'` unambiguously matches only `hooks/cursor.json`.
-    const cursor = artifacts.find((a) => a.target === 'cursor');
+    // Select by absPath: `target === 'cursor'` is NOT unique — when a gating-event hook is
+    // present, the fail-closed shim runner `hooks/cursor-shim.mjs` (+ sidecar) is also attributed
+    // to `'cursor'`. Only `hooks/cursor.json`'s absPath uniquely identifies this artifact.
+    const cursorJsonAbsPath = path.join(pluginDir, 'hooks', 'cursor.json');
+    const cursor = artifacts.find((a) => a.absPath === cursorJsonAbsPath);
     expect(cursor).toBeDefined();
-    expect(cursor?.absPath).toBe(path.join(pluginDir, 'hooks', 'cursor.json'));
+    expect(cursor?.absPath).toBe(cursorJsonAbsPath);
     expect(cursor?.target).toBe('cursor');
     expect(cursor?.source).toBe('hooks/claude.yaml');
     expect(cursor?.sentinelMode).toBe('json-field');
@@ -346,19 +348,21 @@ describe('computePluginHookArtifacts — cursor branch', () => {
   it('round-trips the generated cursor.json bytes byte-for-byte (freshness invariant §10.5)', () => {
     pluginDir = writePluginWithHooks(HOOKS_YAML);
 
-    // Select by target: the shared payload-adapter artifacts are attributed to `'shared'`, so
-    // `target === 'cursor'` unambiguously matches `hooks/cursor.json`.
+    // Select by absPath: `target === 'cursor'` is NOT unique — the fail-closed shim runner
+    // (`hooks/cursor-shim.mjs` + sidecar) is also attributed to `'cursor'` when a gating-event
+    // hook is present. Only the absPath uniquely identifies `hooks/cursor.json`.
+    const cursorJsonAbsPath = path.join(pluginDir, 'hooks', 'cursor.json');
 
     // First pass: compute + write (what runBuild does).
     const first = computePluginHookArtifacts(pluginDir, ['cursor']).find(
-      (a) => a.target === 'cursor',
+      (a) => a.absPath === cursorJsonAbsPath,
     );
     expect(first).toBeDefined();
     fs.writeFileSync(first?.absPath ?? '', first?.expectedContent ?? '', 'utf-8');
 
     // Second pass: recompute (what the freshness check does) and compare to the on-disk bytes.
     const second = computePluginHookArtifacts(pluginDir, ['cursor']).find(
-      (a) => a.target === 'cursor',
+      (a) => a.absPath === cursorJsonAbsPath,
     );
     const onDisk = fs.readFileSync(first?.absPath ?? '', 'utf-8');
     expect(second?.expectedContent).toBe(onDisk);

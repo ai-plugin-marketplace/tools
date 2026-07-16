@@ -83,12 +83,12 @@ _(Optional)_ The author-authored file this was generated from, if applicable.
 
 </td><td>
 
-[TargetId](./core.targetid.md)
+[GeneratedFileTarget](./core.generatedfiletarget.md)
 
 
 </td><td>
 
-Which target's build step produced this file.
+Which target's build step produced this file, or `'shared'` when the artifact has no single owning target (see [GeneratedFileTarget](./core.generatedfiletarget.md)<!-- -->).
 
 
 </td></tr>

@@ -1,5 +1,5 @@
 ---
-'@ai-plugin-marketplace/core': major
+'@ai-plugin-marketplace/core': minor
 ---
 
 `GeneratedFile.target` now accepts `'shared'` in addition to a `TargetId` (the new

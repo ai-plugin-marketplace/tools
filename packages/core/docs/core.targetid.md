@@ -11,5 +11,5 @@ Declared as an explicit literal union (matching the public contract in spec §8.
 **Signature:**
 
 ```typescript
-export type TargetId = 'claude' | 'codex' | 'cursor' | 'gemini' | 'kiro' | 'vercel';
+export type TargetId = 'claude' | 'codex' | 'cursor' | 'gemini' | 'kiro' | 'open-plugins' | 'vercel';
 ```

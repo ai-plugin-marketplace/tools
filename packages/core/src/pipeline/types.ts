@@ -93,7 +93,7 @@ export interface BuildResult {
 /**
  * The target(s) responsible for producing a {@link GeneratedFile}: either the single
  * {@link TargetId} whose build step owns the file, or the literal `'shared'` marking an artifact
- * a build step emits for the whole envelope with no single owning target (e.g. the payload
+ * that a build step emits for the whole envelope with no single owning target (e.g. the payload
  * adapter, emitted for any plugin authoring hooks regardless of which targets it declares, or the
  * generated-root sidecar manifest spanning every emitted single-artifact-host/registry owner).
  *

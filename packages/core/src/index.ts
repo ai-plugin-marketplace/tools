@@ -31,7 +31,7 @@ export {
   listTargets,
 } from './pipeline/operations.js';
 
-export { lint } from './lint/index.js';
+export { applyRuleSeverityOverrides, lint } from './lint/index.js';
 export type {
   Diagnostic,
   DiscoveryMode,
@@ -45,6 +45,7 @@ export type {
   Range,
   Rule,
   RuleContext,
+  RuleSeverityOverride,
   YamlDocument,
 } from './lint/index.js';
 

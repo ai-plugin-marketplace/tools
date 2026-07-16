@@ -52,6 +52,9 @@ export interface AipmWorkspaceInput {
 }
 
 // @public
+export function applyRuleSeverityOverrides(diagnostics: readonly Diagnostic[], overrides: ReadonlyMap<string, RuleSeverityOverride>): Diagnostic[];
+
+// @public
 export function build(targetPath: string, opts?: BuildOptions): Promise<BuildResult[]>;
 
 // @public
@@ -256,6 +259,9 @@ export interface RuleContext {
     readonly repoRoot: string;
     readonly workspace: AipmWorkspace | undefined;
 }
+
+// @public
+export type RuleSeverityOverride = 'error' | 'warn' | 'info' | 'off';
 
 // @public
 export function scaffold(name: string, opts?: ScaffoldOptions): Promise<void>;

@@ -323,13 +323,11 @@ describe('computePluginHookArtifacts — cursor branch', () => {
     pluginDir = writePluginWithHooks(HOOKS_YAML);
     const artifacts = computePluginHookArtifacts(pluginDir, ['cursor']);
 
-    // Find by absPath, not target: with `claude` absent from the envelope, the shared
-    // payload-adapter artifacts also fall back to `target: 'cursor'` (the only envelope target),
-    // so `target === 'cursor'` alone would ambiguously match either artifact.
-    const cursor = artifacts.find(
-      (a) => a.absPath === path.join(pluginDir, 'hooks', 'cursor.json'),
-    );
+    // Select by target: the shared payload-adapter artifacts are attributed to `'shared'` (not a
+    // real TargetId), so `target === 'cursor'` unambiguously matches only `hooks/cursor.json`.
+    const cursor = artifacts.find((a) => a.target === 'cursor');
     expect(cursor).toBeDefined();
+    expect(cursor?.absPath).toBe(path.join(pluginDir, 'hooks', 'cursor.json'));
     expect(cursor?.target).toBe('cursor');
     expect(cursor?.source).toBe('hooks/claude.yaml');
     expect(cursor?.sentinelMode).toBe('json-field');
@@ -347,22 +345,20 @@ describe('computePluginHookArtifacts — cursor branch', () => {
 
   it('round-trips the generated cursor.json bytes byte-for-byte (freshness invariant §10.5)', () => {
     pluginDir = writePluginWithHooks(HOOKS_YAML);
-    const cursorJsonAbsPath = path.join(pluginDir, 'hooks', 'cursor.json');
 
-    // Find by absPath, not target: with `claude` absent from the envelope, the shared
-    // payload-adapter artifacts also fall back to `target: 'cursor'`, so a target-only predicate
-    // would ambiguously match the payload-adapter artifact instead of cursor.json.
+    // Select by target: the shared payload-adapter artifacts are attributed to `'shared'`, so
+    // `target === 'cursor'` unambiguously matches `hooks/cursor.json`.
 
     // First pass: compute + write (what runBuild does).
     const first = computePluginHookArtifacts(pluginDir, ['cursor']).find(
-      (a) => a.absPath === cursorJsonAbsPath,
+      (a) => a.target === 'cursor',
     );
     expect(first).toBeDefined();
     fs.writeFileSync(first?.absPath ?? '', first?.expectedContent ?? '', 'utf-8');
 
     // Second pass: recompute (what the freshness check does) and compare to the on-disk bytes.
     const second = computePluginHookArtifacts(pluginDir, ['cursor']).find(
-      (a) => a.absPath === cursorJsonAbsPath,
+      (a) => a.target === 'cursor',
     );
     const onDisk = fs.readFileSync(first?.absPath ?? '', 'utf-8');
     expect(second?.expectedContent).toBe(onDisk);
@@ -531,32 +527,30 @@ describe('computePluginHookArtifacts — payload adapter', () => {
     expect(fs.readFileSync(sidecarPath(adapterAbs), 'utf-8')).toBe(sidecar?.expectedContent);
   });
 
-  // Regression: the payload adapter + sidecar previously carried a hardcoded `target: 'claude'`
-  // even for envelopes that never declare `claude` (e.g. a codex-only plugin), misreporting
-  // `BuildResult.artifacts` for that target's build step. The adapter is shared across the whole
-  // envelope, so it must be attributed deterministically to a target actually present in the
-  // envelope: `claude` when declared, otherwise the first envelope target in canonical
-  // (`TARGET_IDS`) order.
-  it('attributes the shared payload-adapter artifacts to a target present in the envelope', () => {
+  // Regression: the payload adapter + sidecar previously attributed themselves to a single,
+  // deterministically-chosen envelope target (`claude` when declared, else the first envelope
+  // target in canonical order) — an arbitrary owner that misrepresented `BuildResult.artifacts`
+  // for that target's build step, since no single target's build step actually produces this
+  // file. They must report `target: 'shared'` regardless of which targets the envelope declares,
+  // never a real `TargetId`.
+  it("attributes the shared payload-adapter artifacts to `'shared'`, regardless of envelope", () => {
     pluginDir = writePluginWithHooks(HOOKS_YAML);
     const adapterAbs = path.join(pluginDir, 'hooks', PAYLOAD_ADAPTER_FILENAME);
 
-    const cases: { envelope: ('claude' | 'cursor' | 'gemini')[]; expectedTarget: string }[] = [
-      { envelope: ['claude'], expectedTarget: 'claude' },
-      { envelope: ['cursor', 'claude', 'gemini'], expectedTarget: 'claude' },
-      // No `claude` in the envelope: falls back to the first envelope target in canonical
-      // (TARGET_IDS) order, never the hardcoded 'claude'.
-      { envelope: ['gemini'], expectedTarget: 'gemini' },
-      { envelope: ['gemini', 'cursor'], expectedTarget: 'cursor' },
+    const envelopes: ('claude' | 'cursor' | 'gemini')[][] = [
+      ['claude'],
+      ['cursor', 'claude', 'gemini'],
+      ['gemini'],
+      ['gemini', 'cursor'],
     ];
 
-    for (const { envelope, expectedTarget } of cases) {
+    for (const envelope of envelopes) {
       const artifacts = computePluginHookArtifacts(pluginDir, envelope);
       const adapter = artifacts.find((a) => a.absPath === adapterAbs);
       const sidecar = artifacts.find((a) => a.absPath === sidecarPath(adapterAbs));
 
-      expect(adapter?.target, `envelope ${envelope.join(',')}`).toBe(expectedTarget);
-      expect(sidecar?.target, `envelope ${envelope.join(',')}`).toBe(expectedTarget);
+      expect(adapter?.target, `envelope ${envelope.join(',')}`).toBe('shared');
+      expect(sidecar?.target, `envelope ${envelope.join(',')}`).toBe('shared');
     }
   });
 });

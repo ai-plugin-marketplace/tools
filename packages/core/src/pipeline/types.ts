@@ -91,6 +91,21 @@ export interface BuildResult {
 }
 
 /**
+ * The target(s) responsible for producing a {@link GeneratedFile}: either the single
+ * {@link TargetId} whose build step owns the file, or the literal `'shared'` marking an artifact
+ * a build step emits for the whole envelope with no single owning target (e.g. the payload
+ * adapter, emitted for any plugin authoring hooks regardless of which targets it declares, or the
+ * generated-root sidecar manifest spanning every emitted single-artifact-host/registry owner).
+ *
+ * `'shared'` is a value of this field only — it is never added to {@link TargetId} or
+ * `TARGET_IDS`, so real per-target iteration (envelope checks, registry lookups, etc.) is
+ * unaffected.
+ *
+ * @public
+ */
+export type GeneratedFileTarget = TargetId | 'shared';
+
+/**
  * A file produced or verified by the build.
  *
  * @public
@@ -100,8 +115,11 @@ export interface GeneratedFile {
   path: string;
   /** The author-authored file this was generated from, if applicable. */
   source?: string;
-  /** Which target's build step produced this file. */
-  target: TargetId;
+  /**
+   * Which target's build step produced this file, or `'shared'` when the artifact has no single
+   * owning target (see {@link GeneratedFileTarget}).
+   */
+  target: GeneratedFileTarget;
 }
 
 // ---------------------------------------------------------------------------

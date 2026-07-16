@@ -39,8 +39,14 @@ import type { ConfigCache } from './load-config.js';
 import { applyJsonSentinel, sidecarContent, sidecarPath } from './sentinel.js';
 import type { SentinelMode } from './sentinel.js';
 import { runValidate } from './validate.js';
-import { TARGET_IDS } from './types.js';
-import type { BuildOptions, BuildResult, Finding, GeneratedFile, TargetId } from './types.js';
+import type {
+  BuildOptions,
+  BuildResult,
+  Finding,
+  GeneratedFile,
+  GeneratedFileTarget,
+  TargetId,
+} from './types.js';
 
 // ---------------------------------------------------------------------------
 // Shared generation primitives (consumed by build AND freshness — §10.5)
@@ -58,8 +64,8 @@ export interface PluginHookArtifact {
   source: string;
   /** Sentinel carrier used for this artifact. */
   sentinelMode: SentinelMode;
-  /** Which target's build step produced this file. */
-  target: TargetId;
+  /** Which target's build step produced this file, or `'shared'` — see {@link GeneratedFileTarget}. */
+  target: GeneratedFileTarget;
   /** Exact bytes the build writes (sentinel included). */
   expectedContent: string;
   /**
@@ -69,28 +75,6 @@ export interface PluginHookArtifact {
    * sidecar or JSON artifacts. Omitted (not `false`) when not executable.
    */
   executable?: true;
-}
-
-/**
- * `GeneratedFile.target` records which target's build step produced a file — but the payload
- * adapter (and its sidecar) is emitted for **any** plugin authoring a hooks YAML, independent of
- * the envelope (see {@link computePluginHookArtifacts} above), so there is no single build step
- * that "owns" it. Attribute it deterministically: `claude` when present in the envelope (it is
- * the source dialect the adapter's `sh`+`jq` filter is modeled after), otherwise the first
- * envelope target in {@link TARGET_IDS}'s canonical order. This keeps `BuildResult.artifacts`
- * truthful for envelopes that never include `claude` (e.g. a codex-only plugin) without adding a
- * new "shared"/cross-target `TargetId` value.
- *
- * @throws {Error} If `envelopeSet` is empty (a plugin with no declared targets never reaches this
- *   path — {@link computePluginHookArtifacts} is only invoked with a non-empty envelope).
- */
-function sharedHookArtifactTarget(envelopeSet: ReadonlySet<TargetId>): TargetId {
-  if (envelopeSet.has('claude')) return 'claude';
-  const firstCanonical = TARGET_IDS.find((id) => envelopeSet.has(id));
-  if (firstCanonical === undefined) {
-    throw new Error('sharedHookArtifactTarget: envelope must contain at least one target');
-  }
-  return firstCanonical;
 }
 
 /** First existing hooks YAML candidate (`claude.yaml`, then `claude.yml`), or `undefined`. */
@@ -141,14 +125,14 @@ export function computePluginHookArtifacts(
   // Payload adapter (docs/specs/payload-adapter.md §11, D10): emitted whenever a plugin authors a
   // hooks YAML at all, independent of the target envelope — any handler, gating or not, benefits
   // from the normalized cross-harness payload. A pure, plugin-independent script, so it carries a
-  // sidecar sentinel (like the cursor shim) rather than an inline one.
+  // sidecar sentinel (like the cursor shim) rather than an inline one. No single target's build
+  // step owns it, so it is attributed to `'shared'` rather than an arbitrary envelope member.
   const payloadAdapterAbsPath = path.join(pluginDir, 'hooks', PAYLOAD_ADAPTER_FILENAME);
-  const sharedArtifactTarget = sharedHookArtifactTarget(envelopeSet);
   artifacts.push({
     absPath: payloadAdapterAbsPath,
     source: yaml.source,
     sentinelMode: 'sidecar',
-    target: sharedArtifactTarget,
+    target: 'shared',
     expectedContent: PAYLOAD_ADAPTER_SOURCE,
     // Spec §1/§11: the adapter is invoked directly (`"${CLAUDE_PLUGIN_ROOT}/hooks/payload-adapter"`),
     // so it needs the executable bit — unlike its `.generated` sidecar below, which is never run.
@@ -158,7 +142,7 @@ export function computePluginHookArtifacts(
     absPath: sidecarPath(payloadAdapterAbsPath),
     source: yaml.source,
     sentinelMode: 'sidecar',
-    target: sharedArtifactTarget,
+    target: 'shared',
     expectedContent: sidecarContent(yaml.source),
   });
 
@@ -1030,16 +1014,13 @@ export async function runBuild(targetPath: string, opts?: BuildOptions): Promise
     const trackedSorted = [...writtenTracked].sort();
     if (trackedSorted.length > 0 || fs.existsSync(manifestAbs)) {
       writeFileEnsuringDir(manifestAbs, serializeRootManifest(trackedSorted));
-      // The sidecar spans owners but `GeneratedFile.target` is singular; attribute it to an
-      // actually-emitted owner (deterministic order), and only when something was emitted this run.
-      // When the manifest is being emptied via orphan removal, no owner produced it — don't record
-      // it as an artifact.
-      const sidecarOwner = (['gemini', 'kiro', 'open-plugins'] as const).find((o) =>
-        emittedOwners.has(o),
-      );
-      if (sidecarOwner !== undefined) {
+      // The sidecar spans every emitted owner (gemini/kiro/open-plugins), so it has no single
+      // owning target — record it as `'shared'` rather than attributing it to one of the owners.
+      // Only when something was emitted this run: when the manifest is being emptied via orphan
+      // removal, nothing produced it this run, so it isn't recorded as an artifact.
+      if (emittedOwners.size > 0) {
         for (const result of results) {
-          result.artifacts.push({ path: manifestAbs, target: sidecarOwner });
+          result.artifacts.push({ path: manifestAbs, target: 'shared' });
         }
       }
     }

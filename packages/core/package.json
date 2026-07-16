@@ -32,6 +32,7 @@
   },
   "dependencies": {
     "jiti": "^2.7.0",
+    "jsonc-parser": "^3.2.0",
     "yaml": "^2.7.0",
     "zod": "^4.0.0"
   },

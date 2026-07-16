@@ -102,7 +102,7 @@ function configPathFor(pluginDir: string): string {
  *
  * @throws {ConfigLoadError} If the module fails to import or has no usable default export.
  */
-async function importDefaultExport(configPath: string, filename: string): Promise<unknown> {
+export async function importDefaultExport(configPath: string, filename: string): Promise<unknown> {
   const jiti = createJiti(import.meta.url, {
     alias: { [CORE_PACKAGE_SPECIFIER]: coreConfigEntrypoint() },
     // Disable the default↔namespace interop so a config with no `default` export reads as a
@@ -147,6 +147,8 @@ async function importDefaultExport(configPath: string, filename: string): Promis
  * run but may change between runs (and tests overwrite-and-reload across invocations), so a
  * longer-lived cache would risk serving stale parses. Each `createConfigCache()` lives only for
  * the orchestrator call that created it.
+ *
+ * @public
  */
 export type ConfigCache = Map<string, AipmConfig>;
 

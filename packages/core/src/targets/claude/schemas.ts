@@ -173,7 +173,12 @@ export const claudeMcpConfigSchema = z
 /**
  * Known Claude Code hook event types. Unknown events are rejected at the schema level.
  */
-const claudeHookEventSchema = z.enum(['PreToolUse', 'PostToolUse', 'Stop', 'UserPromptSubmit']);
+export const claudeHookEventSchema = z.enum([
+  'PreToolUse',
+  'PostToolUse',
+  'Stop',
+  'UserPromptSubmit',
+]);
 
 /**
  * A single hook entry: a command to run.

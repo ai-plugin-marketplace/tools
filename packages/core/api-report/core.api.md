@@ -4,6 +4,9 @@
 
 ```ts
 
+import { Document as Document_2 } from 'yaml';
+import * as jsonc from 'jsonc-parser';
+
 // @public
 export function addTarget(pluginDir: string, target: TargetId): Promise<void>;
 
@@ -71,6 +74,9 @@ export interface BuildResult {
 export function checkSupport(pluginDir: string): Promise<SupportReport>;
 
 // @public
+export type ConfigCache = Map<string, AipmConfig>;
+
+// @public
 export function defineConfig(config: AipmConfigInput): AipmConfig;
 
 // @public
@@ -78,6 +84,27 @@ export function defineRepoConfig(config?: AipmRepoConfigInput): AipmRepoConfig;
 
 // @public
 export function defineWorkspace(config: AipmWorkspaceInput): AipmWorkspace;
+
+// @public
+export interface Diagnostic {
+    // (undocumented)
+    category: 'schema' | 'correctness' | 'security' | 'agent-ux' | 'portability';
+    docsUrl: string;
+    file: string;
+    fix?: Fix;
+    // (undocumented)
+    hint?: string;
+    legacyCode?: FindingCode;
+    // (undocumented)
+    message: string;
+    range?: Range;
+    ruleId: string;
+    // (undocumented)
+    severity: 'error' | 'warn' | 'info';
+}
+
+// @public
+export type Document = JsonDocument | YamlDocument | FrontmatterDocument;
 
 // @public
 export interface Finding {
@@ -92,6 +119,28 @@ export interface Finding {
 
 // @public
 export type FindingCode = 'envelope-invalid' | 'repo-config-invalid' | 'envelope-adherence' | 'schema-invalid' | 'name-consistency' | 'mcp-key-sync' | 'marketplace-registration' | 'freshness' | 'single-artifact-host' | 'root-artifact-collision' | 'default-marketplace-name' | 'frontmatter-invalid' | 'metadata-dir-isolation' | 'open-plugins-conformance';
+
+// @public
+export interface Fix {
+    description: string;
+}
+
+// @public
+export interface FrontmatterDocument {
+    // (undocumented)
+    cstDoc: Document_2 | undefined;
+    // (undocumented)
+    format: 'frontmatter';
+    // (undocumented)
+    parseError?: string;
+    // (undocumented)
+    path: string;
+    text: string;
+    // (undocumented)
+    value: unknown;
+    yamlOffset: number;
+    yamlText: string;
+}
 
 // @public
 export interface GeneratedFile {
@@ -114,6 +163,31 @@ export interface InitOptions {
 }
 
 // @public
+export interface JsonDocument {
+    // (undocumented)
+    format: 'json';
+    parseError?: string;
+    path: string;
+    text: string;
+    tree: jsonc.Node | undefined;
+    value: unknown;
+}
+
+// @public
+export function lint(targetPath: string, options?: LintOptions): Promise<LintResult>;
+
+// @public
+export interface LintOptions {
+    ci?: boolean;
+}
+
+// @public
+export interface LintResult {
+    // (undocumented)
+    diagnostics: Diagnostic[];
+}
+
+// @public
 export function listTargets(): readonly TargetId[];
 
 // @public
@@ -132,6 +206,22 @@ export interface MigrateResult {
 }
 
 // @public
+export interface Position {
+    // (undocumented)
+    col: number;
+    // (undocumented)
+    line: number;
+}
+
+// @public
+export interface Range {
+    // (undocumented)
+    end: Position;
+    // (undocumented)
+    start: Position;
+}
+
+// @public
 export interface RefreshOptions {
     force?: boolean;
 }
@@ -144,6 +234,33 @@ export interface RefreshOutcome {
 
 // @public
 export function refreshScaffold(targetDir: string, opts?: RefreshOptions): Promise<RefreshOutcome[]>;
+
+// @public
+export interface Rule {
+    // (undocumented)
+    check(ctx: RuleContext): Diagnostic[] | Promise<Diagnostic[]>;
+    // (undocumented)
+    meta: {
+        id: string;
+        category: Diagnostic['category'];
+        defaultSeverity: 'error' | 'warn' | 'info' | 'off';
+        description: string;
+    };
+}
+
+// @public
+export interface RuleContext {
+    readonly allPluginDirs: readonly string[];
+    readonly ci: boolean;
+    readonly configCache?: ConfigCache;
+    readonly distDir: string;
+    readonly envelope: readonly TargetId[];
+    getDocument(absPath: string): Document | undefined;
+    readonly pluginDir: string;
+    readonly repoRoot: string;
+    readonly skipFreshness: boolean;
+    readonly workspace: AipmWorkspace | undefined;
+}
 
 // @public
 export function scaffold(name: string, opts?: ScaffoldOptions): Promise<void>;
@@ -185,6 +302,22 @@ export interface ValidationResult {
     // (undocumented)
     findings: Finding[];
     passed: boolean;
+}
+
+// @public
+export interface YamlDocument {
+    // (undocumented)
+    cstDoc: Document_2 | undefined;
+    // (undocumented)
+    format: 'yaml';
+    // (undocumented)
+    parseError?: string;
+    // (undocumented)
+    path: string;
+    // (undocumented)
+    text: string;
+    // (undocumented)
+    value: unknown;
 }
 
 ```

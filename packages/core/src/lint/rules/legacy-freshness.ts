@@ -15,7 +15,7 @@ import {
   checkRootArtifactFreshness,
 } from '../../pipeline/validate.js';
 import { findingToDiagnostic } from '../diagnostic.js';
-import type { Diagnostic, Rule, RuleContext } from '../types.js';
+import type { Diagnostic, InternalRuleContext, Rule } from '../types.js';
 import { docsUrlFor } from './docs-url.js';
 
 const FRESHNESS_ID = 'correctness/freshness';
@@ -28,8 +28,10 @@ export const pluginFreshnessRule: Rule = {
     defaultSeverity: 'error',
     description:
       'Generated files (hook JSONs, dist bundles) match what `aipm build` would currently produce.',
+    // Freshness needs the aipm workspace model (build-derived expected bytes) — aipm-repo only.
+    appliesTo: ['aipm-repo'],
   },
-  check(ctx: RuleContext): Diagnostic[] {
+  check(ctx: InternalRuleContext): Diagnostic[] {
     if (ctx.skipFreshness) return [];
     const findings = checkFreshness(ctx.pluginDir, ctx.distDir, ctx.envelope, ctx.ci);
     return findings.map((f) =>
@@ -46,8 +48,10 @@ export const registryFreshnessRule: Rule = {
     defaultSeverity: 'error',
     description:
       'Generated marketplace registries match what `aipm build` would currently produce.',
+    // Requires ctx.workspace (aipm.workspace.ts) — repo-scoped, aipm-repo only.
+    appliesTo: ['aipm-repo'],
   },
-  async check(ctx: RuleContext): Promise<Diagnostic[]> {
+  async check(ctx: InternalRuleContext): Promise<Diagnostic[]> {
     if (ctx.workspace === undefined || ctx.skipFreshness) return [];
     const findings = await checkRegistryFreshness(
       ctx.repoRoot,
@@ -77,8 +81,10 @@ export const rootArtifactFreshnessRule: Rule = {
     defaultSeverity: 'error',
     description:
       'Single-artifact-host (gemini/kiro) repo-root artifacts are unambiguous, collision-free, and fresh.',
+    // Requires ctx.workspace (aipm.workspace.ts) — repo-scoped, aipm-repo only.
+    appliesTo: ['aipm-repo'],
   },
-  async check(ctx: RuleContext): Promise<Diagnostic[]> {
+  async check(ctx: InternalRuleContext): Promise<Diagnostic[]> {
     if (ctx.workspace === undefined) return [];
     const findings = await checkRootArtifactFreshness(
       ctx.repoRoot,

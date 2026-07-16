@@ -41,9 +41,17 @@ export function findingToDiagnostic(
 
 /**
  * Pure mapping from a `Diagnostic` back to a `Finding` (L-D2). `error` → `hard`; `warn` and
- * `info` → `soft`. The one exception is the freshness check's CI escalation (§10.2): a
- * `freshness`-coded diagnostic at `warn` severity becomes `hard` when `ci` is true, mirroring the
- * legacy `freshnessFinding()` behavior of `pipeline/validate.ts`.
+ * `info` → `soft`.
+ *
+ * The freshness check's CI escalation (§10.2) is already baked into a freshness diagnostic's
+ * `severity` by the time it reaches this function: the wrapped legacy checks
+ * (`checkFreshness`/`checkRegistryFreshness`/`checkRootArtifactFreshness` in `pipeline/validate.ts`)
+ * call `freshnessFinding(ci, ...)`, which computes `hard`/`soft` directly from the SAME `ci` value
+ * every current caller (`runValidate`, the `lint()` engine) also passes here — so
+ * `isCiEscalatedFreshness` below is unreachable in practice today (`diagnostic.severity` is
+ * already `'error'` whenever `ci` was true at construction time). It is kept as defensive
+ * belt-and-suspenders in case a future caller ever constructs/passes a freshness `Diagnostic`
+ * whose `severity` was computed under a different `ci` than the one supplied here.
  */
 export function diagnosticToFinding(diagnostic: Diagnostic, ci: boolean): Finding {
   const code: FindingCode = diagnostic.legacyCode ?? assertLegacyCode(diagnostic);

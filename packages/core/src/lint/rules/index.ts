@@ -39,17 +39,23 @@ export {
 };
 
 /**
- * Rules that need only a single plugin's `RuleContext` (envelope already resolved).
+ * Per-plugin rules that run unconditionally (envelope already resolved, no cross-target gating).
  * `envelopeShapeRule` is deliberately excluded — it runs before an envelope is resolved (see
- * `engine.ts`/`pipeline/validate.ts`).
+ * `engine.ts`/`pipeline/validate.ts`). `targetSchemaRule` is also excluded from this list — the
+ * engine runs it first and separately so it can compute `hasBlockingSchemaError` from its own
+ * diagnostics, exactly as `pipeline/validate.ts`'s `runValidate` does.
+ *
+ * The three cross-target consistency rules (`nameConsistencyRule`, `mcpKeySyncRule`,
+ * `marketplaceRegistrationRule`) are intentionally NOT in this array — `validate()` only runs
+ * them when `envelope.length > 1 && !hasBlockingSchemaError` (and skips marketplace-registration
+ * entirely when registry generation is opted in), per §10.1 step 4 / §10.3. `engine.ts`'s `lint()`
+ * replicates that exact gating rather than running them unconditionally, so `lint()` and
+ * `validate()` agree on when these fire (avoiding e.g. a double-report against the
+ * registry-freshness-owned diagnostic when `aipm.workspace.ts` is present).
  */
 export const PER_PLUGIN_RULES: readonly Rule[] = [
-  targetSchemaRule,
   envelopeAdherenceRule,
   frontmatterParsesRule,
-  nameConsistencyRule,
-  mcpKeySyncRule,
-  marketplaceRegistrationRule,
   pluginFreshnessRule,
   brokenFileRefRule,
   unknownHookEventRule,

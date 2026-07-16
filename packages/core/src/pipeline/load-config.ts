@@ -97,12 +97,15 @@ function configPathFor(pluginDir: string): string {
 /**
  * Transpile-import a config module's `default` export via jiti, with the core package specifier
  * aliased to this package's entrypoint (so a bare `import '@ai-plugin-marketplace/core'` resolves
- * regardless of where the config file lives). Shared by {@link loadPluginConfig} and
- * {@link loadRepoConfig}.
+ * regardless of where the config file lives). Shared by {@link loadPluginConfig},
+ * {@link loadRepoConfig}, and {@link loadWorkspaceConfig} — all in-module callers, so this is not
+ * exported (the `schema/envelope-shape` lint rule that used to call it directly now goes through
+ * {@link loadPluginConfig} instead, per the shared-`ConfigCache` fix for the double-transpile it
+ * used to cause).
  *
  * @throws {ConfigLoadError} If the module fails to import or has no usable default export.
  */
-export async function importDefaultExport(configPath: string, filename: string): Promise<unknown> {
+async function importDefaultExport(configPath: string, filename: string): Promise<unknown> {
   const jiti = createJiti(import.meta.url, {
     alias: { [CORE_PACKAGE_SPECIFIER]: coreConfigEntrypoint() },
     // Disable the default↔namespace interop so a config with no `default` export reads as a
@@ -148,7 +151,8 @@ export async function importDefaultExport(configPath: string, filename: string):
  * longer-lived cache would risk serving stale parses. Each `createConfigCache()` lives only for
  * the orchestrator call that created it.
  *
- * @public
+ * Not part of the public API — `validate()`/`lint()` construct and thread this internally; a
+ * caller of either public entry point never sees or supplies a `ConfigCache` directly.
  */
 export type ConfigCache = Map<string, AipmConfig>;
 

@@ -34,6 +34,7 @@ export {
 export { lint } from './lint/index.js';
 export type {
   Diagnostic,
+  DiscoveryMode,
   Document,
   Fix,
   FrontmatterDocument,
@@ -46,8 +47,6 @@ export type {
   RuleContext,
   YamlDocument,
 } from './lint/index.js';
-
-export type { ConfigCache } from './pipeline/load-config.js';
 
 export type {
   TargetId,

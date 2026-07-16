@@ -101,6 +101,8 @@ export const duplicateComponentNameRule: Rule = {
     category: 'correctness',
     defaultSeverity: 'error',
     description: 'No two skills (or agents, or commands) within a plugin share the same name.',
+    // Content-only (needs just the skills/agents/commands directories) — applies broadly.
+    appliesTo: ['aipm-repo', 'claude-plugin', 'open-plugins', 'skills-dir', 'claude-user-config'],
   },
   check(ctx: RuleContext): Diagnostic[] {
     return [

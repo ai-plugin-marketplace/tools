@@ -23,6 +23,9 @@ export const targetSchemaRule: Rule = {
     defaultSeverity: 'error',
     description:
       "Every target manifest in a plugin's support envelope parses against that target's current schema.",
+    // Dispatches per the resolved aipm.config.ts envelope — aipm-repo only. (A foreign discovery
+    // mode would instead validate a single known manifest shape directly, not via an envelope.)
+    appliesTo: ['aipm-repo'],
   },
   check(ctx: RuleContext): Diagnostic[] {
     const findings = validatePerTargetSchemas(ctx.pluginDir, ctx.envelope);

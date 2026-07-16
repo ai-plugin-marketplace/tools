@@ -95,6 +95,31 @@ export interface RuleContext {
   /** True when running in a CI context (affects freshness severity, L-D2/§10.2). */
   readonly ci: boolean;
   /**
+   * Load (and cache) the position-aware document at `absPath`. Format is inferred from the
+   * extension (`.json` → JSON via `jsonc-parser`; `.yaml`/`.yml` → YAML CST; `.md` → frontmatter
+   * extraction). Returns `undefined` when the file does not exist, its extension is not a
+   * recognized document format, or (frontmatter only) the file has no leading `---` block. A file
+   * that exists and *is* a recognized format but fails to parse is NOT `undefined` — it is a
+   * `Document` whose `value` is `undefined` and whose `parseError` is set.
+   */
+  getDocument(absPath: string): Document | undefined;
+}
+
+/**
+ * Internal extension of {@link RuleContext} carrying implementation-only fields needed by the
+ * legacy freshness/envelope-shape rules. Not part of the public `Rule` contract — L-D4 specifies
+ * that `RuleContext` "exposes the parsed document set and workspace model read-only" — so this
+ * type is never exported from the package's public surface (`lint/index.ts` / root `index.ts`).
+ *
+ * Rule modules that live in this package may type their `check()` parameter as
+ * `InternalRuleContext` instead of the public `RuleContext`: because {@link Rule.check} is
+ * declared with TypeScript method syntax (not a function-typed property), method parameters are
+ * checked bivariantly, so a `check(ctx: InternalRuleContext)` implementation still satisfies the
+ * public `Rule` interface even though `InternalRuleContext` is a strict extension of
+ * `RuleContext`. `createRuleContext` (`context.ts`) is the only place that constructs one.
+ */
+export interface InternalRuleContext extends RuleContext {
+  /**
    * True to skip drift-detection freshness findings (structural gates like
    * `single-artifact-host`/`root-artifact-collision` still run). Mirrors `ValidateOptions`'
    * `skipFreshness` — set only by `validate()`'s post-build re-validation; `lint()` never sets it.
@@ -106,13 +131,22 @@ export interface RuleContext {
    * `validate()`'s orchestrator already warmed rather than re-transpiling every config.
    */
   readonly configCache?: ConfigCache;
-  /**
-   * Load (and cache) the position-aware document at `absPath`. Format is inferred from the
-   * extension (`.json` → JSON via `jsonc-parser`; `.yaml`/`.yml` → YAML CST; `.md` → frontmatter
-   * extraction). Returns `undefined` when the file does not exist or cannot be parsed.
-   */
-  getDocument(absPath: string): Document | undefined;
 }
+
+/**
+ * A discovery mode the engine can run rules under (spec §2.4). Only `'aipm-repo'` is implemented
+ * by this issue's scope — the others are reserved so a `Rule`'s `appliesTo` can be authored now
+ * without becoming a breaking change once foreign discovery modes land (a later issue).
+ *
+ * @see docs/specs/lint-engine.md L-D5, §2.4
+ * @public
+ */
+export type DiscoveryMode =
+  | 'aipm-repo'
+  | 'claude-plugin'
+  | 'open-plugins'
+  | 'skills-dir'
+  | 'claude-user-config';
 
 /**
  * A rule module.
@@ -128,6 +162,16 @@ export interface Rule {
     defaultSeverity: 'error' | 'warn' | 'info' | 'off';
     /** One-liner, feeds generated docs. */
     description: string;
+    /**
+     * Which discovery modes (§2.4) run this rule. Cross-file/workspace-dependent rules (that
+     * need the aipm workspace model — freshness, mcp-key-sync, marketplace-registration,
+     * name-consistency) declare `['aipm-repo']`; content-only rules that need nothing beyond a
+     * single file (schema/frontmatter/broken-file-ref/hook-shape rules) declare every mode whose
+     * discovered unit could contain that file. The engine does not yet filter on this field
+     * (only `aipm-repo` discovery exists) — it exists so the public `Rule` contract already
+     * matches L-D4 and adding discovery modes later isn't a breaking API change.
+     */
+    appliesTo: DiscoveryMode[];
   };
   check(ctx: RuleContext): Diagnostic[] | Promise<Diagnostic[]>;
 }

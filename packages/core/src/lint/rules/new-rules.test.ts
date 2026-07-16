@@ -72,10 +72,26 @@ describe('correctness/broken-file-ref', () => {
     });
     expect(diagnostics[0]?.message).toContain('./agents/missing.md');
   });
+
+  it('is silent for a "./"-shaped string in a prose field like description (regression)', async () => {
+    // Regression: ref collection used to walk the ENTIRE parsed manifest, so any string value
+    // anywhere that happened to start with './' was treated as a required file reference — even
+    // inside prose fields never meant to name a file. Collection is now scoped to the specific
+    // schema fields that are genuinely path references (`hooks`/`commands`/`agents`/`skills`,
+    // per `targets/claude/schemas.ts`), so a `description` value shaped like a path must not fire.
+    const pluginDir = path.join(tmpDir, 'plugin-desc');
+    write(pluginDir, '.claude-plugin/plugin.json', {
+      name: 'plugin-desc',
+      description:
+        './scripts contains no real reference, just prose that happens to start this way',
+    });
+    const diagnostics = await brokenFileRefRule.check(makeCtx(pluginDir));
+    expect(diagnostics).toEqual([]);
+  });
 });
 
 describe('correctness/unknown-hook-event', () => {
-  it('is silent when hooks/claude.yaml has no hooks/claude.yaml file', async () => {
+  it('is silent when the plugin has no hooks/claude.yaml file', async () => {
     const pluginDir = path.join(tmpDir, 'plugin-c');
     fs.mkdirSync(pluginDir, { recursive: true });
     expect(await unknownHookEventRule.check(makeCtx(pluginDir))).toEqual([]);

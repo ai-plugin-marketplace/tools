@@ -4,6 +4,7 @@ export { lint } from './engine.js';
 export type { Document, FrontmatterDocument, JsonDocument, YamlDocument } from './document.js';
 export type {
   Diagnostic,
+  DiscoveryMode,
   Fix,
   LintOptions,
   LintResult,

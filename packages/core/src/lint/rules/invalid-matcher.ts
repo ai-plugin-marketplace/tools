@@ -26,6 +26,8 @@ export const invalidMatcherRule: Rule = {
     category: 'correctness',
     defaultSeverity: 'error',
     description: 'Hook matchers in hooks/claude.yaml are valid regular expressions.',
+    // Content-only (needs just hooks/claude.yaml), but that file is Claude-specific.
+    appliesTo: ['aipm-repo', 'claude-plugin', 'claude-user-config'],
   },
   check(ctx: RuleContext): Diagnostic[] {
     const rel = 'hooks/claude.yaml';

@@ -4,9 +4,6 @@
 
 ```ts
 
-import { Document as Document_2 } from 'yaml';
-import * as jsonc from 'jsonc-parser';
-
 // @public
 export function addTarget(pluginDir: string, target: TargetId): Promise<void>;
 
@@ -74,9 +71,6 @@ export interface BuildResult {
 export function checkSupport(pluginDir: string): Promise<SupportReport>;
 
 // @public
-export type ConfigCache = Map<string, AipmConfig>;
-
-// @public
 export function defineConfig(config: AipmConfigInput): AipmConfig;
 
 // @public
@@ -104,6 +98,9 @@ export interface Diagnostic {
 }
 
 // @public
+export type DiscoveryMode = 'aipm-repo' | 'claude-plugin' | 'open-plugins' | 'skills-dir' | 'claude-user-config';
+
+// @public
 export type Document = JsonDocument | YamlDocument | FrontmatterDocument;
 
 // @public
@@ -127,8 +124,6 @@ export interface Fix {
 
 // @public
 export interface FrontmatterDocument {
-    // (undocumented)
-    cstDoc: Document_2 | undefined;
     // (undocumented)
     format: 'frontmatter';
     // (undocumented)
@@ -162,6 +157,8 @@ export interface InitOptions {
     name?: string;
 }
 
+// Warning: (ae-unresolved-link) The @link reference could not be resolved: The package "@ai-plugin-marketplace/core" does not have an export "internalTrees"
+//
 // @public
 export interface JsonDocument {
     // (undocumented)
@@ -169,7 +166,6 @@ export interface JsonDocument {
     parseError?: string;
     path: string;
     text: string;
-    tree: jsonc.Node | undefined;
     value: unknown;
 }
 
@@ -245,6 +241,7 @@ export interface Rule {
         category: Diagnostic['category'];
         defaultSeverity: 'error' | 'warn' | 'info' | 'off';
         description: string;
+        appliesTo: DiscoveryMode[];
     };
 }
 
@@ -252,13 +249,11 @@ export interface Rule {
 export interface RuleContext {
     readonly allPluginDirs: readonly string[];
     readonly ci: boolean;
-    readonly configCache?: ConfigCache;
     readonly distDir: string;
     readonly envelope: readonly TargetId[];
     getDocument(absPath: string): Document | undefined;
     readonly pluginDir: string;
     readonly repoRoot: string;
-    readonly skipFreshness: boolean;
     readonly workspace: AipmWorkspace | undefined;
 }
 
@@ -304,10 +299,10 @@ export interface ValidationResult {
     passed: boolean;
 }
 
+// Warning: (ae-unresolved-link) The @link reference could not be resolved: The package "@ai-plugin-marketplace/core" does not have an export "internalTrees"
+//
 // @public
 export interface YamlDocument {
-    // (undocumented)
-    cstDoc: Document_2 | undefined;
     // (undocumented)
     format: 'yaml';
     // (undocumented)

@@ -2,8 +2,9 @@
  * The `lint()` public entry point (spec §4.1's engine half; the CLI surface and non-`aipm-repo`
  * discovery modes are follow-on issues, §6 "Sequencing" steps 2–3). Discovers plugins exactly as
  * `validate()` does (`aipm-repo` mode only — the only mode this issue's scope covers) and runs
- * every rule in {@link ALL_RULES} against each plugin, plus the two repo-scoped freshness rules
- * once per repo.
+ * every rule the engine knows about against each plugin, plus the repo-scoped rules once per
+ * repo — replicating `pipeline/validate.ts`'s `runValidate` gating exactly (§10.1 step 4 / §10.3)
+ * so `lint()` and `validate()` agree on when cross-target consistency rules fire.
  *
  * A plugin whose envelope fails to load contributes no diagnostics beyond what
  * `envelopeShapeRule` itself finds (mirroring `validate()`'s short-circuit on an unusable
@@ -17,7 +18,15 @@ import {
 } from '../pipeline/load-config.js';
 import { discoverPlugins } from '../pipeline/discover.js';
 import { createRuleContext } from './context.js';
-import { PER_PLUGIN_RULES, REPO_SCOPED_RULES, envelopeShapeRule } from './rules/index.js';
+import {
+  PER_PLUGIN_RULES,
+  REPO_SCOPED_RULES,
+  envelopeShapeRule,
+  marketplaceRegistrationRule,
+  mcpKeySyncRule,
+  nameConsistencyRule,
+  targetSchemaRule,
+} from './rules/index.js';
 import type { Diagnostic, LintOptions, LintResult } from './types.js';
 
 /**
@@ -32,6 +41,11 @@ export async function lint(targetPath: string, options?: LintOptions): Promise<L
   const { repoRoot, distDir, pluginDirs } = await discoverPlugins(targetPath);
   const workspace = await loadWorkspaceConfig(repoRoot);
   const configCache = createConfigCache();
+  // Registry generation opted in (aipm.workspace.ts present) — mirrors `runValidate`'s
+  // `generatesRegistries`. When true, marketplace-registration is skipped below in favor of the
+  // registry-freshness rule, which is what actually enforces registry correctness in that mode
+  // (§10.1 step 4 comment in `pipeline/validate.ts`, "design spec, locked decision 2").
+  const generatesRegistries = workspace !== undefined;
 
   const diagnostics: Diagnostic[] = [];
 
@@ -67,8 +81,28 @@ export async function lint(targetPath: string, options?: LintOptions): Promise<L
       ci,
       configCache,
     });
+
+    // Schema validation runs first and separately (not via PER_PLUGIN_RULES) so its diagnostics
+    // determine `hasBlockingSchemaError`, exactly as `runValidate` computes it from
+    // `targetSchemaRule`'s findings before deciding whether cross-target checks may run.
+    const schemaDiagnostics = await targetSchemaRule.check(ctx);
+    diagnostics.push(...schemaDiagnostics);
+    const hasBlockingSchemaError = schemaDiagnostics.some((d) => d.severity === 'error');
+
     for (const rule of PER_PLUGIN_RULES) {
       diagnostics.push(...(await rule.check(ctx)));
+    }
+
+    // Cross-target consistency (§10.1 step 4: multi-target only; §10.3: schema errors block) —
+    // matches `runValidate`'s `if (envelope.length > 1 && !hasBlockingSchemaError)` block exactly.
+    if (envelope.length > 1 && !hasBlockingSchemaError) {
+      diagnostics.push(...(await nameConsistencyRule.check(ctx)));
+      diagnostics.push(...(await mcpKeySyncRule.check(ctx)));
+      // When registries are generated, their correctness is enforced by registry-freshness
+      // instead — skip the hand-authored-registry check to avoid double-reporting.
+      if (!generatesRegistries) {
+        diagnostics.push(...(await marketplaceRegistrationRule.check(ctx)));
+      }
     }
   }
 

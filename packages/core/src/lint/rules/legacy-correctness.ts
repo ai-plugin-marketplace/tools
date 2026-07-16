@@ -40,6 +40,8 @@ export const envelopeAdherenceRule: Rule = {
     defaultSeverity: 'error',
     description:
       'No files exist for a target outside the envelope; every in-envelope target has its minimum required files.',
+    // Envelope adherence needs the resolved aipm.config.ts envelope — aipm-repo only.
+    appliesTo: ['aipm-repo'],
   },
   check(ctx: RuleContext): Diagnostic[] {
     return wrap(ENVELOPE_ADHERENCE_ID)(ctx, validateEnvelopeAdherence(ctx.pluginDir, ctx.envelope));
@@ -54,6 +56,8 @@ export const frontmatterParsesRule: Rule = {
     defaultSeverity: 'error',
     description:
       'Every frontmatter-bearing markdown file (POWER.md, SKILL.md, agents/*.md, commands/*.md) parses as strict YAML.',
+    // Content-only (needs just the file's frontmatter) — applies wherever such files can appear.
+    appliesTo: ['aipm-repo', 'claude-plugin', 'open-plugins', 'skills-dir', 'claude-user-config'],
   },
   check(ctx: RuleContext): Diagnostic[] {
     const pluginName = path.basename(ctx.pluginDir);
@@ -69,6 +73,8 @@ export const nameConsistencyRule: Rule = {
     defaultSeverity: 'error',
     description:
       'The plugin directory name matches the `name` field in every declared target manifest.',
+    // Cross-target consistency requires the resolved aipm.config.ts envelope — aipm-repo only.
+    appliesTo: ['aipm-repo'],
   },
   check(ctx: RuleContext): Diagnostic[] {
     return wrap(NAME_CONSISTENCY_ID)(ctx, validateNameConsistency(ctx.pluginDir, ctx.envelope));
@@ -82,6 +88,8 @@ export const mcpKeySyncRule: Rule = {
     category: 'correctness',
     defaultSeverity: 'error',
     description: 'MCP server keys match between `.mcp.json` (Claude/Cursor) and `mcp.json` (Kiro).',
+    // Cross-target consistency requires the resolved aipm.config.ts envelope — aipm-repo only.
+    appliesTo: ['aipm-repo'],
   },
   check(ctx: RuleContext): Diagnostic[] {
     return wrap(MCP_KEY_SYNC_ID)(ctx, validateMcpKeySync(ctx.pluginDir, ctx.envelope));
@@ -96,6 +104,8 @@ export const marketplaceRegistrationRule: Rule = {
     defaultSeverity: 'error',
     description:
       'The plugin is listed in the repo-root marketplace.json for every registry-backed target in its envelope, and only those.',
+    // The repo-root marketplace.json concept is aipm-repo-specific.
+    appliesTo: ['aipm-repo'],
   },
   check(ctx: RuleContext): Diagnostic[] {
     return wrap(MARKETPLACE_REGISTRATION_ID)(
@@ -112,6 +122,8 @@ export const defaultMarketplaceNameRule: Rule = {
     category: 'correctness',
     defaultSeverity: 'warn',
     description: "The repo's effective marketplace name/owner is not still a template placeholder.",
+    // Marketplace identity is an aipm workspace/registry concept — aipm-repo only.
+    appliesTo: ['aipm-repo'],
   },
   check(ctx: RuleContext): Diagnostic[] {
     return wrap(DEFAULT_MARKETPLACE_NAME_ID)(

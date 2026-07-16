@@ -10,6 +10,9 @@ import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { runBuild } from '../pipeline/build.js';
+import { synthRegistryRepo } from '../test-support/synth-plugin.js';
+import type { SynthRegistryRepo } from '../test-support/synth-plugin.js';
 import { lint } from './engine.js';
 
 let repoRoot: string;
@@ -75,5 +78,52 @@ describe('lint()', () => {
 
     const result = await lint(repoRoot);
     expect(result.diagnostics).toEqual([]);
+  });
+
+  describe('cross-target consistency gating (matches validate())', () => {
+    let repo: SynthRegistryRepo | undefined;
+
+    afterEach(() => {
+      repo?.cleanup();
+    });
+
+    it('does not double-report marketplace-registration when registry generation is opted in', async () => {
+      // Multi-target (so the cross-target step that would run marketplace-registration is
+      // reached) with an `aipm.workspace.ts` (registry generation opted in) — mirrors
+      // `pipeline/registry-codegen.test.ts`'s "does NOT also emit marketplace-registration when
+      // generation is opted in" test for `validate()`, proving `lint()` applies the identical
+      // gating (§10.1 step 4 comment in `pipeline/validate.ts`: "design spec, locked decision 2").
+      repo = synthRegistryRepo([{ name: 'alpha', targets: ['claude', 'cursor'] }], { name: 'm' });
+      await runBuild(repo.repoRoot); // generates the registries, so they start out fresh
+
+      const result = await lint(repo.repoRoot);
+
+      // The hand-authored-registry check must be skipped entirely...
+      const marketplaceRegistrationDiagnostics = result.diagnostics.filter(
+        (d) => d.ruleId === 'correctness/marketplace-registration',
+      );
+      expect(marketplaceRegistrationDiagnostics).toEqual([]);
+
+      // ...while the registry-freshness rule (which owns registry correctness in this mode) still
+      // ran and found the freshly-built registries fresh — proving this isn't just "no rules ran
+      // at all" but the specific intended gating.
+      const freshnessDiagnostics = result.diagnostics.filter((d) => d.legacyCode === 'freshness');
+      expect(freshnessDiagnostics).toEqual([]);
+    });
+
+    it('still runs marketplace-registration (hand-authored path) when no workspace is present', async () => {
+      // Same multi-target shape but WITHOUT a workspace (registry generation not opted in) — the
+      // historical hand-authored-registry check must still fire when the plugin isn't listed
+      // anywhere, proving the gate is genuinely conditional on workspace presence and not always
+      // skipping this rule.
+      repo = synthRegistryRepo([{ name: 'alpha', targets: ['claude', 'cursor'] }]); // no workspace
+      await runBuild(repo.repoRoot);
+
+      const result = await lint(repo.repoRoot);
+      const marketplaceRegistrationDiagnostics = result.diagnostics.filter(
+        (d) => d.ruleId === 'correctness/marketplace-registration',
+      );
+      expect(marketplaceRegistrationDiagnostics.length).toBeGreaterThan(0);
+    });
   });
 });

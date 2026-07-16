@@ -147,4 +147,26 @@ describe('Frontmatter document — position fidelity', () => {
     const body = '# Title\n\n---\n\nSome content.\n';
     expect(parseFrontmatterDocument('SKILL.md', body)).toBeUndefined();
   });
+
+  it('computes yamlOffset correctly for an empty frontmatter block (regression)', () => {
+    // Fixture: '---\n\n---\n' — an empty frontmatter block (a blank line between the fences,
+    // since the closing-fence match requires its own leading newline distinct from the opening
+    // fence's).
+    //   offsets: '-'(0) '-'(1) '-'(2) '\n'(3) '\n'(4, the blank line) '-'(5) '-'(6) '-'(7) '\n'(8)
+    // The opening fence + its trailing newline ('---\n') occupies offsets 0-3 (4 chars), so
+    // group 1 (the YAML text between the fences) starts at offset 4. Group 1 itself is empty —
+    // the very next character (offset 4) is the '\n' that the closing-fence pattern's leading
+    // `\r?\n` consumes, so the lazily-matched group 1 has zero length.
+    //
+    // Regression: computing this via `match[0].indexOf(yamlText)` (the old implementation) always
+    // returns 0 for an empty `yamlText`, since `''.indexOf('')` is definitionally 0 — silently
+    // mispointing every range derived from this document. Reading the offset structurally from
+    // the regex engine's own `d`-flag `.indices` array gives the correct value regardless of
+    // whether the captured group is empty.
+    const text = '---\n\n---\n';
+    const doc = parseFrontmatterDocument('SKILL.md', text);
+    expect(doc).toBeDefined();
+    expect(doc?.yamlText).toBe('');
+    expect(doc?.yamlOffset).toBe(4);
+  });
 });

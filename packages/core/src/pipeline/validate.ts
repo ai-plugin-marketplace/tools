@@ -446,6 +446,26 @@ export function checkDefaultMarketplaceName(
  *
  * `pluginName` is used to populate Finding.plugin.
  */
+/**
+ * Format a Zod validation failure's issues as `envelope-invalid` findings, one per issue. Shared
+ * by {@link validateEnvelopeShape} (validates a raw value directly) and the `schema/envelope-shape`
+ * lint rule (which instead catches the `ZodError` `defineConfig` throws via `loadPluginConfig`, so
+ * the config is transpiled/validated exactly once per invocation rather than twice).
+ */
+export function zodEnvelopeIssuesToFindings(
+  issues: z.core.$ZodIssue[],
+  pluginName: string,
+): Finding[] {
+  return issues.map((issue) => {
+    const issuePath = issue.path.length > 0 ? issue.path.join('.') : '(root)';
+    return hard(
+      'envelope-invalid',
+      pluginName,
+      `Invalid aipm.config: [${issuePath}] ${issue.message}`,
+    );
+  });
+}
+
 export function validateEnvelopeShape(rawConfig: unknown, pluginName: string): Finding[] {
   try {
     // defineConfig calls aipmConfigSchema.parse() internally — reuses the canonical validator
@@ -455,14 +475,7 @@ export function validateEnvelopeShape(rawConfig: unknown, pluginName: string): F
   } catch (err) {
     // ZodError carries .issues[] with path, code, message
     if (err instanceof z.ZodError) {
-      return err.issues.map((issue) => {
-        const issuePath = issue.path.length > 0 ? issue.path.join('.') : '(root)';
-        return hard(
-          'envelope-invalid',
-          pluginName,
-          `Invalid aipm.config: [${issuePath}] ${issue.message}`,
-        );
-      });
+      return zodEnvelopeIssuesToFindings(err.issues, pluginName);
     }
     // Non-ZodError (e.g. JSON parse) — emit a single finding
     const message = err instanceof Error ? err.message : String(err);

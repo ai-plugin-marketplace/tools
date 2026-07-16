@@ -24,6 +24,8 @@ export const unknownHookEventRule: Rule = {
     category: 'correctness',
     defaultSeverity: 'error',
     description: "Hook event names in hooks/claude.yaml are within the host's recognized set.",
+    // Content-only (needs just hooks/claude.yaml), but that file is Claude-specific.
+    appliesTo: ['aipm-repo', 'claude-plugin', 'claude-user-config'],
   },
   check(ctx: RuleContext): Diagnostic[] {
     const rel = 'hooks/claude.yaml';

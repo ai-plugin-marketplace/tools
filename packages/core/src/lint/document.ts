@@ -22,12 +22,25 @@ import type { Position, Range } from './types.js';
  * Matches a YAML frontmatter block, anchored to the **start of the file** (after an optional
  * UTF-8 BOM). No `m` flag — a `---` thematic break in the markdown body is never mistaken for
  * frontmatter — and `\r?\n` so CRLF checkouts are detected too. Group 1 is the YAML between the
- * fences. Mirrors `pipeline/validate.ts`'s `FRONTMATTER_RE`.
+ * fences. Mirrors `pipeline/validate.ts`'s `FRONTMATTER_RE`. The `d` (`hasIndices`) flag gives
+ * `exec()` a `.indices` array carrying each group's own `[start, end]` offsets, computed by the
+ * regex engine itself — this is what lets {@link parseFrontmatterDocument} locate group 1
+ * structurally rather than via a fragile `indexOf(matchedText)` (which breaks when the group is
+ * empty, since `''.indexOf('')` is always `0` regardless of true position).
  */
-const FRONTMATTER_RE = /^\uFEFF?---[ \t]*\r?\n([\s\S]*?)\r?\n---/;
+const FRONTMATTER_RE = /^\uFEFF?---[ \t]*\r?\n([\s\S]*?)\r?\n---/d;
 
 /**
- * A JSON document, position-tracked via a `jsonc-parser` parse tree.
+ * Parser-internal position-lookup structures, kept out of the public {@link Document} types so
+ * the public API surface never references `jsonc-parser` or `yaml` types. Internal-only,
+ * non-exported side channel — {@link rangeForPath} is the sole reader. Keyed by object identity
+ * on the `Document` it was parsed for.
+ */
+const internalTrees = new WeakMap<object, jsonc.Node | YamlCstDocument>();
+
+/**
+ * A JSON document, position-tracked via a `jsonc-parser` parse tree (kept internal — see
+ * {@link internalTrees}).
  *
  * @public
  */
@@ -41,12 +54,11 @@ export interface JsonDocument {
   value: unknown;
   /** Parse error, when `value` is undefined. */
   parseError?: string;
-  /** `jsonc-parser` parse tree, retained for position lookups only. */
-  tree: jsonc.Node | undefined;
 }
 
 /**
- * A standalone YAML document (e.g. `hooks/claude.yaml`), position-tracked via the YAML CST.
+ * A standalone YAML document (e.g. `hooks/claude.yaml`), position-tracked via the YAML CST (kept
+ * internal — see {@link internalTrees}).
  *
  * @public
  */
@@ -56,7 +68,6 @@ export interface YamlDocument {
   text: string;
   value: unknown;
   parseError?: string;
-  cstDoc: YamlCstDocument | undefined;
 }
 
 /**
@@ -75,7 +86,6 @@ export interface FrontmatterDocument {
   yamlOffset: number;
   value: unknown;
   parseError?: string;
-  cstDoc: YamlCstDocument | undefined;
 }
 
 /**
@@ -112,28 +122,34 @@ export function parseJsonDocument(path: string, text: string): JsonDocument {
     allowTrailingComma: false,
     disallowComments: true,
   });
+  let doc: JsonDocument;
   try {
-    return { format: 'json', path, text, value: JSON.parse(text) as unknown, tree };
+    doc = { format: 'json', path, text, value: JSON.parse(text) as unknown };
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
-    return { format: 'json', path, text, value: undefined, parseError: message, tree };
+    doc = { format: 'json', path, text, value: undefined, parseError: message };
   }
+  if (tree !== undefined) internalTrees.set(doc, tree);
+  return doc;
 }
 
 /** Parse a standalone YAML file into a position-tracked {@link YamlDocument}. */
 export function parseYamlDocumentFile(path: string, text: string): YamlDocument {
   const cstDoc = parseYamlDocument(text);
+  let doc: YamlDocument;
   if (cstDoc.errors.length > 0) {
-    return {
+    doc = {
       format: 'yaml',
       path,
       text,
       value: undefined,
       parseError: cstDoc.errors[0]?.message ?? 'YAML parse error',
-      cstDoc,
     };
+  } else {
+    doc = { format: 'yaml', path, text, value: cstDoc.toJS() as unknown };
   }
-  return { format: 'yaml', path, text, value: cstDoc.toJS() as unknown, cstDoc };
+  internalTrees.set(doc, cstDoc);
+  return doc;
 }
 
 /**
@@ -148,12 +164,15 @@ export function parseFrontmatterDocument(
   const match = FRONTMATTER_RE.exec(text);
   if (!match) return undefined;
   const yamlText = match[1] ?? '';
-  // Offset of group 1 within `text`: match.index plus the length of everything in the full match
-  // before group 1 (the opening fence + its trailing whitespace/newline).
-  const yamlOffset = match.index + match[0].indexOf(yamlText);
+  // Group 1's absolute start offset, read directly from the `d`-flag `.indices` array (computed
+  // by the regex engine, not derived via `indexOf`) — correct even when `yamlText` is empty
+  // (e.g. `---\n---\n`), which an `indexOf('')`-based computation would silently mispoint to 0.
+  const group1Indices = match.indices?.[1];
+  const yamlOffset = group1Indices?.[0] ?? match.index;
   const cstDoc = parseYamlDocument(yamlText);
+  let doc: FrontmatterDocument;
   if (cstDoc.errors.length > 0) {
-    return {
+    doc = {
       format: 'frontmatter',
       path,
       text,
@@ -161,18 +180,19 @@ export function parseFrontmatterDocument(
       yamlOffset,
       value: undefined,
       parseError: cstDoc.errors[0]?.message ?? 'YAML parse error',
-      cstDoc,
+    };
+  } else {
+    doc = {
+      format: 'frontmatter',
+      path,
+      text,
+      yamlText,
+      yamlOffset,
+      value: cstDoc.toJS() as unknown,
     };
   }
-  return {
-    format: 'frontmatter',
-    path,
-    text,
-    yamlText,
-    yamlOffset,
-    value: cstDoc.toJS() as unknown,
-    cstDoc,
-  };
+  internalTrees.set(doc, cstDoc);
+  return doc;
 }
 
 /** Load the appropriate document parser based on file extension. */
@@ -192,9 +212,12 @@ export function rangeForPath(
   doc: Document,
   issuePath: readonly (string | number)[],
 ): Range | undefined {
+  const internal = internalTrees.get(doc);
+
   if (doc.format === 'json') {
-    if (doc.tree === undefined) return undefined;
-    const node = jsonc.findNodeAtLocation(doc.tree, [...issuePath]);
+    if (internal === undefined) return undefined;
+    const tree = internal as jsonc.Node;
+    const node = jsonc.findNodeAtLocation(tree, [...issuePath]);
     if (node === undefined) return undefined;
     return {
       start: offsetToPosition(doc.text, node.offset),
@@ -204,10 +227,11 @@ export function rangeForPath(
 
   // yaml / frontmatter: resolve against the CST document, then map the (yaml-text-relative)
   // offsets back onto the full file text.
-  if (doc.cstDoc === undefined) return undefined;
+  if (internal === undefined) return undefined;
+  const cstDoc = internal as YamlCstDocument;
   let node: unknown;
   try {
-    node = doc.cstDoc.getIn([...issuePath], true);
+    node = cstDoc.getIn([...issuePath], true);
   } catch {
     return undefined;
   }

@@ -8,9 +8,14 @@ import type { AipmWorkspace } from '../config.js';
 import type { ConfigCache } from '../pipeline/load-config.js';
 import type { TargetId } from '../pipeline/types.js';
 import { parseDocument, type Document } from './document.js';
-import type { RuleContext } from './types.js';
+import type { InternalRuleContext } from './types.js';
 
-/** Build a {@link RuleContext} for a single plugin (or, for repo-scoped rules, the repo root). */
+/**
+ * Build an {@link InternalRuleContext} for a single plugin (or, for repo-scoped rules, the repo
+ * root). Returns the internal-extended type (carrying `skipFreshness`/`configCache`) — every
+ * caller in this package may pass the result to a `Rule.check()` that expects the narrower public
+ * `RuleContext`, since `InternalRuleContext extends RuleContext`.
+ */
 export function createRuleContext(params: {
   pluginDir: string;
   repoRoot: string;
@@ -21,7 +26,7 @@ export function createRuleContext(params: {
   ci: boolean;
   skipFreshness?: boolean;
   configCache?: ConfigCache;
-}): RuleContext {
+}): InternalRuleContext {
   const cache = new Map<string, Document | undefined>();
   return {
     pluginDir: params.pluginDir,

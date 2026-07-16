@@ -10,13 +10,17 @@
  * @see docs/specs/cursor-controller-shim.md §3.2 (runner contract), §4.1/§4.2 (tables), §4.4
  */
 
-import { spawnSync } from 'node:child_process';
 import * as fs from 'node:fs';
-import * as os from 'node:os';
 import * as path from 'node:path';
 
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 
+import {
+  createTempDir,
+  emitScript,
+  removeTempDir,
+  runScript,
+} from '../../test-support/subprocess-script.js';
 import { CLAUDE_TO_CURSOR_TOOLS } from './transform.js';
 import { CURSOR_SHIM_RUNNER_SOURCE, CURSOR_TO_CLAUDE_TOOLS } from './shim-runner.js';
 
@@ -33,8 +37,7 @@ let shimPath: string;
  * directly executable.)
  */
 function writeHandler(name: string, body: string): string[] {
-  const p = path.join(tmpDir, name);
-  fs.writeFileSync(p, body, 'utf8');
+  const p = emitScript(tmpDir, name, body);
   return [process.execPath, p];
 }
 
@@ -44,14 +47,12 @@ function runShim(
   handlerArgs: string[],
   stdin: string,
 ): { stdout: string; status: number | null } {
-  const result = spawnSync(process.execPath, [shimPath, cursorEvent, '--', ...handlerArgs], {
+  return runScript(process.execPath, [shimPath, cursorEvent, '--', ...handlerArgs], {
     input: stdin,
-    encoding: 'utf8',
     // Generous buffer so this harness can itself capture the shim's large allow-path stdout (the
     // >1MB no-truncation / maxBuffer tests) — otherwise this spawnSync would ENOBUFS-truncate it.
     maxBuffer: 64 * 1024 * 1024,
   });
-  return { stdout: result.stdout, status: result.status };
 }
 
 // A handler that captures the (translated) Claude payload it receives on stdin to argv[2], then
@@ -99,9 +100,8 @@ let malformedHandler: string[];
 let bigAllowHandler: string[];
 
 beforeAll(() => {
-  tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'aipm-cursor-shim-'));
-  shimPath = path.join(tmpDir, 'cursor-shim.mjs');
-  fs.writeFileSync(shimPath, CURSOR_SHIM_RUNNER_SOURCE, 'utf8');
+  tmpDir = createTempDir('aipm-cursor-shim-');
+  shimPath = emitScript(tmpDir, 'cursor-shim.mjs', CURSOR_SHIM_RUNNER_SOURCE);
   captureHandler = writeHandler('capture.mjs', CAPTURE_HANDLER);
   denyHandler = writeHandler('deny.mjs', DENY_DECISION_HANDLER);
   blockHandler = writeHandler('block.mjs', BLOCK_HANDLER);
@@ -112,7 +112,7 @@ beforeAll(() => {
 });
 
 afterAll(() => {
-  if (tmpDir && fs.existsSync(tmpDir)) fs.rmSync(tmpDir, { recursive: true });
+  removeTempDir(tmpDir);
 });
 
 // ---------------------------------------------------------------------------
@@ -175,12 +175,11 @@ describe('cursor-shim — shell fidelity: handler command runs through a shell (
     // post-`--` argument that uses a shell env-var ref. The runner must run it through a shell
     // (matching Claude's `sh -c`) for `$GATE_DIR` to expand — a bare no-shell spawn would fail to
     // exec and (fail-safe) deny, masking the availability bug this guards against.
-    fs.writeFileSync(path.join(tmpDir, 'envdeny.mjs'), DENY_DECISION_HANDLER, 'utf8');
+    emitScript(tmpDir, 'envdeny.mjs', DENY_DECISION_HANDLER);
     const handlerCommand = `${process.execPath} "$GATE_DIR/envdeny.mjs"`;
-    const result = spawnSync(process.execPath, [shimPath, 'preToolUse', '--', handlerCommand], {
+    const result = runScript(process.execPath, [shimPath, 'preToolUse', '--', handlerCommand], {
       input: preStdin,
-      encoding: 'utf8',
-      env: { ...process.env, GATE_DIR: tmpDir },
+      env: { GATE_DIR: tmpDir },
     });
     expect(result.status).toBe(0);
     // The env-referenced handler ran and its deny decision was honored (not a silent exec failure).
@@ -192,10 +191,10 @@ describe('cursor-shim — shell fidelity: handler command runs through a shell (
 
   it('honors an allow from a handler command invoked with its own args through the shell (§1)', () => {
     // A handler command with its own args, run as one shell command string → allow is honored.
-    const result = spawnSync(
+    const result = runScript(
       process.execPath,
       [shimPath, 'preToolUse', '--', `${process.execPath} "${allowHandler[1] ?? ''}"`],
-      { input: preStdin, encoding: 'utf8' },
+      { input: preStdin },
     );
     expect(result.status).toBe(0);
     expect(JSON.parse(result.stdout)).toStrictEqual({ permission: 'allow' });
@@ -311,10 +310,7 @@ describe('cursor-shim — fail-closed matrix (§4.4)', () => {
 
   it('bad argv (missing `--` handler) → deny + exit 2', () => {
     // No `--` separator: the runner cannot locate a handler → fail closed.
-    const result = spawnSync(process.execPath, [shimPath, 'preToolUse'], {
-      input: preStdin,
-      encoding: 'utf8',
-    });
+    const result = runScript(process.execPath, [shimPath, 'preToolUse'], { input: preStdin });
     expect(result.status).toBe(2);
     expect((JSON.parse(result.stdout) as { permission: string }).permission).toBe('deny');
   });

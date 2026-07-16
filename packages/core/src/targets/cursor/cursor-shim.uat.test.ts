@@ -16,23 +16,21 @@
 
 import { spawnSync } from 'node:child_process';
 import * as fs from 'node:fs';
-import * as os from 'node:os';
 import * as path from 'node:path';
 
 import { afterEach, describe, expect, it } from 'vitest';
 
+import {
+  createTempDir,
+  emitScript,
+  removeTempDir,
+  resolveBinary,
+} from '../../test-support/subprocess-script.js';
 import { convertClaudeHooksYamlToCursorJson } from './transform.js';
 import { CURSOR_SHIM_FILENAME, CURSOR_SHIM_RUNNER_SOURCE } from './shim-runner.js';
 
 /** Whether the real Cursor CLI is available on this machine. */
-function cursorAgentAvailable(): boolean {
-  const probe = spawnSync(process.platform === 'win32' ? 'where' : 'which', ['cursor-agent'], {
-    encoding: 'utf8',
-  });
-  return probe.status === 0 && typeof probe.stdout === 'string' && probe.stdout.trim() !== '';
-}
-
-const CURSOR_AGENT_AVAILABLE = cursorAgentAvailable();
+const CURSOR_AGENT_AVAILABLE = resolveBinary('cursor-agent') !== undefined;
 
 if (!CURSOR_AGENT_AVAILABLE) {
   // Logged notice (spec §5): the test is skipped, not silently passed.
@@ -74,11 +72,11 @@ describe.skipIf(!CURSOR_AGENT_AVAILABLE)('cursor-shim UAT — real Cursor enforc
   let workspace: string | undefined;
 
   afterEach(() => {
-    if (workspace && fs.existsSync(workspace)) fs.rmSync(workspace, { recursive: true });
+    removeTempDir(workspace);
   });
 
   it('blocks a shell command through the generated deny gate (marker never created)', () => {
-    workspace = fs.mkdtempSync(path.join(os.tmpdir(), 'aipm-cursor-uat-'));
+    workspace = createTempDir('aipm-cursor-uat-');
     const marker = path.join(workspace, 'MARKER_SHOULD_NOT_EXIST');
     // Positive control: the wrapped deny handler writes this when the gate actually fires.
     const hookFiredMarker = path.join(workspace, 'HOOK_FIRED');
@@ -86,20 +84,12 @@ describe.skipIf(!CURSOR_AGENT_AVAILABLE)('cursor-shim UAT — real Cursor enforc
     // Project-level Cursor hooks doc = the toolkit's generated cursor.json body (sans sentinel).
     const cursorHooks = convertClaudeHooksYamlToCursorJson(SOURCE_YAML);
     fs.mkdirSync(path.join(workspace, '.cursor'), { recursive: true });
-    fs.writeFileSync(path.join(workspace, '.cursor', 'hooks.json'), cursorHooks, 'utf8');
+    emitScript(path.join(workspace, '.cursor'), 'hooks.json', cursorHooks);
 
     // Emit the shim runner + the Claude-format deny handler the shim wraps.
     fs.mkdirSync(path.join(workspace, 'hooks'), { recursive: true });
-    fs.writeFileSync(
-      path.join(workspace, 'hooks', CURSOR_SHIM_FILENAME),
-      CURSOR_SHIM_RUNNER_SOURCE,
-      'utf8',
-    );
-    fs.writeFileSync(
-      path.join(workspace, 'hooks', 'deny.mjs'),
-      denyHandlerSource(hookFiredMarker),
-      'utf8',
-    );
+    emitScript(path.join(workspace, 'hooks'), CURSOR_SHIM_FILENAME, CURSOR_SHIM_RUNNER_SOURCE);
+    emitScript(path.join(workspace, 'hooks'), 'deny.mjs', denyHandlerSource(hookFiredMarker));
 
     const prompt =
       `Use the shell tool to run exactly this command and nothing else: touch ${marker}. ` +

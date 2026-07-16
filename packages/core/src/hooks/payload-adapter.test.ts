@@ -14,13 +14,19 @@
  * @see docs/specs/adapter-system.md §4.2.1 (empirical Claude/Codex stdin envelope captures)
  */
 
-import { spawnSync } from 'node:child_process';
 import * as fs from 'node:fs';
-import * as os from 'node:os';
 import * as path from 'node:path';
 
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 
+import {
+  createTempDir,
+  emitScript,
+  isExecutable,
+  removeTempDir,
+  resolveBinary,
+  runScript,
+} from '../test-support/subprocess-script.js';
 import {
   PAYLOAD_ADAPTER_CONTRACT_VERSION,
   PAYLOAD_ADAPTER_SCHEMA,
@@ -41,21 +47,12 @@ let adapterPath: string;
  */
 let pathWithoutJq: string | undefined;
 
-/** Resolve a binary's absolute path via `which`, or `undefined` if it is not on PATH. */
-function resolveBinary(name: string): string | undefined {
-  const probe = spawnSync(process.platform === 'win32' ? 'where' : 'which', [name], {
-    encoding: 'utf8',
-  });
-  if (probe.status !== 0 || typeof probe.stdout !== 'string') return undefined;
-  const resolved = probe.stdout.trim().split('\n')[0];
-  return resolved === '' ? undefined : resolved;
-}
-
 beforeAll(() => {
-  tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'aipm-payload-adapter-'));
-  adapterPath = path.join(tmpDir, 'payload-adapter');
-  fs.writeFileSync(adapterPath, PAYLOAD_ADAPTER_SOURCE, 'utf8');
-  fs.chmodSync(adapterPath, 0o755);
+  tmpDir = createTempDir('aipm-payload-adapter-');
+  // Invoked via `sh <path>` below (not executed directly), but the real build's emitted adapter
+  // is executable (spec §1, regression #53) — request that here too so this harness exercises the
+  // production write path rather than a weaker approximation.
+  adapterPath = emitScript(tmpDir, 'payload-adapter', PAYLOAD_ADAPTER_SOURCE, { executable: true });
 
   const noJqBinDir = path.join(tmpDir, 'no-jq-bin');
   fs.mkdirSync(noJqBinDir, { recursive: true });
@@ -70,7 +67,7 @@ beforeAll(() => {
 });
 
 afterAll(() => {
-  if (tmpDir && fs.existsSync(tmpDir)) fs.rmSync(tmpDir, { recursive: true });
+  removeTempDir(tmpDir);
 });
 
 /** Run the emitted adapter as a subprocess, feeding `stdin`, with an optional PATH override. */
@@ -79,12 +76,7 @@ function runAdapter(
   args: string[] = [],
   env?: Record<string, string | undefined>,
 ): { stdout: string; status: number | null } {
-  const result = spawnSync('sh', [adapterPath, ...args], {
-    input: stdin,
-    encoding: 'utf8',
-    env: { ...process.env, ...env },
-  });
-  return { stdout: result.stdout, status: result.status };
+  return runScript('sh', [adapterPath, ...args], { input: stdin, env });
 }
 
 // ---------------------------------------------------------------------------
@@ -144,6 +136,16 @@ const CURSOR_SHAPED = {
   hook_event_name: 'preToolUse',
   tool_name: 'Shell',
 };
+
+describe('payload-adapter — emitted file mode', () => {
+  // Regression guard for #53 (the emitted adapter shipping non-executable, 0644): this harness
+  // requests the executable bit explicitly (see the `beforeAll` above) rather than the test
+  // silently masking the real mode, so a future regression here would be caught even though the
+  // subprocess itself is invoked via `sh <path>` (which does not require the bit).
+  it('is executable, matching the real build write path', () => {
+    expect(isExecutable(adapterPath)).toBe(true);
+  });
+});
 
 // ---------------------------------------------------------------------------
 // Harness detection (§5.1)

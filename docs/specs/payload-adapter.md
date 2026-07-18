@@ -263,10 +263,13 @@ never reordered — only object keys are).
 
 > **D10 (normative).** The adapter is emitted **per-plugin**, alongside the existing hook assets
 > (`hooks/claude.json`, and — where applicable — `hooks/codex.json`, `hooks/cursor.json`,
-> `hooks/cursor-shim.mjs`), whenever a plugin authors a `hooks/claude.yaml`. Emission does not
-> depend on whether the plugin's hooks are observers or controllers (unlike the Cursor shim, §2.2
-> of `cursor-controller-shim.md`) — the payload adapter is useful to **any** handler, gating or
-> not, so its emission trigger is simply "this plugin has hooks at all."
+> `hooks/cursor-shim.mjs`), whenever a plugin authors a `hooks/claude.yaml` that declares **at
+> least one hook event** (`hooks:` is non-empty). Emission does not depend on whether the plugin's
+> hooks are observers or controllers (unlike the Cursor shim, §2.2 of `cursor-controller-shim.md`)
+> — the payload adapter is useful to **any** handler, gating or not, so its emission trigger is
+> simply "this plugin has at least one hook." A `hooks/claude.yaml` present but declaring an empty
+> `hooks` map — a plugin that authors the file but wires no handler to it — emits neither the
+> adapter nor its sentinel: nothing could ever invoke it (issue #58).
 
 The emitted file is `hooks/payload-adapter`, a plain POSIX shell script starting with
 `#!/bin/sh` on **line 1** (required for the shebang to be honored when invoked directly). Because

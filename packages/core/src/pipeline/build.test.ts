@@ -523,6 +523,50 @@ describe('computePluginHookArtifacts — payload adapter', () => {
     expect(artifacts).toHaveLength(0);
   });
 
+  // Issue #58, nit 1: a hooks YAML that exists but declares zero hook events (`hooks: {}`) — a
+  // plugin that authors the file but wires no handler — must not receive the adapter or its
+  // sentinel; nothing could ever invoke it.
+  const HOOKLESS_HOOKS_YAML = 'hooks: {}\n';
+
+  it('emits neither hooks/payload-adapter nor its sidecar for a hookless plugin (`hooks: {}`) — issue #58 nit 1', () => {
+    pluginDir = writePluginWithHooks(HOOKLESS_HOOKS_YAML);
+    const adapterAbs = path.join(pluginDir, 'hooks', PAYLOAD_ADAPTER_FILENAME);
+
+    for (const envelope of [['claude'], ['cursor'], ['gemini'], ['claude', 'cursor', 'gemini']]) {
+      const artifacts = computePluginHookArtifacts(
+        pluginDir,
+        envelope as ('claude' | 'cursor' | 'gemini')[],
+      );
+      expect(
+        artifacts.find((a) => a.absPath === adapterAbs),
+        `envelope ${envelope.join(',')}`,
+      ).toBeUndefined();
+      expect(
+        artifacts.find((a) => a.absPath === sidecarPath(adapterAbs)),
+        `envelope ${envelope.join(',')}`,
+      ).toBeUndefined();
+    }
+  });
+
+  it('still emits hooks/claude.json for a hookless plugin when `claude` is declared — only the adapter is skipped', () => {
+    const dir = writePluginWithHooks(HOOKLESS_HOOKS_YAML);
+    pluginDir = dir;
+    const artifacts = computePluginHookArtifacts(dir, ['claude']);
+    const claudeJson = artifacts.find((a) => a.absPath === path.join(dir, 'hooks', 'claude.json'));
+    expect(claudeJson).toBeDefined();
+    expect(
+      JSON.parse(stripSentinel(claudeJson?.expectedContent ?? '', 'json-field')) as unknown,
+    ).toStrictEqual({ hooks: {} });
+  });
+
+  it('still emits hooks/payload-adapter + its sidecar when the plugin declares ≥1 hook — issue #58 nit 1 positive case', () => {
+    pluginDir = writePluginWithHooks(HOOKS_YAML);
+    const adapterAbs = path.join(pluginDir, 'hooks', PAYLOAD_ADAPTER_FILENAME);
+    const artifacts = computePluginHookArtifacts(pluginDir, ['claude']);
+    expect(artifacts.find((a) => a.absPath === adapterAbs)).toBeDefined();
+    expect(artifacts.find((a) => a.absPath === sidecarPath(adapterAbs))).toBeDefined();
+  });
+
   it('round-trips the generated payload-adapter + sidecar bytes byte-for-byte (freshness §10.5)', () => {
     pluginDir = writePluginWithHooks(HOOKS_YAML);
 

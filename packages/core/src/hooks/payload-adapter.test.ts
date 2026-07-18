@@ -14,6 +14,7 @@
  * @see docs/specs/adapter-system.md §4.2.1 (empirical Claude/Codex stdin envelope captures)
  */
 
+import { execFileSync } from 'node:child_process';
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 
@@ -468,5 +469,113 @@ describe('payload-adapter — --schema and contract version (§8, D6/D7)', () =>
       'codex',
       'unknown',
     ]);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Issue #58 nit 2 — --schema output is pre-sorted at generation time, no runtime `jq -S .` spawn.
+// ---------------------------------------------------------------------------
+
+describe('payload-adapter — --schema is pre-sorted at generation time (issue #58, nit 2)', () => {
+  /**
+   * Independent oracle: reconstructs the SAME logical response body the adapter embeds
+   * (`{ contractVersion, schema }`, compact/unsorted — the pre-fix literal shape), then pipes it
+   * through the real `jq -S .` binary. This is the exact byte-for-byte behavior the old
+   * `printf '%s' '<literal>' | jq -S .` runtime pipeline produced, computed here from an oracle
+   * independent of `renderSchemaResponseLiteral` (never derived from the implementation, per this
+   * repo's spec-first assertion rule).
+   */
+  function jqSortedSchemaResponseOracle(): string | undefined {
+    const jqPath = resolveBinary('jq');
+    if (!jqPath) return undefined;
+    const compact = JSON.stringify({
+      contractVersion: PAYLOAD_ADAPTER_CONTRACT_VERSION,
+      schema: PAYLOAD_ADAPTER_SCHEMA,
+    });
+    return execFileSync(jqPath, ['-S', '.'], { input: compact, encoding: 'utf8' });
+  }
+
+  it('produces --schema output byte-identical to piping the same body through `jq -S .`', () => {
+    const oracle = jqSortedSchemaResponseOracle();
+    if (oracle === undefined) {
+      // jq could not be located to build the oracle — nothing to compare against, skip gracefully.
+      return;
+    }
+    const { stdout, status } = runAdapter('', ['--schema']);
+    expect(status).toBe(0);
+    expect(stdout).toBe(oracle);
+  });
+
+  it('never spawns jq for the --schema branch, even when the only `jq` on PATH is broken', () => {
+    // A `jq` that exists (satisfies the top-of-script `command -v jq` presence check, which never
+    // executes it) but explodes if actually invoked. If the --schema branch still piped its
+    // literal through `jq -S .` at runtime, this would corrupt/empty the output; since the branch
+    // now only `printf`s a pre-sorted literal, output must be unaffected.
+    const brokenJqBinDir = path.join(tmpDir, 'broken-jq-bin');
+    fs.mkdirSync(brokenJqBinDir, { recursive: true });
+    const required = ['sh', 'cat', 'mktemp', 'rm', 'printf', 'command'];
+    for (const name of required) {
+      const resolved = resolveBinary(name);
+      if (resolved) fs.symlinkSync(resolved, path.join(brokenJqBinDir, name));
+    }
+    const brokenJqPath = path.join(brokenJqBinDir, 'jq');
+    fs.writeFileSync(brokenJqPath, '#!/bin/sh\nexit 1\n', { mode: 0o755 });
+
+    const { stdout, status } = runAdapter('', ['--schema'], { PATH: brokenJqBinDir });
+    expect(status).toBe(0);
+    const parsed = JSON.parse(stdout) as { contractVersion: string };
+    expect(parsed.contractVersion).toBe(PAYLOAD_ADAPTER_CONTRACT_VERSION);
+  });
+
+  it('the emitted --schema branch contains no `jq` invocation in its source', () => {
+    // Bounded by the fixed `# Buffer stdin` comment that opens the NEXT section (rather than
+    // searching for a bare "fi" line, which could false-match inside the embedded, multi-line
+    // pretty-printed JSON literal the branch prints).
+    const schemaBranchStart = PAYLOAD_ADAPTER_SOURCE.indexOf('"--schema"');
+    const schemaBranchEnd = PAYLOAD_ADAPTER_SOURCE.indexOf('# Buffer stdin', schemaBranchStart);
+    expect(schemaBranchStart).toBeGreaterThan(-1);
+    expect(schemaBranchEnd).toBeGreaterThan(schemaBranchStart);
+    const schemaBranch = PAYLOAD_ADAPTER_SOURCE.slice(schemaBranchStart, schemaBranchEnd);
+    expect(schemaBranch).not.toContain('jq');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Issue #58 nit 3 — the generated banner qualifies its docs/specs pointer with the source package.
+// ---------------------------------------------------------------------------
+
+describe('payload-adapter — generated banner qualifies its docs/specs pointer (issue #58, nit 3)', () => {
+  it('cites docs/specs/payload-adapter.md as living in @ai-plugin-marketplace/tools', () => {
+    expect(PAYLOAD_ADAPTER_SOURCE).toContain(
+      'docs/specs/payload-adapter.md in @ai-plugin-marketplace/tools',
+    );
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Issue #58 nit 4 — mktemp is given an explicit template.
+// ---------------------------------------------------------------------------
+
+describe('payload-adapter — mktemp uses an explicit template (issue #58, nit 4)', () => {
+  it('embeds an explicit TMPDIR-qualified mktemp template rather than a bare `mktemp`', () => {
+    expect(PAYLOAD_ADAPTER_SOURCE).toContain(
+      'mktemp "${TMPDIR:-/tmp}/payload-adapter.XXXXXX" 2>/dev/null',
+    );
+    expect(PAYLOAD_ADAPTER_SOURCE).not.toContain('mktemp 2>/dev/null');
+  });
+
+  it('still degrades to byte-for-byte passthrough when mktemp fails (fallback unaffected)', () => {
+    // A PATH with no mktemp at all forces the `|| { cat; exit 0; }` fallback, proving the explicit
+    // template did not disturb the existing degrade path.
+    const noMktempBinDir = path.join(tmpDir, 'no-mktemp-bin');
+    fs.mkdirSync(noMktempBinDir, { recursive: true });
+    for (const name of ['sh', 'cat', 'jq', 'command']) {
+      const resolved = resolveBinary(name);
+      if (resolved) fs.symlinkSync(resolved, path.join(noMktempBinDir, name));
+    }
+    const raw = JSON.stringify(CLAUDE_PRE_TOOL_USE);
+    const { stdout, status } = runAdapter(raw, [], { PATH: noMktempBinDir });
+    expect(status).toBe(0);
+    expect(stdout).toBe(raw);
   });
 });

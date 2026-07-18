@@ -399,3 +399,15 @@ describe('CURSOR_SHIM_RUNNER_SOURCE — inverse tool table generated from the ex
     expect(keys).toStrictEqual([...keys].sort());
   });
 });
+
+// ---------------------------------------------------------------------------
+// Issue #58 nit 3 — the generated banner qualifies its docs/specs pointer with the source package.
+// ---------------------------------------------------------------------------
+
+describe('CURSOR_SHIM_RUNNER_SOURCE — generated banner qualifies its docs/specs pointer (issue #58, nit 3)', () => {
+  it('cites docs/specs/cursor-controller-shim.md as living in @ai-plugin-marketplace/tools', () => {
+    expect(CURSOR_SHIM_RUNNER_SOURCE).toContain(
+      'docs/specs/cursor-controller-shim.md in @ai-plugin-marketplace/tools',
+    );
+  });
+});

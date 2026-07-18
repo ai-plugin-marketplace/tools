@@ -77,6 +77,20 @@ const EXIT1_HANDLER = `process.exit(1);\n`;
 const MALFORMED_HANDLER = `process.stdout.write('this is <<< not json');
 process.exit(0);
 `;
+// Top-level continue:false with only stopReason set (no reason) — the documented hooks contract
+// for a controller hook's stdin-hook denial message (issue #57).
+const CONTINUE_FALSE_STOPREASON_HANDLER = `process.stdout.write(JSON.stringify({ continue: false, stopReason: 'stopped by policy' }));
+process.exit(0);
+`;
+// Top-level continue:false with both reason and stopReason set — reason must win (issue #57).
+const CONTINUE_FALSE_BOTH_HANDLER = `process.stdout.write(JSON.stringify({ continue: false, reason: 'reason wins', stopReason: 'stopReason loses' }));
+process.exit(0);
+`;
+// Top-level continue:false with neither reason nor stopReason set — must still deny, no crash,
+// message absent (issue #57 edge case).
+const CONTINUE_FALSE_NO_MESSAGE_HANDLER = `process.stdout.write(JSON.stringify({ continue: false }));
+process.exit(0);
+`;
 
 /** Byte size of the large allow-path payload (well over spawnSync's default 1 MB maxBuffer). */
 const BIG_CONTEXT_SIZE = 2 * 1024 * 1024;
@@ -98,6 +112,9 @@ let allowHandler: string[];
 let exit1Handler: string[];
 let malformedHandler: string[];
 let bigAllowHandler: string[];
+let continueFalseStopReasonHandler: string[];
+let continueFalseBothHandler: string[];
+let continueFalseNoMessageHandler: string[];
 
 beforeAll(() => {
   tmpDir = createTempDir('aipm-cursor-shim-');
@@ -109,6 +126,15 @@ beforeAll(() => {
   exit1Handler = writeHandler('exit1.mjs', EXIT1_HANDLER);
   malformedHandler = writeHandler('malformed.mjs', MALFORMED_HANDLER);
   bigAllowHandler = writeHandler('big-allow.mjs', BIG_ALLOW_HANDLER);
+  continueFalseStopReasonHandler = writeHandler(
+    'continue-false-stopreason.mjs',
+    CONTINUE_FALSE_STOPREASON_HANDLER,
+  );
+  continueFalseBothHandler = writeHandler('continue-false-both.mjs', CONTINUE_FALSE_BOTH_HANDLER);
+  continueFalseNoMessageHandler = writeHandler(
+    'continue-false-no-message.mjs',
+    CONTINUE_FALSE_NO_MESSAGE_HANDLER,
+  );
 });
 
 afterAll(() => {
@@ -260,6 +286,30 @@ describe('cursor-shim — Claude → Cursor control output (§4.2, preToolUse)',
     expect(status).toBe(0);
     expect(JSON.parse(stdout)).toStrictEqual({ permission: 'allow' });
   });
+
+  it('#57 stopReason fallback: top-level continue:false + stopReason (no reason) → { permission: "deny", agent_message: stopReason }', () => {
+    // Per the hooks contract, a controller hook gating via top-level continue:false carries its
+    // user-facing message in stopReason (reason is scoped to the decision:'block' shape) — the
+    // runner must read it so the denial is not silently unexplained.
+    const { stdout, status } = runShim('preToolUse', continueFalseStopReasonHandler, preStdin);
+    expect(status).toBe(0);
+    expect(JSON.parse(stdout)).toStrictEqual({
+      permission: 'deny',
+      agent_message: 'stopped by policy',
+    });
+  });
+
+  it('#57 stopReason fallback: reason wins over stopReason when a continue:false payload sets both', () => {
+    const { stdout, status } = runShim('preToolUse', continueFalseBothHandler, preStdin);
+    expect(status).toBe(0);
+    expect(JSON.parse(stdout)).toStrictEqual({ permission: 'deny', agent_message: 'reason wins' });
+  });
+
+  it('#57 stopReason fallback: continue:false with neither reason nor stopReason still denies without a message and without crashing', () => {
+    const { stdout, status } = runShim('preToolUse', continueFalseNoMessageHandler, preStdin);
+    expect(status).toBe(0);
+    expect(JSON.parse(stdout)).toStrictEqual({ permission: 'deny' });
+  });
 });
 
 describe('cursor-shim — beforeSubmitPrompt path (§4.2)', () => {
@@ -282,6 +332,35 @@ describe('cursor-shim — beforeSubmitPrompt path (§4.2)', () => {
     const { stdout, status } = runShim('beforeSubmitPrompt', allowHandler, promptStdin);
     expect(status).toBe(0);
     expect(JSON.parse(stdout)).toStrictEqual({ continue: true });
+  });
+
+  it('#57 stopReason fallback: top-level continue:false + stopReason (no reason) → { continue: false, user_message: stopReason }', () => {
+    const { stdout, status } = runShim(
+      'beforeSubmitPrompt',
+      continueFalseStopReasonHandler,
+      promptStdin,
+    );
+    expect(status).toBe(0);
+    expect(JSON.parse(stdout)).toStrictEqual({
+      continue: false,
+      user_message: 'stopped by policy',
+    });
+  });
+
+  it('#57 stopReason fallback: reason wins over stopReason when a continue:false payload sets both', () => {
+    const { stdout, status } = runShim('beforeSubmitPrompt', continueFalseBothHandler, promptStdin);
+    expect(status).toBe(0);
+    expect(JSON.parse(stdout)).toStrictEqual({ continue: false, user_message: 'reason wins' });
+  });
+
+  it('#57 stopReason fallback: continue:false with neither reason nor stopReason still denies without a message and without crashing', () => {
+    const { stdout, status } = runShim(
+      'beforeSubmitPrompt',
+      continueFalseNoMessageHandler,
+      promptStdin,
+    );
+    expect(status).toBe(0);
+    expect(JSON.parse(stdout)).toStrictEqual({ continue: false });
   });
 });
 

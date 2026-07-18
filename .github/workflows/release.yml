@@ -3,7 +3,7 @@ name: Release
 on:
   push:
     branches: [main]
-  workflow_dispatch: # allow a maintainer to trigger a release manually once NPM_TOKEN is set
+  workflow_dispatch: # allow a maintainer to trigger a release manually
 
 concurrency: ${{ github.workflow }}-${{ github.ref }}
 
@@ -26,27 +26,22 @@ jobs:
       - uses: pnpm/action-setup@v4
         # version is read from package.json#packageManager — do not duplicate here
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v6
         with:
-          node-version: 24
-          cache: pnpm
-          # registry-url causes setup-node to write `//registry.npmjs.org/:_authToken=${NODE_AUTH_TOKEN}`
-          # into the project .npmrc, which npm reads when publishing.
+          # Trusted publishing (OIDC) requires npm >=11.5.1 and Node >=22.14.0.
+          node-version: '24.14.0'
           registry-url: 'https://registry.npmjs.org'
+          # setup-node enables package-manager caching automatically; a poisoned
+          # cache in a publishing job could expose the OIDC-derived publish token.
+          package-manager-cache: false
+
+      - name: Show release toolchain
+        run: node --version && npm --version && pnpm --version
 
       - run: pnpm install --frozen-lockfile
 
       - name: Build
         run: pnpm run build
-
-      - name: Configure npm auth
-        # setup-node sets NPM_CONFIG_USERCONFIG to a temp .npmrc and NODE_AUTH_TOKEN to the
-        # token value (from registry-url + NODE_AUTH_TOKEN env). Write auth into that file so
-        # pnpm publish (called by changeset publish) can authenticate with the registry.
-        run: |
-          NPMRC="${NPM_CONFIG_USERCONFIG:-$HOME/.npmrc}"
-          echo "//registry.npmjs.org/:_authToken=${NODE_AUTH_TOKEN}" >> "$NPMRC"
-          echo "@ai-plugin-marketplace:registry=https://registry.npmjs.org" >> "$NPMRC"
 
       - name: Create Release Pull Request or Publish
         uses: changesets/action@v1
@@ -54,5 +49,3 @@ jobs:
           publish: pnpm release
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          NPM_TOKEN: ${{ secrets.NPM_TOKEN }}
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}

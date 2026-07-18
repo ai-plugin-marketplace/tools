@@ -197,11 +197,12 @@ function interpretUserPromptSubmit(parsed) {
     if (parsed.decision === 'block' || parsed.continue === false) {
       const control = { continue: false };
       // Same reason -> stopReason fallback as interpretPreToolUse (issue #57): decision:'block'
-      // carries its message in 'reason'; a top-level continue:false denial carries it in
-      // 'stopReason'. Prefer 'reason' if a handler set both (defensive).
+      // carries its message in 'reason' only; a top-level continue:false denial carries it in
+      // 'reason' or falls back to 'stopReason'. stopReason must never be consulted for the
+      // decision:'block' shape. Prefer 'reason' if a handler set both (defensive).
       if (typeof parsed.reason === 'string') {
         control.user_message = parsed.reason;
-      } else if (typeof parsed.stopReason === 'string') {
+      } else if (parsed.continue === false && typeof parsed.stopReason === 'string') {
         control.user_message = parsed.stopReason;
       }
       return control;

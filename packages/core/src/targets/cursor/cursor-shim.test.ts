@@ -91,6 +91,14 @@ process.exit(0);
 const CONTINUE_FALSE_NO_MESSAGE_HANDLER = `process.stdout.write(JSON.stringify({ continue: false }));
 process.exit(0);
 `;
+// decision:"block" with stopReason set and NO reason — stopReason is scoped to the top-level
+// continue:false shape only (spec §4.2 table); a decision:"block" payload must never surface it.
+// Regression test for issue #57 / Copilot review finding: interpretUserPromptSubmit previously
+// shared one branch for decision:'block' and continue:false, so this payload wrongly surfaced
+// stopReason as user_message.
+const BLOCK_DECISION_STOPREASON_HANDLER = `process.stdout.write(JSON.stringify({ decision: 'block', stopReason: 'should not surface' }));
+process.exit(0);
+`;
 
 /** Byte size of the large allow-path payload (well over spawnSync's default 1 MB maxBuffer). */
 const BIG_CONTEXT_SIZE = 2 * 1024 * 1024;
@@ -115,6 +123,7 @@ let bigAllowHandler: string[];
 let continueFalseStopReasonHandler: string[];
 let continueFalseBothHandler: string[];
 let continueFalseNoMessageHandler: string[];
+let blockDecisionStopReasonHandler: string[];
 
 beforeAll(() => {
   tmpDir = createTempDir('aipm-cursor-shim-');
@@ -134,6 +143,10 @@ beforeAll(() => {
   continueFalseNoMessageHandler = writeHandler(
     'continue-false-no-message.mjs',
     CONTINUE_FALSE_NO_MESSAGE_HANDLER,
+  );
+  blockDecisionStopReasonHandler = writeHandler(
+    'block-decision-stopreason.mjs',
+    BLOCK_DECISION_STOPREASON_HANDLER,
   );
 });
 
@@ -310,6 +323,14 @@ describe('cursor-shim — Claude → Cursor control output (§4.2, preToolUse)',
     expect(status).toBe(0);
     expect(JSON.parse(stdout)).toStrictEqual({ permission: 'deny' });
   });
+
+  it('#57 stopReason scoping: decision:"block" + stopReason (no reason) → { permission: "deny" } with no agent_message', () => {
+    // Spec §4.2 table: decision:"block" (+ reason) maps to agent_message:<reason> only — stopReason
+    // is scoped to the continue:false shape and must never leak into a decision:"block" denial.
+    const { stdout, status } = runShim('preToolUse', blockDecisionStopReasonHandler, preStdin);
+    expect(status).toBe(0);
+    expect(JSON.parse(stdout)).toStrictEqual({ permission: 'deny' });
+  });
 });
 
 describe('cursor-shim — beforeSubmitPrompt path (§4.2)', () => {
@@ -357,6 +378,23 @@ describe('cursor-shim — beforeSubmitPrompt path (§4.2)', () => {
     const { stdout, status } = runShim(
       'beforeSubmitPrompt',
       continueFalseNoMessageHandler,
+      promptStdin,
+    );
+    expect(status).toBe(0);
+    expect(JSON.parse(stdout)).toStrictEqual({ continue: false });
+  });
+
+  it('#57 stopReason scoping: decision:"block" + stopReason (no reason) → { continue: false } with no user_message', () => {
+    // Regression test for a Copilot review finding on issue #57: interpretUserPromptSubmit shared
+    // one branch for decision:'block' and continue:false, so a decision:"block" payload with no
+    // reason but a stopReason wrongly surfaced stopReason as user_message. Per the spec §4.2 table,
+    // decision:"block" (+ reason) maps to user_message:<reason> only; stopReason is scoped to the
+    // continue:false shape (matching interpretPreToolUse). This must fail on the pre-fix code
+    // (which returned user_message: 'should not surface') and pass once decision:"block" no longer
+    // consults stopReason.
+    const { stdout, status } = runShim(
+      'beforeSubmitPrompt',
+      blockDecisionStopReasonHandler,
       promptStdin,
     );
     expect(status).toBe(0);

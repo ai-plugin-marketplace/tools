@@ -1,5 +1,51 @@
 # @ai-plugin-marketplace/core
 
+## 0.8.0
+
+### Minor Changes
+
+- [#72](https://github.com/ai-plugin-marketplace/tools/pull/72) [`6100387`](https://github.com/ai-plugin-marketplace/tools/commit/6100387eefbce1604220a9832ed44c2fb7533883) Thanks [@mike-north](https://github.com/mike-north)! - Add `aipm lint [path] [--as <mode>] [--format text|json|sarif] [--rule <id>=<severity> ...]`, exposing the lint engine core ([#61](https://github.com/ai-plugin-marketplace/tools/issues/61)) via the CLI with machine-readable output.
+  - `text` (default): grouped by file as `file:line:col ruleId severity message`; `--verbose` appends the docs URL; diagnostics without a `range` render as `file ruleId severity message` (position segment omitted, never zero-filled).
+  - `json`: the raw `Diagnostic[]` plus a summary envelope (`errorCount`/`warnCount`/`infoCount`/`fileCount`).
+  - `sarif`: SARIF 2.1.0, one `rules[]` entry per distinct rule id — validated in tests against the official SARIF 2.1.0 JSON Schema.
+  - Exit codes: `0` no `error`-severity diagnostics, `1` errors present, `2` usage error (unknown `--format`, malformed `--rule`, or an unsupported `--as` mode — only `aipm-repo` is implemented; foreign discovery modes are a later issue).
+  - `--rule <id>=<severity>` (repeatable) overrides a rule's severity post-hoc, or drops its diagnostics entirely with `=off`.
+  - New core export: `applyRuleSeverityOverrides(diagnostics, overrides)`, the pure filter backing `--rule`.
+  - `aipm validate` behavior and exit codes are unchanged.
+
+- [#70](https://github.com/ai-plugin-marketplace/tools/pull/70) [`2b34d54`](https://github.com/ai-plugin-marketplace/tools/commit/2b34d547c3a0ff459198a87eb22e446a5c5d5b52) Thanks [@mike-north](https://github.com/mike-north)! - Add the position-aware lint engine core (`Diagnostic`/`Rule`/document-layer types, `lint()`) and migrate every existing `validate()` check onto it, with `aipm validate` behavior unchanged.
+  - New `packages/core/src/lint/` module: `Diagnostic`, `Range`, `Rule`, `RuleContext` types (L-D1/L-D4), a position-aware document layer for JSON (`jsonc-parser`), YAML (the `yaml` package's CST), and markdown frontmatter, and a pure `diagnosticToFinding()` mapping back to the legacy `Finding` shape.
+  - Every existing validate check (envelope shape, per-target schema, envelope adherence, frontmatter parsing, name consistency, MCP key sync, marketplace registration, freshness, default-marketplace-name) is now backed by a `Rule` object carrying its legacy `FindingCode`.
+  - Four new `correctness/*` rules: `broken-file-ref`, `unknown-hook-event`, `invalid-matcher`, `duplicate-component-name`.
+  - New public exports: `lint(path, options): Promise<LintResult>`, plus `Diagnostic`, `Range`, `Rule`, `RuleContext`, `Document`/`JsonDocument`/`YamlDocument`/`FrontmatterDocument`, `Fix`, `Position`, `LintOptions`, `LintResult`, and `ConfigCache`.
+  - `jsonc-parser` is now a direct dependency (previously transitive only).
+
+### Patch Changes
+
+- [#60](https://github.com/ai-plugin-marketplace/tools/pull/60) [`d1e1af3`](https://github.com/ai-plugin-marketplace/tools/commit/d1e1af3f0527c66de15839204395b8024b5a86b1) Thanks [@mike-north](https://github.com/mike-north)! - Anchor the Cursor controller-shim invocation to `${CLAUDE_PLUGIN_ROOT:-.}` instead of a cwd-relative
+  path. The 0.7.0 transform emitted gating hook commands as `node ./hooks/cursor-shim.mjs …`, which
+  assumed Cursor runs plugin hook commands with cwd = plugin root — an assumption Cursor does not
+  guarantee. Because shimmed entries set `failClosed: true`, a shim path that failed to resolve did
+  not merely disable the gate: `node` exited "Cannot find module" and **every gated tool call was
+  denied** for that plugin under Cursor.
+
+  The emitted command is now
+  `node "${CLAUDE_PLUGIN_ROOT:-.}/hooks/cursor-shim.mjs" <event> -- '<handler>'` (double-quoted, so a
+  plugin root containing spaces survives shell expansion). The `:-.` fallback matters because Cursor's
+  behavior differs by consumption layout: for an **installed plugin**, `${CLAUDE_PLUGIN_ROOT}` is set
+  to the plugin's install path (confirmed only by Cursor staff forum posts, not the official docs), so
+  the invocation anchors there regardless of cwd; for **project-level/colocated** hooks (a project's
+  own `.cursor/hooks.json`), Cursor does not set the variable at all — verified empirically against a
+  real `cursor-agent` build — so an unconditional `${CLAUDE_PLUGIN_ROOT}` anchor would expand to an
+  empty string and, combined with `failClosed: true`, deny every gated call. The `.` fallback resolves
+  relative to cwd (project root for project-level hooks), preserving the previously-working colocated
+  behavior.
+
+  The enforcement UAT now covers both layouts explicitly: a project-level/colocated scenario with
+  `CLAUDE_PLUGIN_ROOT` deleted from the spawn environment, and an installed-plugin scenario with the
+  hook cwd and the shim directory deliberately different and `CLAUDE_PLUGIN_ROOT` set — the case the
+  original workspace-colocated UAT could not detect. ([#56](https://github.com/ai-plugin-marketplace/tools/issues/56))
+
 ## 0.7.0
 
 ### Minor Changes

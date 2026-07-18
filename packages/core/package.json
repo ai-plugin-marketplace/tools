@@ -1,6 +1,6 @@
 {
   "name": "@ai-plugin-marketplace/core",
-  "version": "0.7.0",
+  "version": "0.8.0",
   "description": "Core build pipeline, validation, and scaffolding for the AI plugin marketplace toolkit.",
   "type": "module",
   "author": "Mike North <michael.l.north@gmail.com>",

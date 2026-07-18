@@ -12,7 +12,6 @@ unexplained denial.
 
 Both interpreters now fall back `reason` → `stopReason` when translating a `continue: false`
 denial to Cursor's flat control JSON (`agent_message` for `preToolUse`, `user_message` for
-`beforeSubmitPrompt`), preferring `reason` if a handler sets both. The existing `decision: "block"`
-
-- `reason` behavior is unchanged, and a `continue: false` payload with neither field still denies
-  without a message and without crashing. (#57)
+`beforeSubmitPrompt`), preferring `reason` if a handler sets both. The existing
+`decision: "block"` (with `reason`) behavior is unchanged, and a `continue: false` payload with
+neither field still denies without a message and without crashing. (#57)

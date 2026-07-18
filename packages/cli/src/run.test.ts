@@ -62,6 +62,11 @@ describe('aipm help/version', () => {
     }
   });
 
+  it('documents the build --force-downgrade override in help', async () => {
+    const { out } = await invoke(['--help']);
+    expect(out).toContain('--force-downgrade');
+  });
+
   it('prints the package version for --version, matching package.json', async () => {
     const { code, out } = await invoke(['--version']);
     expect(code).toBe(0);
@@ -182,6 +187,83 @@ describe('aipm init', () => {
     expect(code).toBe(0);
     expect(out).toContain('overwritten');
     expect(fs.readFileSync(ci, 'utf-8')).toBe(original);
+  });
+});
+
+describe('aipm build --force-downgrade (§4.3.1)', () => {
+  let tmpDir: string;
+
+  beforeEach(() => {
+    tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'cli-build-guard-'));
+  });
+
+  afterEach(() => {
+    if (tmpDir && fs.existsSync(tmpDir)) fs.rmSync(tmpDir, { recursive: true });
+  });
+
+  /** Scaffold a minimal single cursor plugin and return its directory. */
+  function writePlugin(): string {
+    const pluginDir = path.join(tmpDir, 'plugins', 'guard-plugin');
+    fs.mkdirSync(path.join(pluginDir, 'hooks'), { recursive: true });
+    fs.writeFileSync(
+      path.join(pluginDir, 'aipm.config.ts'),
+      "import { defineConfig } from '@ai-plugin-marketplace/core';\n\nexport default defineConfig({\n  version: '0.1.0',\n  targets: ['cursor'],\n});\n",
+      'utf-8',
+    );
+    fs.writeFileSync(
+      path.join(pluginDir, 'hooks', 'claude.yaml'),
+      'hooks:\n  PreToolUse:\n    - matcher: Bash\n      hooks:\n        - { type: command, command: ./guard.sh }\n',
+      'utf-8',
+    );
+    return pluginDir;
+  }
+
+  /** Read the `_generated.version` stamp of a json-field artifact. */
+  function stampVersion(absPath: string): string | undefined {
+    const obj = JSON.parse(fs.readFileSync(absPath, 'utf-8')) as {
+      _generated?: { version?: unknown };
+    };
+    const v = obj._generated?.version;
+    return typeof v === 'string' ? v : undefined;
+  }
+
+  it('build refuses (exit 1, names both versions) when the artifact was stamped by a newer toolkit', async () => {
+    const pluginDir = writePlugin();
+    await invoke(['build', pluginDir]);
+
+    // Simulate a stale install: the committed cursor.json was produced by a FUTURE generator.
+    const cursorJson = path.join(pluginDir, 'hooks', 'cursor.json');
+    const obj = JSON.parse(fs.readFileSync(cursorJson, 'utf-8')) as {
+      _generated: Record<string, unknown>;
+    };
+    obj._generated['version'] = '99.0.0';
+    fs.writeFileSync(cursorJson, JSON.stringify(obj, null, 2) + '\n', 'utf-8');
+
+    const { code, err } = await invoke(['build', pluginDir]);
+    expect(code).toBe(1);
+    expect(err).toContain('build failed');
+    expect(err).toContain('99.0.0'); // names the (newer) stamped version
+    expect(err).toContain('@ai-plugin-marketplace/core@'); // names the installed version too
+    expect(err).toContain('--force-downgrade'); // points at the override
+    // The artifact was NOT overwritten — its future stamp is intact.
+    expect(stampVersion(cursorJson)).toBe('99.0.0');
+  });
+
+  it('build --force-downgrade proceeds past the guard and restamps the artifact', async () => {
+    const pluginDir = writePlugin();
+    await invoke(['build', pluginDir]);
+    const cursorJson = path.join(pluginDir, 'hooks', 'cursor.json');
+    const obj = JSON.parse(fs.readFileSync(cursorJson, 'utf-8')) as {
+      _generated: Record<string, unknown>;
+    };
+    obj._generated['version'] = '99.0.0';
+    fs.writeFileSync(cursorJson, JSON.stringify(obj, null, 2) + '\n', 'utf-8');
+
+    // The flag must be recognized (not mistaken for the target path) and bypass the guard.
+    const { err } = await invoke(['build', '--force-downgrade', pluginDir]);
+    expect(err).not.toContain('build failed');
+    // Restamped DOWN off the future version — the build ran and rewrote the artifact.
+    expect(stampVersion(cursorJson)).not.toBe('99.0.0');
   });
 });
 

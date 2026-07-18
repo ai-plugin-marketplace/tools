@@ -21,27 +21,11 @@
 
 import * as fs from 'node:fs';
 import * as path from 'node:path';
-import { fileURLToPath } from 'node:url';
 
+import { getGeneratorVersion } from './generator-version.js';
 import { buildInitFiles } from './init-template.js';
 import { writeScaffoldSidecar } from './scaffold-refresh.js';
 import type { InitOptions } from './types.js';
-
-/**
- * Read this package's `package.json#version`, resolved relative to this module's location.
- *
- * When bundled to `dist/pipeline/init.js` this resolves `<pkgRoot>/package.json`; when run from
- * source as `src/pipeline/init.ts` it resolves the same file (both sit two levels up). Mirrors the
- * version-resolution approach in `cli/src/run.ts` and the entrypoint resolution in
- * `load-config.ts`.
- */
-function coreVersion(): string {
-  const here = fileURLToPath(import.meta.url);
-  // here = <pkgRoot>/<src|dist>/pipeline/init.<ts|js>; package.json sits two levels up.
-  const pkgPath = path.join(path.dirname(here), '..', '..', 'package.json');
-  const pkg = JSON.parse(fs.readFileSync(pkgPath, 'utf-8')) as { version: string };
-  return pkg.version;
-}
 
 /**
  * Resolve the default marketplace name from the environment: `${USER}-ai-plugins`. Falls back to
@@ -129,7 +113,7 @@ export async function runInit(targetDir: string, opts: InitOptions = {}): Promis
   // env-derived `${USER}-ai-plugins`, resolved here so `buildInitFiles` stays pure.
   const marketplaceName =
     resolveProvidedName(opts.marketplaceName, 'marketplaceName') ?? defaultMarketplaceName();
-  const core = coreVersion();
+  const core = getGeneratorVersion();
   const cli = opts.cliVersion ?? core;
   const files = buildInitFiles(name, marketplaceName, cli, core);
 

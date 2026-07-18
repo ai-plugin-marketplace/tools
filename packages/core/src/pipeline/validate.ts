@@ -50,6 +50,7 @@ import {
 import type { ConfigCache } from './load-config.js';
 import type { AipmWorkspace } from '../config.js';
 import type { Finding, TargetId, ValidateOptions, ValidationResult } from './types.js';
+import { withoutGeneratorVersion } from './sentinel.js';
 import { createRuleContext } from '../lint/context.js';
 import { diagnosticToFinding } from '../lint/diagnostic.js';
 import {
@@ -1090,7 +1091,14 @@ export function checkFreshness(
       continue;
     }
     const onDisk = fs.readFileSync(artifact.absPath, 'utf-8');
-    if (onDisk !== artifact.expectedContent) {
+    // Compare modulo the generator-version stamp (§4.3.1): a differently-versioned but
+    // content-identical artifact is NOT stale — version safety is the build downgrade guard's job,
+    // not freshness's. Content, source, or structural drift still differs after normalization.
+    const mode = artifact.sentinelMode;
+    if (
+      withoutGeneratorVersion(onDisk, mode) !==
+      withoutGeneratorVersion(artifact.expectedContent, mode)
+    ) {
       findings.push(
         freshnessFinding(
           ci,

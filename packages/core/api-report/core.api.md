@@ -60,6 +60,7 @@ export function build(targetPath: string, opts?: BuildOptions): Promise<BuildRes
 // @public
 export interface BuildOptions {
     failFast?: boolean;
+    forceDowngrade?: boolean;
 }
 
 // @public

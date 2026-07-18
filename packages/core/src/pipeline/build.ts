@@ -34,9 +34,14 @@ import { bundleKiroPlugin } from '../targets/kiro/bundle.js';
 import type { AipmWorkspace } from '../config.js';
 
 import { discoverPlugins } from './discover.js';
+import {
+  assertGeneratorNotDowngraded,
+  getGeneratorVersion,
+  type StampedArtifact,
+} from './generator-version.js';
 import { createConfigCache, loadPluginConfig, loadWorkspaceConfig } from './load-config.js';
 import type { ConfigCache } from './load-config.js';
-import { applyJsonSentinel, sidecarContent, sidecarPath } from './sentinel.js';
+import { applyJsonSentinel, readSentinelVersion, sidecarContent, sidecarPath } from './sentinel.js';
 import type { SentinelMode } from './sentinel.js';
 import { runValidate } from './validate.js';
 import type {
@@ -109,11 +114,16 @@ function findHooksYaml(pluginDir: string): { absPath: string; source: string } |
  * payload adapter are pure executable scripts and carry no inline sentinel — their companion
  * `.generated` sidecars do.
  *
+ * The `version` parameter is the `@ai-plugin-marketplace/core` version stamped into every
+ * sentinel-carrying artifact (§4.3.1); it defaults to the installed core version. Both `runBuild`
+ * (writing) and the freshness check (comparing) derive artifacts here, so the stamp cannot drift.
+ *
  * @throws {Error} If the hooks YAML is malformed or fails the Claude hooks schema.
  */
 export function computePluginHookArtifacts(
   pluginDir: string,
   envelope: readonly TargetId[],
+  version: string = getGeneratorVersion(),
 ): PluginHookArtifact[] {
   const yaml = findHooksYaml(pluginDir);
   if (!yaml) return [];
@@ -143,7 +153,7 @@ export function computePluginHookArtifacts(
     source: yaml.source,
     sentinelMode: 'sidecar',
     target: 'shared',
-    expectedContent: sidecarContent(yaml.source),
+    expectedContent: sidecarContent(yaml.source, version),
   });
 
   if (envelopeSet.has('claude')) {
@@ -154,7 +164,7 @@ export function computePluginHookArtifacts(
       source: yaml.source,
       sentinelMode: 'json-field',
       target: 'claude',
-      expectedContent: applyJsonSentinel(parsed, yaml.source),
+      expectedContent: applyJsonSentinel(parsed, yaml.source, version),
     });
   }
 
@@ -169,7 +179,7 @@ export function computePluginHookArtifacts(
       source: yaml.source,
       sentinelMode: 'json-field',
       target: 'gemini',
-      expectedContent: applyJsonSentinel(geminiObj, yaml.source),
+      expectedContent: applyJsonSentinel(geminiObj, yaml.source, version),
     });
   }
 
@@ -188,7 +198,7 @@ export function computePluginHookArtifacts(
       source: yaml.source,
       sentinelMode: 'json-field',
       target: 'cursor',
-      expectedContent: applyJsonSentinel(cursorObj, yaml.source),
+      expectedContent: applyJsonSentinel(cursorObj, yaml.source, version),
     });
 
     // Controller-hook shim (cursor-controller-shim.md §3.3/§3.4): when ≥1 gating-event hook is
@@ -210,7 +220,7 @@ export function computePluginHookArtifacts(
         source: yaml.source,
         sentinelMode: 'sidecar',
         target: 'cursor',
-        expectedContent: sidecarContent(yaml.source),
+        expectedContent: sidecarContent(yaml.source, version),
       });
     }
   }
@@ -894,6 +904,49 @@ async function buildOnePlugin(
 }
 
 // ---------------------------------------------------------------------------
+// Generator-version downgrade guard (§4.3.1)
+// ---------------------------------------------------------------------------
+
+/**
+ * Scan the EXISTING (committed) sentinel-carrying hook artifacts under each plugin for their
+ * stamped generator version (§4.3.1), returning one {@link StampedArtifact} per artifact that
+ * carries a readable version stamp. Artifacts that are absent, unstamped (produced before version
+ * stamping), or whose stamp is unreadable are simply omitted — they impose no downgrade constraint.
+ *
+ * Reuses {@link computePluginHookArtifacts} to enumerate exactly the files the build owns, so the
+ * guard inspects the same artifact set the build would overwrite (never author-authored files).
+ * The enumeration's stamped `expectedContent` is irrelevant here — only the on-disk bytes are read.
+ */
+async function collectStampedArtifacts(
+  repoRoot: string,
+  pluginDirs: readonly string[],
+  cache: ConfigCache,
+): Promise<StampedArtifact[]> {
+  const stamped: StampedArtifact[] = [];
+  for (const pluginDir of pluginDirs) {
+    const config = await loadPluginConfig(pluginDir, cache);
+    let artifacts: PluginHookArtifact[];
+    try {
+      artifacts = computePluginHookArtifacts(pluginDir, config.targets);
+    } catch {
+      // A malformed hooks source can't be enumerated; the build itself will surface the error.
+      continue;
+    }
+    for (const artifact of artifacts) {
+      if (!fs.existsSync(artifact.absPath)) continue;
+      const onDisk = fs.readFileSync(artifact.absPath, 'utf-8');
+      const version = readSentinelVersion(onDisk, artifact.sentinelMode);
+      if (version === undefined) continue;
+      stamped.push({
+        path: path.relative(repoRoot, artifact.absPath),
+        version,
+      });
+    }
+  }
+  return stamped;
+}
+
+// ---------------------------------------------------------------------------
 // Public entry point
 // ---------------------------------------------------------------------------
 
@@ -917,6 +970,15 @@ export async function runBuild(targetPath: string, opts?: BuildOptions): Promise
   // One per-invocation config memo shared across the build loop and registry collection, so each
   // plugin's aipm.config.ts is transpiled once rather than reloaded per phase (see ConfigCache).
   const configCache = createConfigCache();
+
+  // ── Generator-version downgrade guard (§4.3.1) ────────────────────────────
+  // BEFORE writing anything, refuse to build if the installed generator is OLDER than the version
+  // stamped into an existing committed artifact — otherwise the build would silently revert those
+  // files to the older generator's output. The guard is all-or-nothing: on a refusal nothing is
+  // written, so even sentinel-less artifacts (dist/**, registries) are protected from the stale
+  // toolkit. Equal-or-newer installs, unstamped/first-time trees, and `--force-downgrade` proceed.
+  const stampedArtifacts = await collectStampedArtifacts(repoRoot, pluginDirs, configCache);
+  assertGeneratorNotDowngraded(getGeneratorVersion(), stampedArtifacts, opts?.forceDowngrade);
 
   const results: BuildResult[] = [];
   for (const pluginDir of pluginDirs) {

@@ -27,9 +27,11 @@ import { convertClaudeHooksYamlToCursorJson } from '../targets/cursor/transform.
 import { CURSOR_SHIM_FILENAME, CURSOR_SHIM_RUNNER_SOURCE } from '../targets/cursor/shim-runner.js';
 import { convertClaudeHooksYamlToGeminiJson } from '../targets/gemini/transform.js';
 import { computePluginHookArtifacts, runBuild } from './build.js';
+import { GeneratorDowngradeError, getGeneratorVersion } from './generator-version.js';
 import {
   hasSentinel,
   readSentinelSource,
+  readSentinelVersion,
   sidecarContent,
   sidecarPath,
   stripSentinel,
@@ -43,6 +45,13 @@ import {
 } from '../test-support/synth-plugin.js';
 import type { SynthRepo } from '../test-support/synth-plugin.js';
 import { TEMPLATE_REPO_AVAILABLE } from '../test-support/template-repo.js';
+
+/**
+ * Explicit generator-version stamp (§4.3.1) used where a test computes an artifact AND its expected
+ * sentinel bytes: passing the same version to `computePluginHookArtifacts` and `sidecarContent`
+ * keeps the assertion independent of the installed core version.
+ */
+const STAMP = '9.9.9';
 
 const describeMaybe = TEMPLATE_REPO_AVAILABLE ? describe : describe.skip;
 
@@ -397,7 +406,7 @@ describe('computePluginHookArtifacts — cursor shim artifacts', () => {
 
   it('emits cursor.json + cursor-shim.mjs + the .generated sidecar for a gating source (§3.3)', () => {
     pluginDir = writePluginWithHooks(GATING_YAML);
-    const artifacts = computePluginHookArtifacts(pluginDir, ['cursor']);
+    const artifacts = computePluginHookArtifacts(pluginDir, ['cursor'], STAMP);
     const shimAbs = path.join(pluginDir, 'hooks', CURSOR_SHIM_FILENAME);
 
     const cursorJson = artifacts.find(
@@ -417,7 +426,7 @@ describe('computePluginHookArtifacts — cursor shim artifacts', () => {
     // The sidecar carries the sentinel (the .mjs is pure JS); it names the author-authored source.
     expect(sidecar).toBeDefined();
     expect(sidecar?.absPath).toBe(`${shimAbs}.generated`);
-    expect(sidecar?.expectedContent).toBe(sidecarContent('hooks/claude.yaml'));
+    expect(sidecar?.expectedContent).toBe(sidecarContent('hooks/claude.yaml', STAMP));
     expect(hasSentinel(sidecar?.expectedContent ?? '', 'sidecar')).toBe(true);
     expect(readSentinelSource(sidecar?.expectedContent ?? '', 'sidecar')).toBe('hooks/claude.yaml');
   });
@@ -487,6 +496,7 @@ describe('computePluginHookArtifacts — payload adapter', () => {
       const artifacts = computePluginHookArtifacts(
         pluginDir,
         envelope as ('claude' | 'cursor' | 'gemini')[],
+        STAMP,
       );
       const adapter = artifacts.find((a) => a.absPath === adapterAbs);
       const sidecar = artifacts.find((a) => a.absPath === sidecarPath(adapterAbs));
@@ -499,7 +509,7 @@ describe('computePluginHookArtifacts — payload adapter', () => {
 
       expect(sidecar, `envelope ${envelope.join(',')}`).toBeDefined();
       expect(sidecar?.absPath).toBe(`${adapterAbs}.generated`);
-      expect(sidecar?.expectedContent).toBe(sidecarContent('hooks/claude.yaml'));
+      expect(sidecar?.expectedContent).toBe(sidecarContent('hooks/claude.yaml', STAMP));
       expect(hasSentinel(sidecar?.expectedContent ?? '', 'sidecar')).toBe(true);
       expect(readSentinelSource(sidecar?.expectedContent ?? '', 'sidecar')).toBe(
         'hooks/claude.yaml',
@@ -605,5 +615,106 @@ describe('runBuild — payload adapter executable bit (§1/§11 regression)', ()
     expect((fs.statSync(adapterAbs).mode & 0o111) !== 0).toBe(true);
     // The .generated sidecar is never invoked directly — it must NOT carry the executable bit.
     expect((fs.statSync(sidecarAbs).mode & 0o111) !== 0).toBe(false);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// runBuild — generator-version downgrade guard (template-independent; §4.3.1)
+//
+// Regression for issue #76: a stale installed toolkit that is OLDER than the version stamped into
+// a committed artifact must REFUSE to build (rather than silently revert the artifact to its older
+// output). Exercises the real `runBuild` path end-to-end: build once to stamp, tamper the stamp to
+// a future version to simulate "committed by a newer toolkit", then rebuild and assert it refuses
+// AND leaves the artifact untouched.
+// ---------------------------------------------------------------------------
+
+describe('runBuild — generator-version downgrade guard (§4.3.1)', () => {
+  let repoRoot: string | undefined;
+
+  afterEach(() => {
+    if (repoRoot && fs.existsSync(repoRoot)) fs.rmSync(repoRoot, { recursive: true });
+  });
+
+  /** Scaffold a minimal single-plugin repo declaring `cursor` with a gating hooks source. */
+  function writeMinimalPlugin(): string {
+    repoRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'aipm-downgrade-'));
+    const pluginDir = path.join(repoRoot, 'plugins', 'guard-plugin');
+    fs.mkdirSync(path.join(pluginDir, 'hooks'), { recursive: true });
+    fs.writeFileSync(
+      path.join(pluginDir, 'aipm.config.ts'),
+      "import { defineConfig } from '@ai-plugin-marketplace/core';\n\nexport default defineConfig({\n  version: '0.1.0',\n  targets: ['cursor'],\n});\n",
+      'utf-8',
+    );
+    fs.writeFileSync(
+      path.join(pluginDir, 'hooks', 'claude.yaml'),
+      'hooks:\n  PreToolUse:\n    - matcher: Bash\n      hooks:\n        - { type: command, command: ./guard.sh }\n',
+      'utf-8',
+    );
+    return pluginDir;
+  }
+
+  /** Rewrite the `_generated.version` stamp of a json-field artifact to `version`. */
+  function restampJsonArtifact(absPath: string, version: string): void {
+    const obj = JSON.parse(fs.readFileSync(absPath, 'utf-8')) as {
+      _generated: Record<string, unknown>;
+    };
+    obj._generated['version'] = version;
+    fs.writeFileSync(absPath, JSON.stringify(obj, null, 2) + '\n', 'utf-8');
+  }
+
+  it('fresh generation stamps the installed generator version (criterion 2)', async () => {
+    const pluginDir = writeMinimalPlugin();
+    await runBuild(pluginDir);
+    const cursorJson = fs.readFileSync(path.join(pluginDir, 'hooks', 'cursor.json'), 'utf-8');
+    expect(readSentinelVersion(cursorJson, 'json-field')).toBe(getGeneratorVersion());
+  });
+
+  it('a same-version rebuild proceeds and restamps, no error (criterion 3/4)', async () => {
+    const pluginDir = writeMinimalPlugin();
+    await runBuild(pluginDir);
+    // Second build sees an artifact stamped by the SAME (installed) version → allowed.
+    await expect(runBuild(pluginDir)).resolves.toBeDefined();
+    const cursorJson = fs.readFileSync(path.join(pluginDir, 'hooks', 'cursor.json'), 'utf-8');
+    expect(readSentinelVersion(cursorJson, 'json-field')).toBe(getGeneratorVersion());
+  });
+
+  it('REFUSES (throws, names both versions) and does NOT rewrite when the installed toolkit is older (criterion 1/5)', async () => {
+    const pluginDir = writeMinimalPlugin();
+    await runBuild(pluginDir);
+
+    // Simulate a stale install: the committed artifact was produced by a FUTURE generator, newer
+    // than the one now running.
+    const cursorJsonPath = path.join(pluginDir, 'hooks', 'cursor.json');
+    const futureVersion = '99.0.0';
+    restampJsonArtifact(cursorJsonPath, futureVersion);
+    const tamperedBytes = fs.readFileSync(cursorJsonPath, 'utf-8');
+
+    // The build must refuse.
+    const installed = getGeneratorVersion();
+    let thrown: unknown;
+    try {
+      await runBuild(pluginDir);
+    } catch (e) {
+      thrown = e;
+    }
+    expect(thrown).toBeInstanceOf(GeneratorDowngradeError);
+    const err = thrown as GeneratorDowngradeError;
+    // Message names BOTH versions.
+    expect(err.message).toContain(`@ai-plugin-marketplace/core@${installed}`);
+    expect(err.message).toContain(`@ai-plugin-marketplace/core@${futureVersion}`);
+
+    // And it did NOT overwrite the artifact (the whole build aborted before any write).
+    expect(fs.readFileSync(cursorJsonPath, 'utf-8')).toBe(tamperedBytes);
+  });
+
+  it('proceeds under forceDowngrade and restamps with the installed (older) version', async () => {
+    const pluginDir = writeMinimalPlugin();
+    await runBuild(pluginDir);
+    restampJsonArtifact(path.join(pluginDir, 'hooks', 'cursor.json'), '99.0.0');
+
+    await expect(runBuild(pluginDir, { forceDowngrade: true })).resolves.toBeDefined();
+    const cursorJson = fs.readFileSync(path.join(pluginDir, 'hooks', 'cursor.json'), 'utf-8');
+    // Restamped down to the installed version (the guard was overridden).
+    expect(readSentinelVersion(cursorJson, 'json-field')).toBe(getGeneratorVersion());
   });
 });

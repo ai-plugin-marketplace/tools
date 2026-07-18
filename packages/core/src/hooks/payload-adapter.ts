@@ -120,19 +120,40 @@ export const PAYLOAD_ADAPTER_SCHEMA = {
 } as const;
 
 /**
- * Render the `--schema` response body as a canonical (sorted-key, no-whitespace-drift) JSON string
- * that the emitted script prints verbatim. Combines the single-sourced contract version and schema
- * object so neither can be hand-edited independently in the shell script (spec §8, D7). The JSON
- * Schema's own prose (§13) contains an apostrophe (`harness's`), so this is escaped for safe
- * splicing into the emitted script's single-quoted `sh` literal rather than assuming the schema
- * text is quote-free.
+ * Deep-sort an arbitrary JSON-safe value's object keys, recursively — the generation-time
+ * equivalent of `jq -S`'s key-sorting behavior. Used once, at module load, so the emitted
+ * `--schema` literal is already sorted and never needs `jq -S .` spawned at runtime (issue #58,
+ * nit 2). Arrays keep their element order; only object keys are sorted.
+ */
+function deepSortKeys(value: unknown): unknown {
+  if (Array.isArray(value)) return value.map(deepSortKeys);
+  if (value !== null && typeof value === 'object') {
+    const sorted: Record<string, unknown> = {};
+    for (const key of Object.keys(value as Record<string, unknown>).sort()) {
+      sorted[key] = deepSortKeys((value as Record<string, unknown>)[key]);
+    }
+    return sorted;
+  }
+  return value;
+}
+
+/**
+ * Render the `--schema` response body as a canonical (deep-sorted-key, 2-space-indented) JSON
+ * string that the emitted script `printf`s verbatim — byte-identical to piping the unsorted,
+ * compact form through `jq -S .` at runtime (verified in `payload-adapter.test.ts`), but computed
+ * once here at generation time instead of on every invocation (issue #58, nit 2: no runtime `jq`
+ * spawn for this branch). Combines the single-sourced contract version and schema object so
+ * neither can be hand-edited independently in the shell script (spec §8, D7). The JSON Schema's
+ * own prose (§13) contains an apostrophe (`harness's`), so this is escaped for safe splicing into
+ * the emitted script's single-quoted `sh` literal rather than assuming the schema text is
+ * quote-free.
  */
 function renderSchemaResponseLiteral(): string {
   const response = {
     contractVersion: PAYLOAD_ADAPTER_CONTRACT_VERSION,
     schema: PAYLOAD_ADAPTER_SCHEMA,
   };
-  return escapeForShSingleQuotes(JSON.stringify(response));
+  return escapeForShSingleQuotes(JSON.stringify(deepSortKeys(response), null, 2));
 }
 
 /**
@@ -161,8 +182,8 @@ function renderSchemaResponseLiteral(): string {
 export const PAYLOAD_ADAPTER_SOURCE = `#!/bin/sh
 # Generated cross-harness hook payload adapter. Do not edit directly.
 # Normalizes a Claude Code or Codex hook's raw stdin payload into the canonical shape documented
-# at docs/specs/payload-adapter.md. Author hooks/claude.yaml and run "aipm build" -- the sentinel
-# lives in payload-adapter.generated.
+# at docs/specs/payload-adapter.md in @ai-plugin-marketplace/tools. Author hooks/claude.yaml and
+# run "aipm build" -- the sentinel lives in payload-adapter.generated.
 
 # D8 (spec section 9): jq is a runtime dependency. Its absence is a documented degraded mode, not
 # a failure -- pass stdin through byte-for-byte unchanged and exit 0, before any parsing or argv
@@ -173,10 +194,12 @@ if ! command -v jq >/dev/null 2>&1; then
 fi
 
 # D6/D7 (spec section 8): the --schema response combines the single-sourced contract version and
-# the section 13 JSON Schema. Generated from PAYLOAD_ADAPTER_CONTRACT_VERSION / _SCHEMA -- never a
-# hand-duplicated literal.
+# the section 13 JSON Schema. Generated from PAYLOAD_ADAPTER_CONTRACT_VERSION / _SCHEMA, already
+# deep-sorted and pretty-printed at generation time (byte-identical to piping the compact form
+# through "jq -S ." -- see renderSchemaResponseLiteral) -- never a hand-duplicated literal, and no
+# runtime jq spawn for this branch.
 if [ "\${1:-}" = "--schema" ]; then
-  printf '%s' '${renderSchemaResponseLiteral()}' | jq -S .
+  printf '%s\\n' '${renderSchemaResponseLiteral()}'
   exit 0
 fi
 
@@ -184,7 +207,7 @@ fi
 # byte-for-byte (spec section 5.1 step 1: harness detection is skipped entirely on parse failure OR
 # a non-object top level -- no envelope can safely be added to non-JSON, or to a JSON array,
 # number, string, boolean, or null).
-tmp=$(mktemp 2>/dev/null) || { cat; exit 0; }
+tmp=$(mktemp "\${TMPDIR:-/tmp}/payload-adapter.XXXXXX" 2>/dev/null) || { cat; exit 0; }
 trap 'rm -f "$tmp"' EXIT INT TERM
 cat > "$tmp"
 

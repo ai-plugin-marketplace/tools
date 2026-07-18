@@ -31,8 +31,9 @@ jobs:
           # Trusted publishing (OIDC) requires npm >=11.5.1 and Node >=22.14.0.
           node-version: '24.14.0'
           registry-url: 'https://registry.npmjs.org'
-          # setup-node enables package-manager caching automatically; a poisoned
-          # cache in a publishing job could expose the OIDC-derived publish token.
+          # Disabled as defense-in-depth for this publishing job, per npm's
+          # trusted-publishing guidance: a poisoned cache could expose the
+          # OIDC-derived publish token.
           package-manager-cache: false
 
       - name: Show release toolchain

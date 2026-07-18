@@ -163,6 +163,14 @@ function interpretPreToolUse(parsed) {
     }
     if (permission === undefined && parsed.continue === false) {
       permission = 'deny';
+      // A top-level continue:false denial carries its user-facing message in stopReason (the
+      // hooks contract keeps 'reason' scoped to the decision:'block' shape). Prefer reason if a
+      // handler set both (defensive), else fall back to stopReason (issue #57).
+      if (typeof parsed.reason === 'string') {
+        agentMessage = parsed.reason;
+      } else if (typeof parsed.stopReason === 'string') {
+        agentMessage = parsed.stopReason;
+      }
     }
     if (parsed.updatedInput !== undefined) updatedInput = parsed.updatedInput;
     if (permission !== undefined) {
@@ -189,7 +197,15 @@ function interpretUserPromptSubmit(parsed) {
     }
     if (parsed.decision === 'block' || parsed.continue === false) {
       const control = { continue: false };
-      if (typeof parsed.reason === 'string') control.user_message = parsed.reason;
+      // Same reason -> stopReason fallback as interpretPreToolUse (issue #57): decision:'block'
+      // carries its message in 'reason' only; a top-level continue:false denial carries it in
+      // 'reason' or falls back to 'stopReason'. stopReason must never be consulted for the
+      // decision:'block' shape. Prefer 'reason' if a handler set both (defensive).
+      if (typeof parsed.reason === 'string') {
+        control.user_message = parsed.reason;
+      } else if (parsed.continue === false && typeof parsed.stopReason === 'string') {
+        control.user_message = parsed.stopReason;
+      }
       return control;
     }
     const control = { continue: true };

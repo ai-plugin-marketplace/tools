@@ -240,23 +240,24 @@ static constant; freshness compares it and its `.generated` sidecar.
 
 **`PreToolUse` handler output → Cursor `preToolUse`:**
 
-| Claude output                                                   | Cursor output                                                               |
-| --------------------------------------------------------------- | --------------------------------------------------------------------------- |
-| `hookSpecificOutput.permissionDecision: "allow"\|"deny"\|"ask"` | `permission: "allow"\|"deny"\|"ask"`                                        |
-| `decision: "block"` (+ `reason`)                                | `permission: "deny"`, `agent_message: <reason>`                             |
-| `hookSpecificOutput.permissionDecisionReason` / `reason`        | `agent_message`                                                             |
-| `hookSpecificOutput.additionalContext`                          | `additional_context`                                                        |
-| `continue: false`                                               | `permission: "deny"` (a stop-the-turn signal maps to deny at the tool gate) |
-| no recognized decision, exit 0                                  | `permission: "allow"` (handler declined to gate)                            |
-| `updatedInput` (rare)                                           | `updated_input`                                                             |
+| Claude output                                                   | Cursor output                                                                                                                                                                                                                           |
+| --------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `hookSpecificOutput.permissionDecision: "allow"\|"deny"\|"ask"` | `permission: "allow"\|"deny"\|"ask"`                                                                                                                                                                                                    |
+| `decision: "block"` (+ `reason`)                                | `permission: "deny"`, `agent_message: <reason>`                                                                                                                                                                                         |
+| `hookSpecificOutput.permissionDecisionReason` / `reason`        | `agent_message`                                                                                                                                                                                                                         |
+| `hookSpecificOutput.additionalContext`                          | `additional_context`                                                                                                                                                                                                                    |
+| `continue: false` (+ `reason` or `stopReason`)                  | `permission: "deny"`, `agent_message: <reason ?? stopReason>` (a stop-the-turn signal maps to deny at the tool gate; message falls back `reason` → `stopReason` per the hooks contract, since `reason` is scoped to `decision:"block"`) |
+| no recognized decision, exit 0                                  | `permission: "allow"` (handler declined to gate)                                                                                                                                                                                        |
+| `updatedInput` (rare)                                           | `updated_input`                                                                                                                                                                                                                         |
 
 **`UserPromptSubmit` handler output → Cursor `beforeSubmitPrompt`:**
 
-| Claude output                          | Cursor output                               |
-| -------------------------------------- | ------------------------------------------- |
-| `decision: "block"` (+ `reason`)       | `continue: false`, `user_message: <reason>` |
-| `hookSpecificOutput.additionalContext` | `additional_context`                        |
-| no recognized decision, exit 0         | `continue: true`                            |
+| Claude output                                  | Cursor output                                             |
+| ---------------------------------------------- | --------------------------------------------------------- |
+| `decision: "block"` (+ `reason`)               | `continue: false`, `user_message: <reason>`               |
+| `continue: false` (+ `reason` or `stopReason`) | `continue: false`, `user_message: <reason ?? stopReason>` |
+| `hookSpecificOutput.additionalContext`         | `additional_context`                                      |
+| no recognized decision, exit 0                 | `continue: true`                                          |
 
 Fidelity edges are documented, not hidden: Claude's `ask` has a direct Cursor equivalent for
 `preToolUse`; `continue:false` is collapsed to a tool-level deny. Cases the tables don't recognize

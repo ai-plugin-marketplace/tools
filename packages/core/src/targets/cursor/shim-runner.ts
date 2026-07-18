@@ -76,8 +76,9 @@ function renderInverseToolTableLiteral(table: Readonly<Record<string, string>>):
  */
 export const CURSOR_SHIM_RUNNER_SOURCE = `// Generated Cursor controller-hook shim runner. Do not edit directly.
 // Translates a Claude-authored gating hook's stdin/stdout contract to Cursor's and enforces
-// fail-closed. See docs/specs/cursor-controller-shim.md (issue #37). Author the source
-// hooks/claude.yaml and run "aipm build" — the sentinel lives in cursor-shim.mjs.generated.
+// fail-closed. See docs/specs/cursor-controller-shim.md in @ai-plugin-marketplace/tools (issue
+// #37). Author the source hooks/claude.yaml and run "aipm build" — the sentinel lives in
+// cursor-shim.mjs.generated.
 import { spawnSync } from 'node:child_process';
 
 // Inverse of the transform's CLAUDE_TO_CURSOR_TOOLS (Shell -> Bash; identity otherwise).

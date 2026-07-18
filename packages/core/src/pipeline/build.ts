@@ -92,11 +92,13 @@ function findHooksYaml(pluginDir: string): { absPath: string; source: string } |
  * Compute every in-plugin-dir generated hook JSON for a plugin given its envelope, **without
  * writing**. This is the single source of truth shared by `runBuild` and the freshness check.
  *
- * - A hooks YAML present at all (regardless of envelope) → `hooks/payload-adapter` (the static
- *   cross-harness `sh`+`jq` payload-normalization filter, sidecar-carried sentinel) and its
- *   `hooks/payload-adapter.generated` sidecar (docs/specs/payload-adapter.md §11, D10). Emission
- *   does not depend on which target(s) the envelope declares — the adapter is useful to any
- *   handler, gating or not.
+ * - A hooks YAML present AND declaring at least one hook event (i.e. `hooks:` is non-empty) →
+ *   `hooks/payload-adapter` (the static cross-harness `sh`+`jq` payload-normalization filter,
+ *   sidecar-carried sentinel) and its `hooks/payload-adapter.generated` sidecar
+ *   (docs/specs/payload-adapter.md §11, D10). Emission does not depend on which target(s) the
+ *   envelope declares — the adapter is useful to any handler, gating or not — but it IS skipped
+ *   for a hooks YAML whose `hooks:` map is empty (`{}`): nothing could ever invoke it, so emitting
+ *   the adapter would be dead weight (issue #58, nit 1).
  * - `claude` in envelope + a hooks YAML present → `hooks/claude.json` (Claude JSON + sentinel).
  * - `gemini` in envelope + a hooks YAML present → `hooks/hooks.json` (Gemini JSON + sentinel).
  * - `cursor` in envelope + a hooks YAML present → `hooks/cursor.json` (Cursor JSON + sentinel), plus
@@ -122,33 +124,42 @@ export function computePluginHookArtifacts(
   const artifacts: PluginHookArtifact[] = [];
   const yamlContent = fs.readFileSync(yaml.absPath, 'utf-8');
 
+  // Parsed+validated once, up front, regardless of envelope: `hooks/claude.yaml` is always
+  // authored in the Claude Code dialect (this module's own doc), so this is the single source of
+  // truth both for gating payload-adapter emission below (issue #58 nit 1) and, when 'claude' is
+  // declared, for `hooks/claude.json` — the YAML is never parsed twice.
+  const parsed = parseClaudeHooksYaml(yamlContent);
+  const hasHooks = Object.keys(parsed.hooks).length > 0;
+
   // Payload adapter (docs/specs/payload-adapter.md §11, D10): emitted whenever a plugin authors a
-  // hooks YAML at all, independent of the target envelope — any handler, gating or not, benefits
-  // from the normalized cross-harness payload. A pure, plugin-independent script, so it carries a
-  // sidecar sentinel (like the cursor shim) rather than an inline one. No single target's build
-  // step owns it, so it is attributed to `'shared'` rather than an arbitrary envelope member.
-  const payloadAdapterAbsPath = path.join(pluginDir, 'hooks', PAYLOAD_ADAPTER_FILENAME);
-  artifacts.push({
-    absPath: payloadAdapterAbsPath,
-    source: yaml.source,
-    sentinelMode: 'sidecar',
-    target: 'shared',
-    expectedContent: PAYLOAD_ADAPTER_SOURCE,
-    // Spec §1/§11: the adapter is invoked directly (`"${CLAUDE_PLUGIN_ROOT}/hooks/payload-adapter"`),
-    // so it needs the executable bit — unlike its `.generated` sidecar below, which is never run.
-    executable: true,
-  });
-  artifacts.push({
-    absPath: sidecarPath(payloadAdapterAbsPath),
-    source: yaml.source,
-    sentinelMode: 'sidecar',
-    target: 'shared',
-    expectedContent: sidecarContent(yaml.source),
-  });
+  // hooks YAML that declares at least one hook event, independent of the target envelope — any
+  // handler, gating or not, benefits from the normalized cross-harness payload. A pure,
+  // plugin-independent script, so it carries a sidecar sentinel (like the cursor shim) rather than
+  // an inline one. No single target's build step owns it, so it is attributed to `'shared'` rather
+  // than an arbitrary envelope member. Skipped entirely for a hooks YAML whose `hooks:` map is
+  // empty (`{}`) — nothing could ever invoke it (issue #58, nit 1).
+  if (hasHooks) {
+    const payloadAdapterAbsPath = path.join(pluginDir, 'hooks', PAYLOAD_ADAPTER_FILENAME);
+    artifacts.push({
+      absPath: payloadAdapterAbsPath,
+      source: yaml.source,
+      sentinelMode: 'sidecar',
+      target: 'shared',
+      expectedContent: PAYLOAD_ADAPTER_SOURCE,
+      // Spec §1/§11: the adapter is invoked directly (`"${CLAUDE_PLUGIN_ROOT}/hooks/payload-adapter"`),
+      // so it needs the executable bit — unlike its `.generated` sidecar below, which is never run.
+      executable: true,
+    });
+    artifacts.push({
+      absPath: sidecarPath(payloadAdapterAbsPath),
+      source: yaml.source,
+      sentinelMode: 'sidecar',
+      target: 'shared',
+      expectedContent: sidecarContent(yaml.source),
+    });
+  }
 
   if (envelopeSet.has('claude')) {
-    // Parse+validate to a typed object, then attach the JSON sentinel.
-    const parsed = parseClaudeHooksYaml(yamlContent);
     artifacts.push({
       absPath: path.join(pluginDir, 'hooks', 'claude.json'),
       source: yaml.source,

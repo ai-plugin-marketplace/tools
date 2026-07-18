@@ -131,6 +131,33 @@ For a plugin with a `hooks/claude.yaml` and `cursor` in its envelope:
 - **`hooks/cursor-shim.mjs`** is emitted once (when any gating-event hook exists) as a committed,
   sentinel-carrying generated file (§3.4).
 
+### 3.1.1 Colocated mode and the author's own handler command
+
+The `:-.` fallback in §3.1 only anchors the **emitted shim path** — `hooks/cursor-shim.mjs` itself.
+It does not, and cannot, touch the string after `--`: that's the plugin author's own handler
+command from `hooks/claude.yaml`, passed through verbatim (§3.1's third bullet; the emitter never
+rewrites author commands, by design — rewriting an author's trusted command string is out of
+scope for a translation shim). If an author writes that command as
+`${CLAUDE_PLUGIN_ROOT}/scripts/gate.sh` with no fallback — the natural thing to write, and correct
+for a marketplace-installed plugin, where Cursor is expected to set the variable (confirmed by
+Cursor staff forum posts, §3.1) — it resolves to an empty path prefix in colocated/project-level
+mode (§3.1), where Cursor sets no plugin-root variable at all. The shim itself now starts (the
+emitted path anchored correctly), but the handler it invokes fails to resolve, and because the
+entry carries `failClosed: true` (§2.2), every gated call is denied. This is the same class of
+failure the shim-path anchoring (issue #56) fixed, one level deeper — this time in code the
+toolkit doesn't generate and can't rewrite.
+
+**Convention:** a plugin that intends to support colocated/project-level Cursor hooks should author
+its own gating-hook handler commands with the same shell fallback:
+`${CLAUDE_PLUGIN_ROOT:-.}/scripts/gate.sh` rather than `${CLAUDE_PLUGIN_ROOT}/scripts/gate.sh`.
+This is authoring guidance, not a toolkit behavior change — see
+[`docs/guides/hook-handler-authoring.md`](../guides/hook-handler-authoring.md#colocated-mode-and-the-claude_plugin_root-fallback)
+for the full writeup, including per-harness caveats.
+
+A future validate-time lint that flags a bare `${CLAUDE_PLUGIN_ROOT}` in a gating-hook handler
+command when the plugin opts into colocated support is a plausible follow-up, but is not
+implemented; see the authoring guide for the same forward pointer.
+
 ### 3.2 The shim runner (`hooks/cursor-shim.mjs`)
 
 A deterministic, plugin-independent Node script (byte-identical across plugins — its bytes are a

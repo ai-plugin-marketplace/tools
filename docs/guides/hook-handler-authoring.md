@@ -181,3 +181,59 @@ either harness instead of re-deriving the rename itself. What the adapter delibe
 **not** do is make `agent_type` _values_ comparable across harnesses (§12) — a handler that wants
 to branch on sub-agent _type_ (not just sub-agent _presence_, which `is_subagent` already covers)
 must account for the differing default vocab itself, for example by branching on `harness.name`.
+
+## Colocated mode and the `CLAUDE_PLUGIN_ROOT` fallback
+
+Every example above anchors the adapter invocation itself with a shell fallback —
+`${CLAUDE_PLUGIN_ROOT:-$PLUGIN_ROOT}` — rather than a bare `${CLAUDE_PLUGIN_ROOT}`. That same
+habit matters for **the rest of your handler command too**, not just the adapter call, if your
+plugin is meant to work as project-level/colocated hooks (a project's own `hooks/claude.yaml`,
+not an installed marketplace plugin) in addition to a normal installed-plugin layout.
+
+The gap this closes: the [cursor-controller-shim spec](../specs/cursor-controller-shim.md#311-colocated-mode-and-the-authors-own-handler-command)
+documents that the shim's own emitted path is anchored with `${CLAUDE_PLUGIN_ROOT:-.}` so it still
+resolves when Cursor sets no plugin-root variable at all (colocated mode). But the **handler
+command** after the shim's `--` sentinel is your own string from `hooks/claude.yaml`, and the
+emitter passes it through verbatim — it is never rewritten. If you write that command as
+`${CLAUDE_PLUGIN_ROOT}/scripts/gate.sh` with no fallback (the natural thing to write, and correct
+for a marketplace-installed plugin, where Cursor is expected to set the variable (confirmed by
+Cursor staff forum posts, cursor-controller-shim spec §3.1), it resolves to an empty prefix in
+colocated mode. The shim itself starts fine — only your handler fails to resolve — but because
+gating-hook entries carry `failClosed: true`, every gated call is denied. It's the same symptom
+as an unanchored shim path, one level deeper, in a command the toolkit doesn't generate and can't
+fix on your behalf.
+
+**Convention:** if your plugin intends to support colocated/project-level hooks, author gating-hook
+handler commands with the same fallback form:
+
+```sh
+${CLAUDE_PLUGIN_ROOT:-.}/scripts/gate.sh
+```
+
+rather than:
+
+```sh
+${CLAUDE_PLUGIN_ROOT}/scripts/gate.sh
+```
+
+**Per-harness caveats — verify before relying on this for a harness not listed here:**
+
+- **Claude Code**: performs a textual substitution of the exact `${CLAUDE_PLUGIN_ROOT}` token in
+  hook commands, but also exports `CLAUDE_PLUGIN_ROOT` into the handler's environment. Because the
+  variable is exported (not just substituted), the shell-fallback form
+  `${CLAUDE_PLUGIN_ROOT:-.}` should still resolve correctly when the shell itself expands it —
+  the textual substitution and the exported variable agree.
+- **Cursor**: mixed evidence (cursor-controller-shim spec §3.1). Installed-plugin layout is only
+  staff-forum-confirmed to set the variable (Cursor's official docs document no plugin-root
+  variable at all). Colocated/project-level layout is empirically verified — 2026-07-16, against a
+  real `cursor-agent` build — to set **no** plugin-root variable, with commands running through a
+  real shell where POSIX `${VAR:-fallback}` expansion works. This colocated case is the one the
+  convention exists for.
+- **Codex**: not yet confirmed. Treat Codex handler-command behavior under this fallback form as
+  **verify per harness** rather than assuming parity with Claude Code — do not rely on it there
+  until it's been checked against a real Codex invocation.
+
+A future validate-time lint that flags a bare `${CLAUDE_PLUGIN_ROOT}` in a gating-hook handler
+command, when a plugin has opted into colocated support, is a plausible follow-up to catch this
+class of mistake at build time instead of at hook-invocation time. It is not implemented today —
+this section is the interim guidance.

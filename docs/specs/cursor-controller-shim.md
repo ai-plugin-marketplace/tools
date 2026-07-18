@@ -139,12 +139,13 @@ command from `hooks/claude.yaml`, passed through verbatim (§3.1's third bullet;
 rewrites author commands, by design — rewriting an author's trusted command string is out of
 scope for a translation shim). If an author writes that command as
 `${CLAUDE_PLUGIN_ROOT}/scripts/gate.sh` with no fallback — the natural thing to write, and correct
-for a marketplace-installed plugin where Cursor always sets the variable — it resolves to an empty
-path prefix in colocated/project-level mode (§3.1), where Cursor sets no plugin-root variable at
-all. The shim itself now starts (the emitted path anchored correctly), but the handler it invokes
-fails to resolve, and because the entry carries `failClosed: true` (§2.2), every gated call is
-denied. This is the same class of failure the shim-path anchoring (issue #56) fixed, one level
-deeper — this time in code the toolkit doesn't generate and can't rewrite.
+for a marketplace-installed plugin, where Cursor is expected to set the variable (confirmed by
+Cursor staff forum posts, §3.1) — it resolves to an empty path prefix in colocated/project-level
+mode (§3.1), where Cursor sets no plugin-root variable at all. The shim itself now starts (the
+emitted path anchored correctly), but the handler it invokes fails to resolve, and because the
+entry carries `failClosed: true` (§2.2), every gated call is denied. This is the same class of
+failure the shim-path anchoring (issue #56) fixed, one level deeper — this time in code the
+toolkit doesn't generate and can't rewrite.
 
 **Convention:** a plugin that intends to support colocated/project-level Cursor hooks should author
 its own gating-hook handler commands with the same shell fallback:

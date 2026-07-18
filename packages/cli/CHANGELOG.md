@@ -1,5 +1,23 @@
 # @ai-plugin-marketplace/cli
 
+## 0.5.0
+
+### Minor Changes
+
+- [#72](https://github.com/ai-plugin-marketplace/tools/pull/72) [`6100387`](https://github.com/ai-plugin-marketplace/tools/commit/6100387eefbce1604220a9832ed44c2fb7533883) Thanks [@mike-north](https://github.com/mike-north)! - Add `aipm lint [path] [--as <mode>] [--format text|json|sarif] [--rule <id>=<severity> ...]`, exposing the lint engine core ([#61](https://github.com/ai-plugin-marketplace/tools/issues/61)) via the CLI with machine-readable output.
+  - `text` (default): grouped by file as `file:line:col ruleId severity message`; `--verbose` appends the docs URL; diagnostics without a `range` render as `file ruleId severity message` (position segment omitted, never zero-filled).
+  - `json`: the raw `Diagnostic[]` plus a summary envelope (`errorCount`/`warnCount`/`infoCount`/`fileCount`).
+  - `sarif`: SARIF 2.1.0, one `rules[]` entry per distinct rule id — validated in tests against the official SARIF 2.1.0 JSON Schema.
+  - Exit codes: `0` no `error`-severity diagnostics, `1` errors present, `2` usage error (unknown `--format`, malformed `--rule`, or an unsupported `--as` mode — only `aipm-repo` is implemented; foreign discovery modes are a later issue).
+  - `--rule <id>=<severity>` (repeatable) overrides a rule's severity post-hoc, or drops its diagnostics entirely with `=off`.
+  - New core export: `applyRuleSeverityOverrides(diagnostics, overrides)`, the pure filter backing `--rule`.
+  - `aipm validate` behavior and exit codes are unchanged.
+
+### Patch Changes
+
+- Updated dependencies [[`d1e1af3`](https://github.com/ai-plugin-marketplace/tools/commit/d1e1af3f0527c66de15839204395b8024b5a86b1), [`6100387`](https://github.com/ai-plugin-marketplace/tools/commit/6100387eefbce1604220a9832ed44c2fb7533883), [`2b34d54`](https://github.com/ai-plugin-marketplace/tools/commit/2b34d547c3a0ff459198a87eb22e446a5c5d5b52)]:
+  - @ai-plugin-marketplace/core@0.8.0
+
 ## 0.4.1
 
 ### Patch Changes

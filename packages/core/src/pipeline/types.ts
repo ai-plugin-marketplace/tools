@@ -386,7 +386,9 @@ export interface SupportReport {
  * @public
  */
 export interface AddTargetOutcome {
+  /** The target that was added, e.g. 'gemini'. */
   target: TargetId;
+  /** Which of the three outcomes above occurred. */
   status: 'already-present' | 'added' | 'partially-added';
   /** Paths (relative to the plugin dir) newly written by this call. */
   written: string[];

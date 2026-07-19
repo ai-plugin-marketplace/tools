@@ -10,9 +10,7 @@ export function addTarget(pluginDir: string, target: TargetId): Promise<AddTarge
 // @public
 export interface AddTargetOutcome {
     preserved: string[];
-    // (undocumented)
     status: 'already-present' | 'added' | 'partially-added';
-    // (undocumented)
     target: TargetId;
     written: string[];
 }

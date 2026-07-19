@@ -39,7 +39,9 @@ describe('discoverPlugins — repo root', () => {
   it('discovers every plugins/* directory that carries a config', async () => {
     writeConfig(path.join(root, 'plugins', 'alpha'));
     writeConfig(path.join(root, 'plugins', 'beta'));
-    // A plugins/* dir WITHOUT a config is ignored.
+    // A plugins/* dir that is not plugin-shaped (no config, no manifests, no skills) is ignored —
+    // it is not a plugin at all (non-goal, see the "plugin-shaped" describe block below for the
+    // config-less-but-shaped case, which IS discovered).
     fs.mkdirSync(path.join(root, 'plugins', 'no-config'), { recursive: true });
 
     const result = await discoverPlugins(root);
@@ -52,6 +54,71 @@ describe('discoverPlugins — repo root', () => {
   it('returns an empty plugin list for a repo root whose plugins/ has no configured plugins', async () => {
     fs.mkdirSync(path.join(root, 'plugins', 'empty'), { recursive: true });
     const result = await discoverPlugins(root);
+    expect(result.pluginDirs).toStrictEqual([]);
+  });
+});
+
+describe('discoverPlugins — repo root, plugin-shaped but config-less (#91)', () => {
+  /** Write a minimal (content-agnostic) file, creating parent directories as needed. */
+  function writeFile(dir: string, rel: string, content = '{}'): void {
+    const full = path.join(dir, rel);
+    fs.mkdirSync(path.dirname(full), { recursive: true });
+    fs.writeFileSync(full, content, 'utf-8');
+  }
+
+  it('discovers a plugins/* directory with a target manifest but no aipm.config.ts', async () => {
+    writeConfig(path.join(root, 'plugins', 'alpha'));
+    // Repro shape from #91: target manifest present, aipm.config.ts absent (e.g. moved aside).
+    writeFile(path.join(root, 'plugins', 'broken'), '.claude-plugin/plugin.json');
+
+    const result = await discoverPlugins(root);
+
+    expect(result.pluginDirs.map((p) => path.basename(p)).sort()).toStrictEqual([
+      'alpha',
+      'broken',
+    ]);
+  });
+
+  it('discovers a plugins/* directory with only a skill and no aipm.config.ts', async () => {
+    writeFile(path.join(root, 'plugins', 'skill-only'), 'skills/my-skill/SKILL.md', '# Skill\n');
+
+    const result = await discoverPlugins(root);
+
+    expect(result.pluginDirs.map((p) => path.basename(p))).toStrictEqual(['skill-only']);
+  });
+
+  it.each<[string, string]>([
+    ['claude', '.claude-plugin/plugin.json'],
+    ['codex', '.codex-plugin/plugin.json'],
+    ['cursor', '.cursor-plugin/plugin.json'],
+    ['gemini', 'gemini-extension.json'],
+    ['kiro', 'POWER.md'],
+    ['open-plugins', '.plugin/plugin.json'],
+  ])(
+    'discovers a config-less %s-shaped directory via its manifest marker',
+    async (_target, rel) => {
+      writeFile(path.join(root, 'plugins', 'shaped'), rel);
+
+      const result = await discoverPlugins(root);
+
+      expect(result.pluginDirs.map((p) => path.basename(p))).toStrictEqual(['shaped']);
+    },
+  );
+
+  it('still ignores a plugins/* directory with an unrelated file and no plugin-shape marker', async () => {
+    // A stray README (or any non-marker file) does not make a directory plugin-shaped.
+    writeFile(path.join(root, 'plugins', 'not-a-plugin'), 'README.md', '# Notes\n');
+
+    const result = await discoverPlugins(root);
+
+    expect(result.pluginDirs).toStrictEqual([]);
+  });
+
+  it('still ignores an empty plugins/* directory with no files at all', async () => {
+    fs.mkdirSync(path.join(root, 'plugins', 'totally-empty'), { recursive: true });
+
+    const result = await discoverPlugins(root);
+
     expect(result.pluginDirs).toStrictEqual([]);
   });
 });

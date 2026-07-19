@@ -449,7 +449,7 @@ export interface ValidationResult {
 // Enumerated finding codes. Additive — new codes arrive in toolkit MINOR releases;
 // removing or renaming a code is MAJOR. Consumers SHOULD handle unknown codes gracefully.
 export type FindingCode =
-  | 'envelope-invalid' // aipm.config.ts is malformed
+  | 'envelope-invalid' // aipm.config.ts is malformed or missing (including a plugin-shaped dir with no config at all)
   | 'repo-config-invalid' // aipm.repo.ts is malformed
   | 'envelope-adherence' // file exists for a target outside the envelope
   | 'schema-invalid' // target manifest failed Zod validation
@@ -573,9 +573,11 @@ Every target manifest carries a `schemaVersion` string. Scaffolds emit `schemaVe
 
 ### 10.1 What `aipm validate` checks
 
+**Discovery is not exempt from this contract.** A repo-root `plugins/*` subdirectory that carries a target manifest (e.g. `.claude-plugin/plugin.json`) and/or a skill (`skills/*/SKILL.md`) is **plugin-shaped**, and discovery includes it whether or not it also carries `aipm.config.ts`. A plugin-shaped directory missing its config is therefore not silently dropped from the plugin list — it reaches validator step 1 below like any other plugin and fails there with `envelope-invalid`, rather than `aipm validate`/`aipm build` reporting a false "nothing to do" success. Only a directory with **neither** a config nor any plugin-shape marker is excluded — it genuinely is not a plugin. `aipm build` mirrors this: it throws the same missing-config error building a plugin-shaped-but-configless directory would produce for a directly-targeted single plugin, rather than silently building zero plugins.
+
 Validators run in defined order; each either passes or emits findings:
 
-1. **Envelope validation** — every `aipm.config.ts` parses strictly; `version` is semver; `targets` is a non-empty subset of known IDs.
+1. **Envelope validation** — every `aipm.config.ts` parses strictly; `version` is semver; `targets` is a non-empty subset of known IDs. A plugin-shaped directory with no `aipm.config.ts` at all fails here too (`envelope-invalid`), not just a malformed one.
 2. **Schema validation** — every target manifest parses against the current Zod schema for that target.
 3. **Envelope adherence** — no files exist for a target outside the envelope; every in-envelope target has its minimum required files.
 4. **Cross-target consistency** (only when the envelope contains multiple targets):

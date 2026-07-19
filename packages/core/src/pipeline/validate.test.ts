@@ -12,6 +12,7 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { TEMPLATE_REPO, TEMPLATE_REPO_AVAILABLE } from '../test-support/template-repo.js';
 import {
   checkDefaultMarketplaceName,
+  runValidate,
   validateCrossTarget,
   validateEnvelopeAdherence,
   validateEnvelopeShape,
@@ -1100,5 +1101,50 @@ describe('validateFrontmatterParses()', () => {
     expect(findings.every((f) => f.code === 'frontmatter-invalid' && f.severity === 'hard')).toBe(
       true,
     );
+  });
+});
+
+describe('runValidate() — plugin-shaped repo-root subdirectory missing aipm.config.ts (#91)', () => {
+  it('reports envelope-invalid for a plugins/* dir with a target manifest but no aipm.config.ts', async () => {
+    const tmp = makeTempDir();
+    const repoRoot = path.join(tmp, 'repo');
+    // Repro shape from #91: `mv p/aipm.config.ts aside` — target manifest still present.
+    write(repoRoot, 'plugins/broken/.claude-plugin/plugin.json', {
+      name: 'broken',
+      version: '0.1.0',
+    });
+
+    const result = await runValidate(repoRoot);
+
+    const envelopeFindings = result.findings.filter((f) => f.code === 'envelope-invalid');
+    expect(envelopeFindings).toHaveLength(1);
+    expect(envelopeFindings[0]?.plugin).toBe('broken');
+    expect(envelopeFindings[0]?.severity).toBe('hard');
+    expect(envelopeFindings[0]?.message).toContain('aipm.config.ts');
+    expect(result.passed).toBe(false);
+  });
+
+  it('reports envelope-invalid for a plugins/* dir with a skill but no aipm.config.ts', async () => {
+    const tmp = makeTempDir();
+    const repoRoot = path.join(tmp, 'repo');
+    write(repoRoot, 'plugins/broken/skills/my-skill/SKILL.md', frontmatter({ name: 'my-skill' }));
+
+    const result = await runValidate(repoRoot);
+
+    const envelopeFindings = result.findings.filter((f) => f.code === 'envelope-invalid');
+    expect(envelopeFindings).toHaveLength(1);
+    expect(envelopeFindings[0]?.plugin).toBe('broken');
+    expect(result.passed).toBe(false);
+  });
+
+  it('does not report a finding for a plugins/* dir with no plugin-shape marker at all', async () => {
+    const tmp = makeTempDir();
+    const repoRoot = path.join(tmp, 'repo');
+    write(repoRoot, 'plugins/not-a-plugin/README.md', '# Notes\n');
+
+    const result = await runValidate(repoRoot);
+
+    expect(result.findings).toStrictEqual([]);
+    expect(result.passed).toBe(true);
   });
 });

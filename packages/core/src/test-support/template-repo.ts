@@ -89,17 +89,33 @@ export function templateIsComplete(templateRoot: string): boolean {
  * Absolute path to a local checkout of `ai-plugin-marketplace/template`, used by the
  * bootstrap golden-parity fixtures (architecture spec §13 Phase A exit criterion 1).
  *
- * These fixtures are developer-machine-only: they compare toolkit output against a real
- * template checkout and do not run in CI (the template isn't checked out there). Resolution is
- * {@link resolveTemplateRepo}: the `AIPM_TEMPLATE_REPO` environment variable overrides everything;
- * otherwise the first existing {@link TEMPLATE_REPO_CANDIDATES candidate} is used.
+ * In CI, the `check` job checks out `ai-plugin-marketplace/template` at the SHA pinned in
+ * `.github/template-repo.rev` and points `AIPM_TEMPLATE_REPO` at that checkout, so these
+ * fixtures run with positive coverage there too (see {@link AIPM_REQUIRE_TEMPLATE}). Locally,
+ * resolution is {@link resolveTemplateRepo}: the `AIPM_TEMPLATE_REPO` environment variable
+ * overrides everything; otherwise the first existing {@link TEMPLATE_REPO_CANDIDATES candidate}
+ * is used.
  *
- * Use `TEMPLATE_REPO_AVAILABLE` as a `describe.skipIf` guard so parity suites are
- * automatically skipped when the template checkout isn't present or is incomplete (e.g. in CI,
- * or a stale local clone missing README.md/LICENSE from the fixture plugin):
+ * Gate parity suites with {@link shouldSkipTemplateRepoSuite} + {@link assertTemplateRepoAvailable}
+ * (not `TEMPLATE_REPO_AVAILABLE` alone), so behavior differs correctly by environment: locally
+ * (no `AIPM_REQUIRE_TEMPLATE`), an unavailable/incomplete checkout skips with a reason (e.g. a
+ * developer machine without the sibling checkout, or a stale local clone missing
+ * README.md/LICENSE from the fixture plugin); under `AIPM_REQUIRE_TEMPLATE=1` (CI), the suite
+ * does NOT skip — it runs and {@link assertTemplateRepoAvailable} throws a loud, actionable
+ * error instead:
  *
  * ```ts
- * describe.skipIf(!TEMPLATE_REPO_AVAILABLE)('parity with skill-evaluator', () => { … })
+ * const skip = shouldSkipTemplateRepoSuite({ available: TEMPLATE_REPO_AVAILABLE, required: AIPM_REQUIRE_TEMPLATE });
+ * describe.skipIf(skip)('parity with skill-evaluator', () => {
+ *   beforeAll(() =>
+ *     assertTemplateRepoAvailable({
+ *       available: TEMPLATE_REPO_AVAILABLE,
+ *       required: AIPM_REQUIRE_TEMPLATE,
+ *       templateRoot: TEMPLATE_REPO,
+ *     }),
+ *   );
+ *   // …
+ * });
  * ```
  */
 export const TEMPLATE_REPO: string = resolveTemplateRepo({
@@ -111,7 +127,62 @@ export const TEMPLATE_REPO: string = resolveTemplateRepo({
 /**
  * True when the template checkout exists on disk AND is complete (see
  * {@link REQUIRED_SKILL_EVALUATOR_FILES}). Use as a `describe.skipIf` guard. Parity tests are
- * skipped both in CI (template repo not checked out) and locally against a stale/incomplete
+ * skipped both when no checkout is configured and locally against a stale/incomplete
  * checkout, rather than running and failing.
  */
 export const TEMPLATE_REPO_AVAILABLE: boolean = templateIsComplete(TEMPLATE_REPO);
+
+/**
+ * True when `AIPM_REQUIRE_TEMPLATE=1` is set. CI's `check` job sets this after checking out the
+ * pinned template revision, so a missing/incomplete checkout there is a hard failure rather than
+ * a silent skip — see {@link shouldSkipTemplateRepoSuite} and {@link assertTemplateRepoAvailable}.
+ * Local developer runs never set this, so the skip-with-reason behavior above is unchanged.
+ */
+export const AIPM_REQUIRE_TEMPLATE: boolean = process.env['AIPM_REQUIRE_TEMPLATE'] === '1';
+
+/**
+ * Inputs to {@link shouldSkipTemplateRepoSuite} and {@link assertTemplateRepoAvailable}. Injected
+ * so the anti-regression-to-skip policy can be unit-tested without a real checkout or env vars.
+ */
+export interface TemplateRepoGuard {
+  /** Whether the resolved template checkout is present and complete. */
+  available: boolean;
+  /** Whether the caller has opted into hard-failing on an unavailable checkout (CI). */
+  required: boolean;
+  /** The resolved checkout path, included in the thrown error for diagnostics. */
+  templateRoot: string;
+}
+
+/**
+ * Whether a `describe.skipIf` guard should skip a template-repo-gated parity suite.
+ *
+ * Skips only when the checkout is unavailable AND the caller has not opted into
+ * {@link AIPM_REQUIRE_TEMPLATE}. When required and unavailable, the suite must NOT skip — it runs
+ * so {@link assertTemplateRepoAvailable} (called from within the suite, e.g. a `beforeAll`) can
+ * fail loudly instead.
+ */
+export function shouldSkipTemplateRepoSuite(
+  guard: Pick<TemplateRepoGuard, 'available' | 'required'>,
+): boolean {
+  return !guard.available && !guard.required;
+}
+
+/**
+ * Hard-fail guard for template-repo-gated parity suites: throws when the checkout is
+ * unavailable/incomplete AND {@link AIPM_REQUIRE_TEMPLATE} is set, turning what would otherwise be
+ * a silent skip into a loud CI failure (the anti-regression-to-skip guard — see issue #86).
+ *
+ * No-op when the checkout is available, or when it is unavailable but not required (the suite's
+ * `describe.skipIf(shouldSkipTemplateRepoSuite(...))` will have skipped it in that case, so this
+ * is never reached; the explicit no-op keeps the function safe to call unconditionally).
+ */
+export function assertTemplateRepoAvailable(guard: TemplateRepoGuard): void {
+  if (guard.available || !guard.required) return;
+  throw new Error(
+    `AIPM_REQUIRE_TEMPLATE is set but the template checkout at "${guard.templateRoot}" is ` +
+      'missing or incomplete (see REQUIRED_SKILL_EVALUATOR_FILES in template-repo.ts). ' +
+      'This suite must run with positive coverage in CI, not skip — check that the ' +
+      '`ai-plugin-marketplace/template` checkout step in .github/workflows/ci.yml succeeded ' +
+      'and AIPM_TEMPLATE_REPO points at it.',
+  );
+}

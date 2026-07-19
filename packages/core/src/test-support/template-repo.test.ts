@@ -17,8 +17,10 @@ import * as path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
 import {
+  assertTemplateRepoAvailable,
   REQUIRED_SKILL_EVALUATOR_FILES,
   resolveTemplateRepo,
+  shouldSkipTemplateRepoSuite,
   TEMPLATE_REPO_CANDIDATES,
   templateIsComplete,
   type TemplateRepoResolution,
@@ -139,5 +141,71 @@ describe('templateIsComplete', () => {
     }
 
     expect(templateIsComplete(templateRoot)).toBe(true);
+  });
+});
+
+// Issue #86: CI opts into AIPM_REQUIRE_TEMPLATE so a missing/incomplete template checkout is a
+// hard failure there, while local runs keep the skip-with-reason behavior above unchanged.
+describe('shouldSkipTemplateRepoSuite', () => {
+  it('skips when the checkout is unavailable and not required (local default)', () => {
+    expect(shouldSkipTemplateRepoSuite({ available: false, required: false })).toBe(true);
+  });
+
+  it('does not skip when the checkout is unavailable but required (CI must fail loudly, not skip)', () => {
+    expect(shouldSkipTemplateRepoSuite({ available: false, required: true })).toBe(false);
+  });
+
+  it('does not skip when the checkout is available, regardless of required', () => {
+    expect(shouldSkipTemplateRepoSuite({ available: true, required: false })).toBe(false);
+    expect(shouldSkipTemplateRepoSuite({ available: true, required: true })).toBe(false);
+  });
+});
+
+describe('assertTemplateRepoAvailable', () => {
+  it('throws when the checkout is unavailable and required (the CI hard-fail case)', () => {
+    expect(() => {
+      assertTemplateRepoAvailable({
+        available: false,
+        required: true,
+        templateRoot: '/some/checkout',
+      });
+    }).toThrow(/AIPM_REQUIRE_TEMPLATE/);
+  });
+
+  it('includes the template root in the thrown error for diagnostics', () => {
+    expect(() => {
+      assertTemplateRepoAvailable({
+        available: false,
+        required: true,
+        templateRoot: '/some/checkout',
+      });
+    }).toThrow(/\/some\/checkout/);
+  });
+
+  it('does not throw when the checkout is unavailable but not required (local skip case)', () => {
+    expect(() => {
+      assertTemplateRepoAvailable({
+        available: false,
+        required: false,
+        templateRoot: '/some/checkout',
+      });
+    }).not.toThrow();
+  });
+
+  it('does not throw when the checkout is available, regardless of required', () => {
+    expect(() => {
+      assertTemplateRepoAvailable({
+        available: true,
+        required: false,
+        templateRoot: '/some/checkout',
+      });
+    }).not.toThrow();
+    expect(() => {
+      assertTemplateRepoAvailable({
+        available: true,
+        required: true,
+        templateRoot: '/some/checkout',
+      });
+    }).not.toThrow();
   });
 });

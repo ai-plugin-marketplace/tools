@@ -19,6 +19,33 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      # Read the pinned template revision (single source of truth: .github/template-repo.rev —
+      # see CONTRIBUTING.md "Bumping the pinned template revision") so the checkout step below
+      # can reference it without duplicating the SHA anywhere else. Validate the format here so a
+      # malformed/empty pin fails with a clear, actionable message instead of an opaque checkout
+      # error from the next step.
+      - name: Read pinned template revision
+        id: template-rev
+        run: |
+          sha="$(tr -d '[:space:]' < .github/template-repo.rev)"
+          if ! [[ "$sha" =~ ^[0-9a-f]{40}$ ]]; then
+            echo "::error file=.github/template-repo.rev::Expected a single full 40-character hex SHA, got: '$sha'" >&2
+            exit 1
+          fi
+          echo "sha=$sha" >> "$GITHUB_OUTPUT"
+
+      # Second checkout of the template repo (separate path), pinned to the revision the
+      # gemini/kiro bundle parity suites are known to pass against. Requires read access to
+      # ai-plugin-marketplace/template from this job's GITHUB_TOKEN (same-owner public repo, so
+      # the default token suffices; if the template repo is ever made private, this step needs a
+      # token with cross-repo read access instead).
+      - name: Checkout pinned template repo
+        uses: actions/checkout@v4
+        with:
+          repository: ai-plugin-marketplace/template
+          ref: ${{ steps.template-rev.outputs.sha }}
+          path: .template-repo
+
       - uses: pnpm/action-setup@v4
         # version is read from package.json#packageManager — do not duplicate here
 
@@ -51,8 +78,15 @@ jobs:
       #       on ^build so cli resolves core from dist).
       #   - check:workspace → knip, syncpack, prettier --check (run concurrently).
       # Nx restores unchanged tasks' outputs (e.g. dist) straight from the cache.
+      # AIPM_TEMPLATE_REPO points the gemini/kiro bundle parity suites at the pinned checkout
+      # above; AIPM_REQUIRE_TEMPLATE turns a missing/incomplete checkout into a hard test
+      # failure instead of the local skip-with-reason behavior (anti-regression-to-skip guard —
+      # see packages/core/src/test-support/template-repo.ts).
       - name: Check (typecheck, lint, api-report, test, knip, syncpack, format)
         run: pnpm run check
+        env:
+          AIPM_TEMPLATE_REPO: ${{ github.workspace }}/.template-repo
+          AIPM_REQUIRE_TEMPLATE: '1'
 
       # Dogfood: this repo is itself an embedded AI plugin marketplace (see aipm.workspace.ts).
       # Validate that its committed, generated marketplace artifacts are in sync with what

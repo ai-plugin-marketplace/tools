@@ -6,6 +6,11 @@ dist
 # Nx local cache (local-only, never formatted)
 .nx
 
+# CI-only checkout of ai-plugin-marketplace/template at the pinned revision (see
+# .github/template-repo.rev, .github/workflows/ci.yml) — fixture data for the gemini/kiro bundle
+# parity suites, not source this repo owns or formats.
+.template-repo
+
 # Generated API surface (API Extractor / API Documenter)
 packages/*/docs
 packages/*/api-report

@@ -193,4 +193,14 @@ export interface LintOptions {
  */
 export interface LintResult {
   diagnostics: Diagnostic[];
+  /**
+   * Repo-relative paths of every file the run actually read via the document layer
+   * (`RuleContext.getDocument()`, L-D3), deduped and sorted. This is `lint()`'s scan-scope
+   * record — the truthful source for the `json` format's `summary.fileCount`
+   * (docs/specs/lint-engine.md §4.1). A file that exists on disk but that no active rule reads
+   * (e.g. it's outside every rule's candidate-file list, or the plugin's envelope excludes the
+   * target that owns it) is not counted — `fileCount` reflects what this run actually scanned,
+   * not everything present on disk.
+   */
+  scannedFiles: readonly string[];
 }

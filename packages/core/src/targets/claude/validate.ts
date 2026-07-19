@@ -97,8 +97,18 @@ function validateManifestFileRefs(pluginDir: string, pluginName: string): Findin
 
   const parseResult = claudePluginManifestSchema.safeParse(raw);
   if (!parseResult.success) {
-    // Shape errors are reported by the schema validator — skip ref checking
-    return [];
+    // Shape errors (including a missing required field, e.g. `name`) — surface a hard finding
+    // here. Skip ref checking: there is no reliably-shaped manifest data to check refs against.
+    const issues = parseResult.error.issues
+      .map((i) => (i.path.length > 0 ? `${i.path.join('.')}: ${i.message}` : i.message))
+      .join('; ');
+    return [
+      hardFinding(
+        pluginName,
+        `.claude-plugin/plugin.json failed schema validation: ${issues}`,
+        'Verify the manifest fields match the claude plugin manifest schema.',
+      ),
+    ];
   }
 
   const manifest = parseResult.data;

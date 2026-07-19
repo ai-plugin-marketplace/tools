@@ -80,6 +80,91 @@ describe('lint()', () => {
     expect(result.diagnostics).toEqual([]);
   });
 
+  // Regression coverage for #92: a `plugin.json` missing the required `name` field must produce
+  // a lint diagnostic (mirroring `validateClaudePlugin`'s hard `schema-invalid` finding), not
+  // silently pass.
+  it('emits a schema-invalid-backed diagnostic when plugin.json is missing the required "name" field', async () => {
+    write(
+      'plugins/nameless-plugin/aipm.config.ts',
+      `import { defineConfig } from '@ai-plugin-marketplace/core';\n` +
+        `export default defineConfig({ version: '1.0.0', targets: ['claude'] });\n`,
+    );
+    write('plugins/nameless-plugin/.claude-plugin/plugin.json', {
+      version: '0.1.0',
+      description: 'A plugin manifest missing its required name field',
+    });
+
+    const result = await lint(repoRoot);
+
+    const schemaDiagnostics = result.diagnostics.filter(
+      (d) => d.ruleId === 'schema/target-conformance',
+    );
+    expect(schemaDiagnostics).toHaveLength(1);
+    expect(schemaDiagnostics[0]).toMatchObject({
+      severity: 'error',
+      legacyCode: 'schema-invalid',
+    });
+    expect(schemaDiagnostics[0]?.message).toContain('name');
+  });
+
+  // Regression coverage for #92: `scannedFiles` (and therefore the CLI json format's
+  // `summary.fileCount`) must reflect the files this run actually read, per
+  // docs/specs/lint-engine.md §4.1's scan-scope definition — not a value derived from
+  // diagnostics, which stays constant regardless of what was actually scanned.
+  describe('scannedFiles (scan-scope tracking, #92)', () => {
+    it('equals the real scanned-file count for a known fixture, and is unaffected by manifest content', async () => {
+      write(
+        'plugins/scan-target/aipm.config.ts',
+        `import { defineConfig } from '@ai-plugin-marketplace/core';\n` +
+          `export default defineConfig({ version: '1.0.0', targets: ['claude'] });\n`,
+      );
+      write('plugins/scan-target/.claude-plugin/plugin.json', {
+        name: 'scan-target',
+        agents: ['./agents/helper.md'],
+      });
+      write(
+        'plugins/scan-target/agents/helper.md',
+        '---\nname: helper\ndescription: A helper agent\n---\n\nBody.\n',
+      );
+
+      const result = await lint(repoRoot);
+
+      // Known fixture: exactly plugin.json and agents/helper.md are read by the rules that scan
+      // manifest/frontmatter content (broken-file-ref, frontmatter-parses, target-conformance).
+      expect(result.scannedFiles).toEqual([
+        'plugins/scan-target/.claude-plugin/plugin.json',
+        'plugins/scan-target/agents/helper.md',
+      ]);
+
+      // Mutating the manifest (removing the required `name` field, per #92's repro) must not
+      // change the scanned-file count — this is the invariant-1 bug: fileCount must track what
+      // was actually read, not stay pinned regardless of manifest mutations.
+      write('plugins/scan-target/.claude-plugin/plugin.json', {
+        // `name` removed
+        agents: ['./agents/helper.md'],
+      });
+      const secondRun = await lint(repoRoot);
+      expect(secondRun.scannedFiles).toHaveLength(2);
+      expect(secondRun.scannedFiles).toEqual(result.scannedFiles);
+    });
+
+    it('does not count files that exist on disk but no active rule reads', async () => {
+      write(
+        'plugins/scan-target/aipm.config.ts',
+        `import { defineConfig } from '@ai-plugin-marketplace/core';\n` +
+          `export default defineConfig({ version: '1.0.0', targets: ['claude'] });\n`,
+      );
+      write('plugins/scan-target/.claude-plugin/plugin.json', { name: 'scan-target' });
+      // A stray file no rule's candidate-file list includes.
+      write('plugins/scan-target/NOTES.md', '# scratch notes, not a scanned artifact\n');
+
+      const result = await lint(repoRoot);
+
+      expect(result.scannedFiles).not.toContain('plugins/scan-target/NOTES.md');
+      expect(result.scannedFiles).toContain('plugins/scan-target/.claude-plugin/plugin.json');
+    });
+  });
+
   describe('cross-target consistency gating (matches validate())', () => {
     let repo: SynthRegistryRepo | undefined;
 

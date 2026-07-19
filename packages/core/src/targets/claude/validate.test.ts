@@ -309,6 +309,38 @@ describe('validateClaudePlugin', () => {
   });
 
   // -------------------------------------------------------------------------
+  // Negative: manifest schema shape (required-field enforcement)
+  // -------------------------------------------------------------------------
+  // Regression coverage for #92: a structurally-valid JSON object that omits a
+  // schema-required field (e.g. `name`) must be caught here — this is distinct from the
+  // "manifest file refs" cases above (valid shape, bad ref) and from malformed JSON (caught
+  // earlier in validateManifestFileRefs). Before the fix, a schema parse failure other than
+  // invalid JSON silently produced zero findings.
+
+  describe('manifest schema shape', () => {
+    it('emits a hard schema-invalid finding when plugin.json is missing the required "name" field', () => {
+      writeFile(
+        tmpDir,
+        '.claude-plugin/plugin.json',
+        JSON.stringify({
+          version: '0.1.0',
+          description: 'A plugin manifest missing its required name field',
+        }),
+      );
+
+      const findings = validateClaudePlugin(tmpDir);
+
+      expect(findings).toHaveLength(1);
+      const [finding] = findings as [Finding];
+      expect(finding.severity).toBe('hard');
+      expect(finding.code).toBe('schema-invalid');
+      expect(finding.plugin).toBe(path.basename(tmpDir));
+      expect(finding.message).toContain('.claude-plugin/plugin.json');
+      expect(finding.message).toContain('name');
+    });
+  });
+
+  // -------------------------------------------------------------------------
   // Negative: agent frontmatter failures
   // -------------------------------------------------------------------------
 

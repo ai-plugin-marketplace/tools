@@ -93,15 +93,26 @@ export function formatLintText(
   return [...lines, summary].join('\n');
 }
 
-/** Build the `json` format output: the raw diagnostics plus a summary envelope (spec §4.1). */
-export function buildLintJson(diagnostics: readonly Diagnostic[]): LintJsonOutput {
+/**
+ * Build the `json` format output: the raw diagnostics plus a summary envelope (spec §4.1).
+ *
+ * `fileCount` is the number of files the lint run actually scanned (`LintResult.scannedFiles`,
+ * §4.1's scan-scope definition) — NOT the number of distinct files a diagnostic happens to be
+ * attached to. A clean run over many files has `fileCount > 0` even though zero diagnostics were
+ * emitted; that distinction is why `scannedFiles.length` must be threaded in from the caller
+ * rather than derived from `diagnostics` here.
+ */
+export function buildLintJson(
+  diagnostics: readonly Diagnostic[],
+  scannedFileCount: number,
+): LintJsonOutput {
   return {
     diagnostics,
     summary: {
       errorCount: diagnostics.filter((d) => d.severity === 'error').length,
       warnCount: diagnostics.filter((d) => d.severity === 'warn').length,
       infoCount: diagnostics.filter((d) => d.severity === 'info').length,
-      fileCount: new Set(diagnostics.map((d) => d.file)).size,
+      fileCount: scannedFileCount,
     },
   };
 }

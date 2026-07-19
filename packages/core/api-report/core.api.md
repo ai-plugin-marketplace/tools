@@ -185,6 +185,7 @@ export interface LintOptions {
 export interface LintResult {
     // (undocumented)
     diagnostics: Diagnostic[];
+    scannedFiles: readonly string[];
 }
 
 // @public

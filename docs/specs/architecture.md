@@ -342,7 +342,7 @@ The toolkit could infer it from file presence. It doesn't, because:
 Because the toolkit does not auto-adapt across targets (P2), it provides explicit tooling that helps authors expand their envelope:
 
 - **`aipm check-support <plugin>`** — reports which targets are declared but missing required artifacts, and which targets could plausibly be added, with a concrete list of files the author would need to write.
-- **`aipm add-target <plugin> <target>`** — scaffolds skeleton files for a new target, leaving manifest fields blank for the author.
+- **`aipm add-target <plugin> <target>`** — scaffolds skeleton files for a new target, leaving manifest fields blank for the author. **Preserve-or-warn, never destructive**: an existing file the target would write is never overwritten; it's left untouched and reported. When every file the target would write already exists, the call is a friendly no-op (not an error) — a target that's already materialized is the desired end state, not a conflict. Placeholder fields a schema requires to be non-empty (e.g. Vercel's `SKILL.md` `description`) are emitted as non-empty placeholder prose rather than blanked, so add-target's own output always passes `aipm build`/`aipm validate` (issue #90).
 - **`aipm list-targets`** — lists the target IDs this toolkit version knows about.
 
 The toolkit's position: _you own the authoring decisions; we make them cheap to execute._
@@ -410,7 +410,7 @@ export function validate(path: string, opts?: ValidateOptions): Promise<Validati
 export function scaffold(name: string, opts: ScaffoldOptions): Promise<void>;
 export function migrate(path: string, opts?: MigrateOptions): Promise<MigrateResult>;
 export function checkSupport(pluginDir: string): Promise<SupportReport>;
-export function addTarget(pluginDir: string, target: TargetId): Promise<void>;
+export function addTarget(pluginDir: string, target: TargetId): Promise<AddTargetOutcome>;
 export function listTargets(): TargetId[];
 
 // Types

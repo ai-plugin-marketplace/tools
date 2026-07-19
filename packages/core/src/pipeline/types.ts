@@ -364,3 +364,34 @@ export interface SupportReport {
   /** Targets not declared but plausibly addable, with the files the author would need. */
   suggestions: { target: TargetId; wouldNeed: string[] }[];
 }
+
+// ---------------------------------------------------------------------------
+// Add-target
+
+/**
+ * Result of {@link addTarget} (`aipm add-target`, §6.4).
+ *
+ * `add-target` NEVER overwrites an existing file — it is preserve-or-warn, never destructive
+ * (issue #90). `status` discriminates the three outcomes so callers (the CLI) can report the
+ * right thing without re-deriving it from `written`/`preserved`:
+ *
+ *   - `'already-present'` — every file this target would write already exists on disk. A
+ *     friendly no-op: nothing is written, `written` is empty. The envelope is still updated to
+ *     declare `target` if it did not already (keeps `check-support`/`validate` consistent).
+ *   - `'added'` — none of the target's files existed; all were written fresh.
+ *   - `'partially-added'` — some of the target's files existed and were left untouched
+ *     (`preserved`), the rest were written (`written`). Only possible for multi-file targets
+ *     (e.g. Gemini's `gemini-extension.json` + `GEMINI.md`).
+ *
+ * @public
+ */
+export interface AddTargetOutcome {
+  /** The target that was added, e.g. 'gemini'. */
+  target: TargetId;
+  /** Which of the three outcomes above occurred. */
+  status: 'already-present' | 'added' | 'partially-added';
+  /** Paths (relative to the plugin dir) newly written by this call. */
+  written: string[];
+  /** Paths (relative to the plugin dir) that already existed and were left untouched. */
+  preserved: string[];
+}

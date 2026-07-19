@@ -36,6 +36,7 @@ import {
   validate,
 } from '@ai-plugin-marketplace/core';
 import type {
+  AddTargetOutcome,
   Diagnostic,
   Finding,
   RefreshOutcome,
@@ -176,6 +177,39 @@ function reportSupport(report: SupportReport, out: NodeJS.WritableStream): void 
   }
   for (const { target, wouldNeed } of report.suggestions) {
     out.write(`  could add ${target} (would need: ${wouldNeed.join(', ')})\n`);
+  }
+}
+
+/**
+ * Report the outcome of `aipm add-target` (§6.4). Preserve-or-warn: `already-present` and
+ * `partially-added` are reported as informational, not errors — add-target never overwrites an
+ * existing file (issue #90), so a file already being there is never a failure.
+ */
+function reportAddTarget(
+  outcome: AddTargetOutcome,
+  plugin: string,
+  out: NodeJS.WritableStream,
+): void {
+  const { target, status, written, preserved } = outcome;
+  switch (status) {
+    case 'already-present': {
+      out.write(
+        `'${target}' is already present in ${plugin} (${preserved.join(', ')}); nothing to do.\n`,
+      );
+      break;
+    }
+    case 'added': {
+      out.write(`Added '${target}' to ${plugin}: ${written.join(', ')}.\n`);
+      break;
+    }
+    case 'partially-added': {
+      out.write(`Added '${target}' to ${plugin}: ${written.join(', ')}.\n`);
+      out.write(
+        `  preserved existing file(s), left untouched: ${preserved.join(', ')}.\n` +
+          '  Review them by hand if they need updating for this target.\n',
+      );
+      break;
+    }
   }
 }
 
@@ -397,8 +431,8 @@ export async function run(argv: readonly string[], opts: RunOptions = {}): Promi
           err.write(`aipm: unknown target '${target}'. Known: ${known.join(', ')}.\n`);
           return 2;
         }
-        await addTarget(resolvePluginDir(plugin), target as TargetId);
-        out.write(`Added '${target}' to ${plugin}.\n`);
+        const outcome = await addTarget(resolvePluginDir(plugin), target as TargetId);
+        reportAddTarget(outcome, plugin, out);
         return 0;
       }
 

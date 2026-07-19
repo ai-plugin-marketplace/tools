@@ -38,7 +38,7 @@ import { scaffoldVercelFiles } from '../targets/vercel/scaffold.js';
 import type { ScaffoldedFile, TargetScaffoldOptions } from '../targets/scaffold-kit.js';
 import { INITIAL_PLUGIN_VERSION } from '../targets/scaffold-kit.js';
 import { TARGET_IDS } from './types.js';
-import type { ScaffoldOptions, SupportReport, TargetId } from './types.js';
+import type { AddTargetOutcome, ScaffoldOptions, SupportReport, TargetId } from './types.js';
 import { TARGET_MIN_REQUIRED } from './validate.js';
 
 // ---------------------------------------------------------------------------
@@ -410,11 +410,16 @@ export async function runScaffold(
 /**
  * Scaffold one target's skeleton files into an existing plugin (§6.4 `aipm add-target`).
  *
- * Manifest fields are emitted as placeholders for the author to complete. Existing files are
- * NEVER clobbered: if any file this target would write already exists, the function refuses and
- * throws — the author resolves the conflict deliberately.
+ * Manifest fields are emitted as placeholders for the author to complete. **Preserve-or-warn,
+ * never destructive** (issue #90): an existing file this target would write is NEVER
+ * overwritten — it is left untouched and reported in `preserved`. Only files that don't yet
+ * exist are written, reported in `written`. When every one of the target's files already exists,
+ * the call is a friendly no-op (`status: 'already-present'`) rather than a thrown error — a
+ * target that's already materialized is not a conflict to refuse, it's the desired end state
+ * already reached.
  *
- * The plugin's `aipm.config.ts` is updated to include `target` in its `targets` array when the
+ * The plugin's `aipm.config.ts` is updated to include `target` in its `targets` array (even on
+ * the `'already-present'` no-op path, so the envelope and the filesystem never drift) when the
  * lexical reader can locate the array (see module doc). Limitation: if the array cannot be parsed
  * (dynamic/computed targets), the config is left untouched and the error message instructs the
  * author to add the target manually — the function never leaves the envelope silently
@@ -422,43 +427,61 @@ export async function runScaffold(
  *
  * When `target` is Claude or Cursor, the plugin is also registered in the corresponding
  * repo-root marketplace registry (§4.4) so adding the target keeps `validate` green. repoRoot is
- * the plugin's grandparent (`<repoRoot>/plugins/<name>`), matching `discoverPlugins`.
+ * the plugin's grandparent (`<repoRoot>/plugins/<name>`), matching `discoverPlugins`. This is
+ * idempotent and safe to run even on the no-op path.
  *
- * @throws Error when `pluginDir` does not exist, a target file already exists, or the config's
- * targets array cannot be located for the update.
+ * @throws Error when `pluginDir` does not exist, or the config's targets array cannot be located
+ * for the update.
  */
-export async function runAddTarget(pluginDir: string, target: TargetId): Promise<void> {
-  if (!fs.existsSync(pluginDir)) {
-    throw new Error(`Plugin directory does not exist: ${pluginDir}`);
+export function runAddTarget(pluginDir: string, target: TargetId): Promise<AddTargetOutcome> {
+  // Synchronous body wrapped so validation throws (missing plugin dir, unparseable envelope)
+  // surface as a rejected promise — matching `runAddTarget(...).catch(...)`/`.rejects.toThrow()`
+  // expectations — rather than throwing before the returned promise exists.
+  try {
+    if (!fs.existsSync(pluginDir)) {
+      throw new Error(`Plugin directory does not exist: ${pluginDir}`);
+    }
+
+    const pluginName = path.basename(pluginDir);
+    const files = TARGET_SCAFFOLDERS[target](pluginName, { placeholder: true });
+
+    const preserved: string[] = [];
+    const toWrite: ScaffoldedFile[] = [];
+    for (const file of files) {
+      if (fs.existsSync(path.join(pluginDir, file.path))) {
+        preserved.push(file.path);
+      } else {
+        toWrite.push(file);
+      }
+    }
+
+    // Update the envelope BEFORE writing skeleton files, so a config we cannot parse aborts the
+    // whole operation rather than leaving orphan files with an unchanged envelope. Also run this
+    // on the already-present no-op path so the declared envelope never drifts from disk.
+    updateConfigTargets(pluginDir, target);
+
+    for (const file of toWrite) {
+      writeFileEnsuringDir(path.join(pluginDir, file.path), file.content);
+    }
+
+    // Register in the repo-root marketplace registry when adding a registry-backed target
+    // (§4.4). repoRoot = dirname(dirname(pluginDir)) — the `<repoRoot>/<pluginsRoot>/<name>`
+    // grandparent. Idempotent (registerInMarketplace no-ops on an existing entry), so safe on
+    // every path.
+    registerPluginInMarketplaces(path.dirname(path.dirname(pluginDir)), pluginDir, [target]);
+
+    const written = toWrite.map((f) => f.path);
+    const status: AddTargetOutcome['status'] =
+      written.length === 0
+        ? 'already-present'
+        : preserved.length === 0
+          ? 'added'
+          : 'partially-added';
+
+    return Promise.resolve({ target, status, written, preserved });
+  } catch (e) {
+    return Promise.reject(e instanceof Error ? e : new Error(String(e)));
   }
-
-  const pluginName = path.basename(pluginDir);
-  const files = TARGET_SCAFFOLDERS[target](pluginName, { placeholder: true });
-
-  // Refuse to overwrite: collect conflicts before writing anything.
-  const conflicts = files
-    .map((f) => f.path)
-    .filter((rel) => fs.existsSync(path.join(pluginDir, rel)));
-  if (conflicts.length > 0) {
-    throw new Error(
-      `Refusing to overwrite existing files while adding target '${target}': ${conflicts.join(', ')}. ` +
-        'Remove or move them first, then re-run.',
-    );
-  }
-
-  // Update the envelope BEFORE writing skeleton files, so a config we cannot parse aborts the
-  // whole operation rather than leaving orphan files with an unchanged envelope.
-  updateConfigTargets(pluginDir, target);
-
-  for (const file of files) {
-    writeFileEnsuringDir(path.join(pluginDir, file.path), file.content);
-  }
-
-  // Register in the repo-root marketplace registry when adding a registry-backed target (§4.4).
-  // repoRoot = dirname(dirname(pluginDir)) — the `<repoRoot>/<pluginsRoot>/<name>` grandparent.
-  registerPluginInMarketplaces(path.dirname(path.dirname(pluginDir)), pluginDir, [target]);
-
-  return Promise.resolve();
 }
 
 /**

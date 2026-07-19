@@ -3,8 +3,9 @@
  *
  * Uses real temp directories (`fs.mkdtempSync`) following the pattern in
  * `targets/gemini/bundle.test.ts`. Covers `runScaffold` (file set + valid aipm.config.ts),
- * `runAddTarget` (adds files, refuses overwrite, updates the envelope), and `runCheckSupport`
- * (declared/missingArtifacts/suggestions for hand-built fixtures). Includes negative cases.
+ * `runAddTarget` (adds files, preserve-or-warn on existing files — never overwrites, updates the
+ * envelope), and `runCheckSupport` (declared/missingArtifacts/suggestions for hand-built
+ * fixtures). Includes negative cases.
  *
  * @see docs/specs/architecture.md §6, §6.4, §12.5
  */
@@ -214,8 +215,14 @@ describe('runAddTarget', () => {
     await runScaffold('my-plugin', tmpDir, { targets: ['claude'] });
     const pluginDir = path.join(tmpDir, 'my-plugin');
 
-    await runAddTarget(pluginDir, 'gemini');
+    const outcome = await runAddTarget(pluginDir, 'gemini');
 
+    expect(outcome).toStrictEqual({
+      target: 'gemini',
+      status: 'added',
+      written: ['gemini-extension.json', 'GEMINI.md'],
+      preserved: [],
+    });
     expect(fs.existsSync(path.join(pluginDir, 'gemini-extension.json'))).toBe(true);
     expect(parseDeclaredTargets(read(pluginDir, 'aipm.config.ts'))).toStrictEqual([
       'claude',
@@ -223,11 +230,44 @@ describe('runAddTarget', () => {
     ]);
   });
 
-  it('refuses to overwrite an existing target file (negative)', async () => {
+  // Regression test for issue #90: re-running add-target on an already-materialized target must
+  // be a friendly no-op — not "Refusing to overwrite" — and must never touch the existing file.
+  it('treats an already-materialized target as a friendly no-op (issue #90 regression)', async () => {
     await runScaffold('my-plugin', tmpDir, { targets: ['claude', 'gemini'] });
     const pluginDir = path.join(tmpDir, 'my-plugin');
+    const before = read(pluginDir, 'gemini-extension.json');
 
-    await expect(runAddTarget(pluginDir, 'gemini')).rejects.toThrow(/Refusing to overwrite/);
+    const outcome = await runAddTarget(pluginDir, 'gemini');
+
+    expect(outcome).toStrictEqual({
+      target: 'gemini',
+      status: 'already-present',
+      written: [],
+      preserved: ['gemini-extension.json', 'GEMINI.md'],
+    });
+    // Content is byte-for-byte unchanged — preserve-or-warn, never destructive.
+    expect(read(pluginDir, 'gemini-extension.json')).toBe(before);
+  });
+
+  it('preserves an existing file and only writes the missing one for a multi-file target (partial)', async () => {
+    // Declare gemini and pre-seed only its manifest, not GEMINI.md — an author-edited manifest
+    // that must survive re-running add-target.
+    const pluginDir = buildFixture(['claude', 'gemini'], {
+      'gemini-extension.json': '{"name":"author-edited"}\n',
+    });
+    const before = read(pluginDir, 'gemini-extension.json');
+
+    const outcome = await runAddTarget(pluginDir, 'gemini');
+
+    expect(outcome).toStrictEqual({
+      target: 'gemini',
+      status: 'partially-added',
+      written: ['GEMINI.md'],
+      preserved: ['gemini-extension.json'],
+    });
+    // The author-edited manifest is untouched; only the missing companion file was written.
+    expect(read(pluginDir, 'gemini-extension.json')).toBe(before);
+    expect(fs.existsSync(path.join(pluginDir, 'GEMINI.md'))).toBe(true);
   });
 
   it('is idempotent on the envelope when the target is already declared and files are absent', async () => {
@@ -254,6 +294,23 @@ describe('runAddTarget', () => {
     await expect(runAddTarget(path.join(tmpDir, 'nope'), 'claude')).rejects.toThrow(
       /does not exist/,
     );
+  });
+
+  // Regression test for issue #90: the add-target output for a required-non-empty-description
+  // target (Vercel's SKILL.md) must itself pass `aipm build`/`aipm validate` — never a
+  // schema-invalid placeholder.
+  it('produces a Vercel SKILL.md that passes validate (issue #90 regression, schema-invalid placeholder)', async () => {
+    await runScaffold('my-plugin', tmpDir, { targets: ['claude'] });
+    const pluginDir = path.join(tmpDir, 'my-plugin');
+
+    await runAddTarget(pluginDir, 'vercel');
+
+    const skillMd = read(pluginDir, 'skills/my-plugin/SKILL.md');
+    expect(skillMd).not.toContain('description: ""');
+
+    const result = await runValidate(tmpDir, { skipFreshness: true });
+    const schemaInvalidFindings = result.findings.filter((f) => f.code === 'schema-invalid');
+    expect(schemaInvalidFindings).toStrictEqual([]);
   });
 });
 
@@ -507,8 +564,9 @@ describe('runAddTarget — marketplace registration', () => {
     ]);
 
     // Re-running add-target for the same registry must not duplicate the entry. The skeleton file
-    // now exists, so the call refuses to overwrite — but registration must remain a single entry.
-    await expect(runAddTarget(pluginDir, 'cursor')).rejects.toThrow(/Refusing to overwrite/);
+    // now exists, so the call is a friendly no-op — but registration must remain a single entry.
+    const rerun = await runAddTarget(pluginDir, 'cursor');
+    expect(rerun.status).toBe('already-present');
     expect(readRegistry(tmpDir, '.cursor-plugin').plugins).toStrictEqual([
       { name: 'my-plugin', source: './plugins/my-plugin' },
     ]);

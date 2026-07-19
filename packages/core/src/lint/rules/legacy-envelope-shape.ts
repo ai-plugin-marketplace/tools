@@ -5,8 +5,10 @@
  * Unlike the other migrated rules, this one runs *before* a plugin's envelope (`ctx.envelope`)
  * is known — it is what determines whether the envelope can be trusted at all. It therefore
  * loads the raw `aipm.config.ts` default export itself rather than reading anything off
- * `RuleContext.envelope`, and reports nothing when the config is missing entirely (a missing
- * envelope is `load-config.ts`'s concern, not a shape-validation one).
+ * `RuleContext.envelope`. A missing `aipm.config.ts` (including a plugin-shaped directory
+ * discovered without one, per #91) is reported here too, as an `envelope-invalid` diagnostic
+ * equivalent to `validate()`'s — `lint` and `validate` must agree on this case rather than one
+ * staying silent while the other flags it (#101).
  *
  * Reuses `ctx.configCache` (via {@link loadPluginConfig}) rather than importing the raw config a
  * second time: `loadPluginConfig` transpiles-and-validates once and caches the result, so when
@@ -46,8 +48,23 @@ export const envelopeShapeRule: Rule = {
   },
   async check(ctx: InternalRuleContext): Promise<Diagnostic[]> {
     const configPath = path.join(ctx.pluginDir, AIPM_CONFIG_FILENAME);
-    if (!fs.existsSync(configPath)) return [];
     const pluginName = path.basename(ctx.pluginDir);
+    if (!fs.existsSync(configPath)) {
+      // Mirrors validate()'s `envelope-invalid` finding for the identical failure (#91's
+      // discovery path surfaces a plugin-shaped, config-less directory; without this, lint stayed
+      // silent while validate/build both flagged it — #101). loadPluginConfig throws the same
+      // ConfigLoadError message for this case; reproduce it directly here rather than calling
+      // loadPluginConfig only to immediately catch it, since this path never reaches the cache.
+      const message = `No ${AIPM_CONFIG_FILENAME} found in ${ctx.pluginDir}. Every plugin must declare a support envelope (spec §6.1).`;
+      return [
+        findingToDiagnostic(
+          { severity: 'hard', code: 'envelope-invalid', plugin: pluginName, message },
+          RULE_ID,
+          'schema',
+          docsUrlFor(RULE_ID),
+        ),
+      ];
+    }
     try {
       // A cache hit here (already validated by an earlier call in this invocation) means the
       // envelope is known-valid — nothing further to report.

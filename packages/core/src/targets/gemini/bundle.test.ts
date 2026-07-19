@@ -9,6 +9,13 @@
  * `.github/template-repo.rev` (see issue #86); skips locally when no complete template checkout
  * is configured via `AIPM_TEMPLATE_REPO`.
  *
+ * The `@see` links below resolve at `ai-plugin-marketplace/template`'s `main` tip for
+ * readability, but the actual oracle this suite compares against is whatever revision is pinned
+ * in `.github/template-repo.rev` — if this suite fails, diff against that pinned SHA
+ * (`https://github.com/ai-plugin-marketplace/template/tree/<pinned-sha>/...`), not `main`, since
+ * the two can diverge between pin bumps.
+ *
+ * @see ../../../../../.github/template-repo.rev (the pinned revision the oracle below is read from)
  * @see https://github.com/ai-plugin-marketplace/template/blob/main/src/build-standalone.ts
  *      (reference implementation)
  * @see https://github.com/ai-plugin-marketplace/template/tree/main/dist/gemini/skill-evaluator

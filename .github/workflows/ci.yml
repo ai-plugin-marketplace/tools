@@ -21,10 +21,18 @@ jobs:
 
       # Read the pinned template revision (single source of truth: .github/template-repo.rev —
       # see CONTRIBUTING.md "Bumping the pinned template revision") so the checkout step below
-      # can reference it without duplicating the SHA anywhere else.
+      # can reference it without duplicating the SHA anywhere else. Validate the format here so a
+      # malformed/empty pin fails with a clear, actionable message instead of an opaque checkout
+      # error from the next step.
       - name: Read pinned template revision
         id: template-rev
-        run: echo "sha=$(tr -d '[:space:]' < .github/template-repo.rev)" >> "$GITHUB_OUTPUT"
+        run: |
+          sha="$(tr -d '[:space:]' < .github/template-repo.rev)"
+          if ! [[ "$sha" =~ ^[0-9a-f]{40}$ ]]; then
+            echo "::error file=.github/template-repo.rev::Expected a single full 40-character hex SHA, got: '$sha'" >&2
+            exit 1
+          fi
+          echo "sha=$sha" >> "$GITHUB_OUTPUT"
 
       # Second checkout of the template repo (separate path), pinned to the revision the
       # gemini/kiro bundle parity suites are known to pass against. Requires read access to

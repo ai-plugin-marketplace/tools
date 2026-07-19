@@ -96,13 +96,26 @@ export function templateIsComplete(templateRoot: string): boolean {
  * overrides everything; otherwise the first existing {@link TEMPLATE_REPO_CANDIDATES candidate}
  * is used.
  *
- * Use `TEMPLATE_REPO_AVAILABLE` as a `describe.skipIf` guard so parity suites are
- * automatically skipped when the template checkout isn't present or is incomplete (e.g. a
+ * Gate parity suites with {@link shouldSkipTemplateRepoSuite} + {@link assertTemplateRepoAvailable}
+ * (not `TEMPLATE_REPO_AVAILABLE` alone), so behavior differs correctly by environment: locally
+ * (no `AIPM_REQUIRE_TEMPLATE`), an unavailable/incomplete checkout skips with a reason (e.g. a
  * developer machine without the sibling checkout, or a stale local clone missing
- * README.md/LICENSE from the fixture plugin):
+ * README.md/LICENSE from the fixture plugin); under `AIPM_REQUIRE_TEMPLATE=1` (CI), the suite
+ * does NOT skip — it runs and {@link assertTemplateRepoAvailable} throws a loud, actionable
+ * error instead:
  *
  * ```ts
- * describe.skipIf(!TEMPLATE_REPO_AVAILABLE)('parity with skill-evaluator', () => { … })
+ * const skip = shouldSkipTemplateRepoSuite({ available: TEMPLATE_REPO_AVAILABLE, required: AIPM_REQUIRE_TEMPLATE });
+ * describe.skipIf(skip)('parity with skill-evaluator', () => {
+ *   beforeAll(() =>
+ *     assertTemplateRepoAvailable({
+ *       available: TEMPLATE_REPO_AVAILABLE,
+ *       required: AIPM_REQUIRE_TEMPLATE,
+ *       templateRoot: TEMPLATE_REPO,
+ *     }),
+ *   );
+ *   // …
+ * });
  * ```
  */
 export const TEMPLATE_REPO: string = resolveTemplateRepo({

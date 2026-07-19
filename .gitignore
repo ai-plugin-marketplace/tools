@@ -22,3 +22,8 @@ scratch/
 
 # Claude Code local configuration (auto-added)
 .claude/*.local.*
+
+# CI-only checkout of ai-plugin-marketplace/template at the pinned revision (see
+# .github/template-repo.rev, .github/workflows/ci.yml) — never committed, and a local
+# reproduction of the CI layout (checking the template out at this path) must not get swept in.
+/.template-repo/

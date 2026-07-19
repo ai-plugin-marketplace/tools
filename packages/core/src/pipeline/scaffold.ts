@@ -37,7 +37,7 @@ import { scaffoldOpenPluginsFiles } from '../targets/open-plugins/scaffold.js';
 import { scaffoldVercelFiles } from '../targets/vercel/scaffold.js';
 import type { ScaffoldedFile, TargetScaffoldOptions } from '../targets/scaffold-kit.js';
 import { INITIAL_PLUGIN_VERSION } from '../targets/scaffold-kit.js';
-import { TARGET_IDS } from './types.js';
+import { DEFAULT_SCAFFOLD_TARGETS, TARGET_IDS } from './types.js';
 import type { AddTargetOutcome, ScaffoldOptions, SupportReport, TargetId } from './types.js';
 import { TARGET_MIN_REQUIRED } from './validate.js';
 
@@ -357,8 +357,11 @@ OR IN CONNECTION WITH THE USE OR PERFORMANCE OF THIS SOFTWARE.
  * Create a brand-new plugin under `pluginsDir/<name>/`.
  *
  * Writes `aipm.config.ts` (via the `defineConfig` literal), each declared target's skeleton
- * files, and the canonical `README.md` / `LICENSE`. Default targets are all known IDs when
- * `opts.targets` is absent.
+ * files, and the canonical `README.md` / `LICENSE`. Default targets are
+ * {@link DEFAULT_SCAFFOLD_TARGETS} when `opts.targets` is absent — every known target ID except
+ * `vercel`, which requires an author-authored `skills/<name>/SKILL.md` the scaffold does not seed
+ * and so would ship as a silent no-op target (issue #94). `vercel` remains fully addable via
+ * `aipm add-target`.
  *
  * Also registers the plugin in the template-level marketplace registries (§4.4) for each of
  * Claude/Cursor in the envelope (`repoRoot = dirname(pluginsDir)`), so the scaffolded plugin
@@ -378,7 +381,7 @@ export async function runScaffold(
     throw new Error(`Plugin directory already exists: ${pluginDir}`);
   }
 
-  const targets = orderTargets(opts.targets ?? TARGET_IDS);
+  const targets = orderTargets(opts.targets ?? DEFAULT_SCAFFOLD_TARGETS);
   const description = opts.description ?? `A plugin for ${name}`;
   const targetOpts: TargetScaffoldOptions = { description };
 

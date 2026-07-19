@@ -382,7 +382,9 @@ export async function run(argv: readonly string[], opts: RunOptions = {}): Promi
         const exitCode = lintExitCode(diagnostics);
 
         if (format === 'json') {
-          out.write(`${JSON.stringify(buildLintJson(diagnostics), null, 2)}\n`);
+          out.write(
+            `${JSON.stringify(buildLintJson(diagnostics, result.scannedFiles.length), null, 2)}\n`,
+          );
         } else if (format === 'sarif') {
           out.write(`${JSON.stringify(buildLintSarif(diagnostics, toolkitVersion()), null, 2)}\n`);
         } else {

@@ -34,8 +34,8 @@ function runCli(args: string[], cwd: string): CliResult {
 }
 
 interface JsonLintOutput {
-  diagnostics: { ruleId: string; severity: string }[];
-  summary: { errorCount: number };
+  diagnostics: { ruleId: string; severity: string; legacyCode?: string; message: string }[];
+  summary: { errorCount: number; fileCount: number };
 }
 
 interface SarifLintOutput {
@@ -48,6 +48,7 @@ interface SarifLintOutput {
 
 let cleanRepo: string;
 let brokenRepo: string;
+let namelessRepo: string;
 
 beforeAll(() => {
   // Real build: proves the wired `lint` command works from the compiled artifact, not just
@@ -71,11 +72,33 @@ beforeAll(async () => {
     path.join(pluginDir, '.claude-plugin', 'plugin.json'),
     JSON.stringify({ name: 'my-plugin', agents: './agents/missing.md' }, null, 2),
   );
+
+  // #92 repro: a `plugin.json` that is valid JSON and a plain object, but omits the
+  // schema-required `name` field. Also carries a second manifest-adjacent file (an agent) so
+  // fileCount has more than one file to truthfully count.
+  namelessRepo = fs.mkdtempSync(path.join(os.tmpdir(), 'aipm-lint-uat-nameless-'));
+  const namelessPluginDir = path.join(namelessRepo, 'plugins', 'p');
+  fs.mkdirSync(path.join(namelessPluginDir, '.claude-plugin'), { recursive: true });
+  fs.mkdirSync(path.join(namelessPluginDir, 'agents'), { recursive: true });
+  fs.writeFileSync(
+    path.join(namelessPluginDir, 'aipm.config.ts'),
+    "import { defineConfig } from '@ai-plugin-marketplace/core';\n" +
+      "export default defineConfig({ version: '1.0.0', targets: ['claude'] });\n",
+  );
+  fs.writeFileSync(
+    path.join(namelessPluginDir, '.claude-plugin', 'plugin.json'),
+    JSON.stringify({ version: '0.1.0', description: 'missing its required name field' }, null, 2),
+  );
+  fs.writeFileSync(
+    path.join(namelessPluginDir, 'agents', 'helper.md'),
+    '---\nname: helper\ndescription: A helper agent\n---\n\nBody.\n',
+  );
 });
 
 afterAll(() => {
   fs.rmSync(cleanRepo, { recursive: true, force: true });
   fs.rmSync(brokenRepo, { recursive: true, force: true });
+  fs.rmSync(namelessRepo, { recursive: true, force: true });
 });
 
 describe('aipm lint (subprocess)', () => {
@@ -233,5 +256,41 @@ describe('aipm lint (subprocess)', () => {
     expect(code).toBe(0);
     const parsed = JSON.parse(stdout) as JsonLintOutput;
     expect(parsed.diagnostics.some((d) => d.ruleId === 'config/unknown-rule')).toBe(false);
+  });
+
+  // Regression coverage for #92's repro: `p/.claude-plugin/plugin.json` with `name` removed
+  // (kept valid JSON) must fail `aipm lint`, with a diagnostic naming the missing field.
+  it('exits 1 and reports a schema/target-conformance diagnostic when plugin.json is missing the required "name" field', () => {
+    const { code, stdout } = runCli(['lint', namelessRepo, '--format', 'json'], namelessRepo);
+    expect(code).toBe(1);
+    const parsed = JSON.parse(stdout) as JsonLintOutput;
+    const schemaDiagnostics = parsed.diagnostics.filter(
+      (d) => d.ruleId === 'schema/target-conformance',
+    );
+    expect(schemaDiagnostics).toHaveLength(1);
+    expect(schemaDiagnostics[0]?.severity).toBe('error');
+    expect(schemaDiagnostics[0]?.legacyCode).toBe('schema-invalid');
+    expect(schemaDiagnostics[0]?.message).toContain('name');
+  });
+
+  // Regression coverage for #92: `summary.fileCount` must reflect files actually scanned, not
+  // stay pinned at an invariant (e.g. always 1) regardless of manifest mutations.
+  it('reports a truthful summary.fileCount that changes when the set of scanned files changes', () => {
+    const { stdout: namelessStdout } = runCli(
+      ['lint', namelessRepo, '--format', 'json'],
+      namelessRepo,
+    );
+    const namelessParsed = JSON.parse(namelessStdout) as JsonLintOutput;
+    // Known fixture: plugin.json + agents/helper.md are the only files the scanning rules read.
+    expect(namelessParsed.summary.fileCount).toBe(2);
+
+    // brokenRepo has only plugin.json (its referenced agent file does not exist on disk, so it
+    // is never actually read) — a different known fixture with a different scanned-file count,
+    // proving fileCount tracks what each run actually scanned rather than staying pinned at an
+    // invariant regardless of which manifest/fixture is linted (#92's repro).
+    const { stdout: brokenStdout } = runCli(['lint', brokenRepo, '--format', 'json'], brokenRepo);
+    const brokenParsed = JSON.parse(brokenStdout) as JsonLintOutput;
+    expect(brokenParsed.summary.fileCount).toBe(1);
+    expect(brokenParsed.summary.fileCount).not.toBe(namelessParsed.summary.fileCount);
   });
 });

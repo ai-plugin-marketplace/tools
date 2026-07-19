@@ -82,7 +82,7 @@ describe('formatLintText()', () => {
 
 describe('buildLintJson()', () => {
   it('returns the raw Diagnostic[] plus a summary envelope (spec §4.1)', () => {
-    const output = buildLintJson([RANGED, FILE_SCOPED]);
+    const output = buildLintJson([RANGED, FILE_SCOPED], 2);
     expect(output.diagnostics).toEqual([RANGED, FILE_SCOPED]);
     expect(output.summary).toEqual({
       errorCount: 1,
@@ -93,12 +93,26 @@ describe('buildLintJson()', () => {
   });
 
   it('reports a zeroed summary for an empty diagnostic list', () => {
-    expect(buildLintJson([]).summary).toEqual({
+    expect(buildLintJson([], 0).summary).toEqual({
       errorCount: 0,
       warnCount: 0,
       infoCount: 0,
       fileCount: 0,
     });
+  });
+
+  // Regression coverage for #92: fileCount must reflect files actually scanned, not the number
+  // of distinct files a diagnostic happens to be attached to. A clean run over many scanned
+  // files emits zero diagnostics but fileCount must still be > 0.
+  it('reports fileCount from the scanned-file count, not from diagnostics.length or diagnostic file uniqueness', () => {
+    const output = buildLintJson([], 5);
+    expect(output.diagnostics).toEqual([]);
+    expect(output.summary.fileCount).toBe(5);
+  });
+
+  it('reports a fileCount independent of how many diagnostics share a file', () => {
+    const output = buildLintJson([RANGED, { ...RANGED, message: 'a second finding' }], 1);
+    expect(output.summary.fileCount).toBe(1);
   });
 });
 

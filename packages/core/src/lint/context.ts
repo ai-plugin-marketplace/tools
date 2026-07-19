@@ -26,8 +26,17 @@ export function createRuleContext(params: {
   ci: boolean;
   skipFreshness?: boolean;
   configCache?: ConfigCache;
+  /**
+   * Shared across every `RuleContext` built for one `lint()` invocation. Every absolute path
+   * successfully read via `getDocument()` (a real, readable file — L-D3's document layer) is
+   * added here, regardless of parse outcome; this is `lint()`'s scan-scope record and backs the
+   * `json` format's `summary.fileCount` (docs/specs/lint-engine.md §4.1). Callers that don't care
+   * about scan tracking (most existing tests) may omit it — a throwaway `Set` is used instead.
+   */
+  scannedFiles?: Set<string>;
 }): InternalRuleContext {
   const cache = new Map<string, Document | undefined>();
+  const scannedFiles = params.scannedFiles ?? new Set<string>();
   return {
     pluginDir: params.pluginDir,
     repoRoot: params.repoRoot,
@@ -43,6 +52,7 @@ export function createRuleContext(params: {
       let doc: Document | undefined;
       try {
         const text = fs.readFileSync(absPath, 'utf-8');
+        scannedFiles.add(absPath);
         doc = parseDocument(absPath, text);
       } catch {
         doc = undefined;

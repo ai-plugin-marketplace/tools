@@ -11,6 +11,8 @@
  * envelope) — there is no envelope to run the other rules' `RuleContext` against.
  */
 
+import * as path from 'node:path';
+
 import {
   createConfigCache,
   loadPluginConfig,
@@ -49,6 +51,10 @@ export async function lint(targetPath: string, options?: LintOptions): Promise<L
   const generatesRegistries = workspace !== undefined;
 
   const diagnostics: Diagnostic[] = [];
+  // Accumulates every absolute path any rule actually reads via `RuleContext.getDocument()`
+  // across the whole run (shared across all contexts below) — lint()'s scan-scope record, per
+  // docs/specs/lint-engine.md §4.1.
+  const scannedFiles = new Set<string>();
 
   for (const pluginDir of pluginDirs) {
     const shapeCtx = createRuleContext({
@@ -60,6 +66,7 @@ export async function lint(targetPath: string, options?: LintOptions): Promise<L
       workspace,
       ci,
       configCache,
+      scannedFiles,
     });
     diagnostics.push(...(await envelopeShapeRule.check(shapeCtx)));
 
@@ -81,6 +88,7 @@ export async function lint(targetPath: string, options?: LintOptions): Promise<L
       workspace,
       ci,
       configCache,
+      scannedFiles,
     });
 
     // Schema validation runs first and separately (not via PER_PLUGIN_RULES) so its diagnostics
@@ -119,10 +127,20 @@ export async function lint(targetPath: string, options?: LintOptions): Promise<L
     workspace,
     ci,
     configCache,
+    scannedFiles,
   });
   for (const rule of REPO_SCOPED_RULES) {
     diagnostics.push(...(await rule.check(repoCtx)));
   }
 
-  return { diagnostics };
+  // Repo-relative, POSIX-separated, deduped, sorted for deterministic cross-platform output —
+  // mirrors `Diagnostic.file`'s repo-relative, `/`-separated convention (L-D1; every rule builds
+  // `file` from hand-written `/`-joined strings, never `path.join`/`path.relative` directly).
+  // `path.relative` returns `path.sep`-separated segments (backslash on Windows), so it must be
+  // normalized here rather than reused as-is.
+  const scannedFilesList = [...scannedFiles]
+    .map((abs) => path.relative(repoRoot, abs).split(path.sep).join('/'))
+    .sort();
+
+  return { diagnostics, scannedFiles: scannedFilesList };
 }

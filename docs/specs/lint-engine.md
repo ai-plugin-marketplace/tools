@@ -213,12 +213,26 @@ Default severity: `info` (advisory; these are judgment heuristics).
 - `text` (default): grouped by file, `file:line:col ruleId severity message`, docs URL on
   verbose. Diagnostics without a `range` (file-scoped, L-D1) render as
   `file ruleId severity message` — the position segment is omitted, never zero-filled.
-- `json`: the `Diagnostic[]` array plus a summary envelope.
+- `json`: the `Diagnostic[]` array plus a summary envelope (`{ errorCount, warnCount, infoCount,
+fileCount }`).
 - `sarif`: SARIF 2.1.0, one `rule` per rule id — direct GitHub code-scanning upload.
 - Exit codes: `0` no `error`-severity diagnostics, `1` errors present, `2` usage error —
   congruent with `aipm validate` today.
 - `aipm validate` is retained unchanged in behavior (L-D2) and documented as the CI
   build-contract profile; `aipm lint` is the superset linter.
+
+> **L-D9 (normative) — scan scope and `fileCount`.** A lint run's scan scope is exactly the set
+> of files any rule actually reads through the document layer (`RuleContext.getDocument()`,
+> L-D3), across every plugin and repo-scoped context built for that run. `lint()` returns this as
+> `LintResult.scannedFiles`: repo-relative paths, deduped, sorted. The `json` format's
+> `summary.fileCount` is `scannedFiles.length` — **not** the number of distinct files that happen
+> to carry a diagnostic. This matters because a fully clean run over many files must still report
+> a nonzero, accurate `fileCount` (zero diagnostics does not mean zero files were scanned), and a
+> broken manifest that a rule can't fully parse must not silently drop out of the count either. A
+> file that exists on disk but that no active rule's candidate-file list includes (e.g. it's
+> outside every rule's scanned-file set, or belongs to a target excluded by the plugin's
+> envelope) is never counted — `fileCount` is truthful about what this run actually scanned, not
+> a proxy for "every file under the plugin directory".
 
 ### 4.2 Published JSON Schemas
 

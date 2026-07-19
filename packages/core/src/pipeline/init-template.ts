@@ -21,6 +21,16 @@ const md = String.raw;
 const yaml = String.raw;
 
 /**
+ * A single literal backtick character, for interpolation into `md`-tagged templates.
+ *
+ * `md` is `String.raw`, so it does NOT interpret escape sequences — a `` \` `` inside a raw
+ * template stays as the two literal characters backslash+backtick in the output (never becomes a
+ * real backtick byte `0x60`). To embed an actual backtick in raw-tagged Markdown, interpolate this
+ * constant instead of writing an escaped backtick in the template source.
+ */
+const bt = '`';
+
+/**
  * pnpm version pinned in the generated `package.json#packageManager`. The CI workflow reads the
  * pnpm version from this field (it runs `pnpm/action-setup` without a hard-coded version), so the
  * two stay in sync. Bumped deliberately when the recommended pnpm baseline moves.
@@ -90,27 +100,27 @@ function renderReadme(name: string): string {
   return md`# ${name}
 
 An AI plugin marketplace repository, authored with
-[\`@ai-plugin-marketplace\`](https://www.npmjs.com/package/@ai-plugin-marketplace/cli).
+[${bt}@ai-plugin-marketplace/cli${bt}](https://www.npmjs.com/package/@ai-plugin-marketplace/cli).
 
 ## Getting started
 
-\`\`\`sh
+${bt}${bt}${bt}sh
 pnpm install
 aipm scaffold <plugin-name>
-\`\`\`
+${bt}${bt}${bt}
 
-\`aipm scaffold\` adds a new plugin under \`plugins/\`. Run \`aipm build\` to generate
-artifacts and \`aipm validate\` to check them.
+${bt}aipm scaffold${bt} adds a new plugin under ${bt}plugins/${bt}. Run ${bt}aipm build${bt} to generate
+artifacts and ${bt}aipm validate${bt} to check them.
 
 ## Upgrading the toolkit
 
 This repository holds plugin sources only — the build, validation, and scaffolding
-logic lives in \`@ai-plugin-marketplace/cli\`. Upgrade it (and every capability it
+logic lives in ${bt}@ai-plugin-marketplace/cli${bt}. Upgrade it (and every capability it
 provides) with:
 
-\`\`\`sh
+${bt}${bt}${bt}sh
 pnpm up @ai-plugin-marketplace/cli
-\`\`\`
+${bt}${bt}${bt}
 `;
 }
 

@@ -136,7 +136,8 @@ reference, and quality warning lands on a clickable `file:line:col`.
 > does, detection emits an explicit ambiguity diagnostic (usage exit) telling the user to pass
 > `--as` — it never guesses. Discovery-mode names reuse established vocabulary (`open-plugins`
 > matches the `TargetId` spelling). Cross-file semantic rules that require the aipm workspace model (freshness,
-> mcp-key-sync, name-consistency, envelope adherence) declare `appliesTo: ['aipm-repo']` and are
+> mcp-key-sync, name-consistency, version-consistency, envelope adherence) declare
+> `appliesTo: ['aipm-repo']` and are
 > silently absent in foreign modes — foreign configs get every rule whose inputs exist.
 
 ### 2.5 Configuration and suppression
@@ -160,9 +161,9 @@ through L-D3 so every issue has a range. Zod remains the sole authority (L-D8).
 
 ### 3.2 `correctness/*` — things that silently break at runtime
 
-Migrations of every existing check (`envelope-adherence`, `name-consistency`, `mcp-key-sync`,
-`freshness`, path safety, frontmatter parse, marketplace registration, root-artifact rules) plus
-new rules:
+Migrations of every existing check (`envelope-adherence`, `name-consistency`,
+`version-consistency`, `mcp-key-sync`, `freshness`, path safety, frontmatter parse, marketplace
+registration, root-artifact rules) plus new rules:
 
 - `correctness/broken-file-ref` — manifest and frontmatter references to files that don't exist.
 - `correctness/unknown-hook-event` — event names outside the host's recognized set.

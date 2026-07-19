@@ -454,6 +454,7 @@ export type FindingCode =
   | 'envelope-adherence' // file exists for a target outside the envelope
   | 'schema-invalid' // target manifest failed Zod validation
   | 'name-consistency' // plugin name mismatch across manifests
+  | 'version-consistency' // target manifest version mismatch vs aipm.config.ts
   | 'mcp-key-sync' // .mcp.json vs mcp.json server keys diverge
   | 'marketplace-registration' // plugin-to-registry projection is wrong
   | 'freshness' // generated file drifted from what `aipm build` would produce

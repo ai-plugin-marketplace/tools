@@ -127,6 +127,38 @@ describeMaybe('runValidate — cross-target consistency (§10.1 step 4)', () => 
     // The cursor name mismatch must NOT surface as name-consistency (cross-target skipped).
     expect(ofCode(result.findings, 'name-consistency')).toHaveLength(0);
   });
+
+  it('a version mismatch in a manifest yields version-consistency (multi-target envelope, issue #75)', async () => {
+    // Mutate gemini-extension.json's version BEFORE build so the dist bundle stays consistent and
+    // only the cross-target version check fires (mirrors the name-consistency test above).
+    repo = synthPluginRepo(ALL_SYNTH_TARGETS, (pluginDir) => {
+      const extPath = path.join(pluginDir, 'gemini-extension.json');
+      const ext = JSON.parse(fs.readFileSync(extPath, 'utf-8')) as Record<string, unknown>;
+      ext.version = '9.9.9';
+      fs.writeFileSync(extPath, JSON.stringify(ext, null, 2) + '\n', 'utf-8');
+    });
+    await runBuild(repo.repoRoot);
+
+    const result = await runValidate(repo.repoRoot, { ci: true });
+    const versionFindings = ofCode(result.findings, 'version-consistency');
+    expect(versionFindings.length).toBeGreaterThanOrEqual(1);
+    expect(versionFindings.some((f) => f.message.includes('9.9.9'))).toBe(true);
+    expect(result.passed).toBe(false);
+  });
+
+  it('does not run version-consistency for a single-target envelope', async () => {
+    // Single-target claude plugin: a cursor version mismatch must NOT surface as
+    // version-consistency (cross-target checks are skipped, §10.1 step 4).
+    repo = synthPluginRepo(['claude'], (pluginDir) => {
+      const cur = path.join(pluginDir, '.cursor-plugin', 'plugin.json');
+      const obj = JSON.parse(fs.readFileSync(cur, 'utf-8')) as Record<string, unknown>;
+      obj.version = '9.9.9';
+      fs.writeFileSync(cur, JSON.stringify(obj, null, 2) + '\n', 'utf-8');
+    });
+    await runBuild(repo.pluginDir);
+    const result = await runValidate(repo.pluginDir, { ci: true });
+    expect(ofCode(result.findings, 'version-consistency')).toHaveLength(0);
+  });
 });
 
 describeMaybe('runValidate — freshness (§10.5, §10.2)', () => {

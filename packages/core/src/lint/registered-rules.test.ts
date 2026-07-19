@@ -16,6 +16,7 @@ describe('registeredRuleIds()', () => {
     expect(ids).toContain('schema/envelope-shape');
     expect(ids).toContain('schema/target-conformance');
     expect(ids).toContain('correctness/name-consistency');
+    expect(ids).toContain('correctness/version-consistency');
     expect(ids).toContain('correctness/mcp-key-sync');
     expect(ids).toContain('correctness/marketplace-registration');
   });

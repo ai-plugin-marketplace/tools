@@ -19,6 +19,7 @@ import {
   validateMarketplaceRegistration,
   validateMcpKeySync,
   validateNameConsistency,
+  validateVersionConsistency,
 } from './validate.js';
 import { defineWorkspace } from '../config.js';
 
@@ -97,6 +98,16 @@ function createMinimalPlugin(pluginDir: string, pluginName: string, targets: str
   if (targets.includes('claude') || targets.includes('cursor')) {
     write(pluginDir, '.mcp.json', { mcpServers: {} });
   }
+}
+
+/** Write a minimal `aipm.config.ts` declaring `version` (and, for envelope loading, `targets`). */
+function writeConfig(pluginDir: string, version: string, targets: readonly string[]): void {
+  const targetList = targets.map((t) => `'${t}'`).join(', ');
+  write(
+    pluginDir,
+    'aipm.config.ts',
+    `import { defineConfig } from '@ai-plugin-marketplace/core';\n\nexport default defineConfig({\n  version: '${version}',\n  targets: [${targetList}],\n});\n`,
+  );
 }
 
 // ---------------------------------------------------------------------------
@@ -321,6 +332,116 @@ describe('validateNameConsistency()', () => {
 
     const findings = validateNameConsistency(pluginDir, ['claude', 'cursor', 'gemini', 'kiro']);
     // No manifest = nothing to compare — no findings
+    expect(findings).toHaveLength(0);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// validateVersionConsistency
+// ---------------------------------------------------------------------------
+
+describe('validateVersionConsistency()', () => {
+  // Acceptance criterion 2: no finding when all in-envelope manifests' versions equal the
+  // config version.
+  it('returns no findings when all manifest versions match aipm.config.ts', async () => {
+    const pluginDir = path.join(tmpDir, 'my-plugin');
+    writeConfig(pluginDir, '1.2.3', ['claude', 'cursor', 'gemini', 'kiro']);
+    write(pluginDir, '.claude-plugin/plugin.json', { name: 'my-plugin', version: '1.2.3' });
+    write(pluginDir, '.cursor-plugin/plugin.json', { name: 'my-plugin', version: '1.2.3' });
+    write(pluginDir, 'gemini-extension.json', { name: 'my-plugin', version: '1.2.3' });
+    write(
+      pluginDir,
+      'POWER.md',
+      frontmatter({ name: 'my-plugin', description: 'test', version: '1.2.3' }),
+    );
+
+    const findings = await validateVersionConsistency(pluginDir, [
+      'claude',
+      'cursor',
+      'gemini',
+      'kiro',
+    ]);
+    expect(findings).toHaveLength(0);
+  });
+
+  // Acceptance criterion 1: emits a hard version-consistency finding naming the manifest path,
+  // the manifest's version, and the expected config version.
+  it('emits a hard version-consistency finding for a claude manifest version mismatch', async () => {
+    const pluginDir = path.join(tmpDir, 'my-plugin');
+    writeConfig(pluginDir, '1.2.3', ['claude']);
+    write(pluginDir, '.claude-plugin/plugin.json', { name: 'my-plugin', version: '0.9.0' });
+
+    const findings = await validateVersionConsistency(pluginDir, ['claude']);
+    expect(findings).toHaveLength(1);
+    expect(findings[0]?.severity).toBe('hard');
+    expect(findings[0]?.code).toBe('version-consistency');
+    expect(findings[0]?.message).toContain('.claude-plugin/plugin.json');
+    expect(findings[0]?.message).toContain('0.9.0');
+    expect(findings[0]?.message).toContain('1.2.3');
+  });
+
+  it('emits version-consistency when kiro POWER.md frontmatter version mismatches the config', async () => {
+    const pluginDir = path.join(tmpDir, 'my-plugin');
+    writeConfig(pluginDir, '1.2.3', ['kiro']);
+    write(
+      pluginDir,
+      'POWER.md',
+      frontmatter({ name: 'my-plugin', description: 'test', version: '0.9.0' }),
+    );
+
+    const findings = await validateVersionConsistency(pluginDir, ['kiro']);
+    expect(findings).toHaveLength(1);
+    expect(findings[0]?.code).toBe('version-consistency');
+    expect(findings[0]?.message).toContain('POWER.md');
+    expect(findings[0]?.message).toContain('0.9.0');
+    expect(findings[0]?.message).toContain('1.2.3');
+  });
+
+  // Acceptance criterion 3: one finding per mismatched manifest, mirroring name-consistency.
+  it('emits one finding per mismatched manifest (not a single combined finding)', async () => {
+    const pluginDir = path.join(tmpDir, 'my-plugin');
+    writeConfig(pluginDir, '1.2.3', ['claude', 'cursor']);
+    write(pluginDir, '.claude-plugin/plugin.json', { name: 'my-plugin', version: '0.9.0' });
+    write(pluginDir, '.cursor-plugin/plugin.json', { name: 'my-plugin', version: '0.8.0' });
+
+    const findings = await validateVersionConsistency(pluginDir, ['claude', 'cursor']);
+    expect(findings).toHaveLength(2);
+    expect(findings.every((f) => f.code === 'version-consistency')).toBe(true);
+  });
+
+  it('skips vercel (no top-level version field)', async () => {
+    const pluginDir = path.join(tmpDir, 'my-plugin');
+    writeConfig(pluginDir, '1.2.3', ['vercel']);
+    write(pluginDir, 'skills/my-skill/SKILL.md', '# skill');
+
+    const findings = await validateVersionConsistency(pluginDir, ['vercel']);
+    expect(findings).toHaveLength(0);
+  });
+
+  // Acceptance criterion 4: a manifest that is absent produces no version-consistency finding.
+  it('skips manifests that do not exist', async () => {
+    const pluginDir = path.join(tmpDir, 'my-plugin');
+    writeConfig(pluginDir, '1.2.3', ['claude', 'cursor', 'gemini', 'kiro']);
+    // No manifest files created
+
+    const findings = await validateVersionConsistency(pluginDir, [
+      'claude',
+      'cursor',
+      'gemini',
+      'kiro',
+    ]);
+    expect(findings).toHaveLength(0);
+  });
+
+  // Acceptance criterion 4: a manifest present but without a `version` field does not fabricate
+  // a mismatch.
+  it('does not fire when a present manifest declares no version field', async () => {
+    const pluginDir = path.join(tmpDir, 'my-plugin');
+    writeConfig(pluginDir, '1.2.3', ['claude', 'gemini']);
+    write(pluginDir, '.claude-plugin/plugin.json', { name: 'my-plugin' });
+    write(pluginDir, 'gemini-extension.json', { name: 'my-plugin' });
+
+    const findings = await validateVersionConsistency(pluginDir, ['claude', 'gemini']);
     expect(findings).toHaveLength(0);
   });
 });

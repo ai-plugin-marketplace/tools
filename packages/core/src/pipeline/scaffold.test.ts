@@ -117,9 +117,11 @@ describe('renderAipmConfig + parseDeclaredTargets', () => {
     expect(parseDeclaredTargets(source)).toStrictEqual(['claude', 'gemini']);
   });
 
-  it('emits version 0.1.0 and a defineConfig call', () => {
+  it('emits version 0.0.1 (INITIAL_PLUGIN_VERSION) and a defineConfig call', () => {
+    // Must match every per-target scaffold module's manifest `version` field (also
+    // INITIAL_PLUGIN_VERSION) so a freshly-scaffolded plugin passes `version-consistency`.
     const source = renderAipmConfig(['claude']);
-    expect(source).toContain("version: '0.1.0'");
+    expect(source).toContain("version: '0.0.1'");
     expect(source).toContain('defineConfig(');
   });
 

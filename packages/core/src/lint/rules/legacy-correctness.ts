@@ -17,9 +17,10 @@ import {
   validateMarketplaceRegistration,
   validateMcpKeySync,
   validateNameConsistency,
+  validateVersionConsistency,
 } from '../../pipeline/validate.js';
 import { findingToDiagnostic } from '../diagnostic.js';
-import type { Diagnostic, Rule, RuleContext } from '../types.js';
+import type { Diagnostic, InternalRuleContext, Rule, RuleContext } from '../types.js';
 import { docsUrlFor } from './docs-url.js';
 
 function wrap(ruleId: string) {
@@ -78,6 +79,23 @@ export const nameConsistencyRule: Rule = {
   },
   check(ctx: RuleContext): Diagnostic[] {
     return wrap(NAME_CONSISTENCY_ID)(ctx, validateNameConsistency(ctx.pluginDir, ctx.envelope));
+  },
+};
+
+const VERSION_CONSISTENCY_ID = 'correctness/version-consistency';
+export const versionConsistencyRule: Rule = {
+  meta: {
+    id: VERSION_CONSISTENCY_ID,
+    category: 'correctness',
+    defaultSeverity: 'error',
+    description:
+      "Every declared target's manifest `version` field matches `aipm.config.ts`'s `version`.",
+    // Requires the resolved aipm.config.ts envelope and version — aipm-repo only.
+    appliesTo: ['aipm-repo'],
+  },
+  async check(ctx: InternalRuleContext): Promise<Diagnostic[]> {
+    const findings = await validateVersionConsistency(ctx.pluginDir, ctx.envelope, ctx.configCache);
+    return wrap(VERSION_CONSISTENCY_ID)(ctx, findings);
   },
 };
 

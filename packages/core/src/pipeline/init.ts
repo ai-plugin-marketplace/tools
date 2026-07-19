@@ -134,9 +134,10 @@ export async function runInit(targetDir: string, opts: InitOptions = {}): Promis
     );
   }
 
-  // Detected before writing anything: the warning is about what a subsequent `pnpm install` in
-  // `resolved` could do, so it must reach the caller regardless of whether the scaffold write
-  // below succeeds.
+  // Detected before writing anything, since the check is independent of the scaffold write below
+  // and cheap to do up front. Note this does NOT reach the caller if a later step throws (name
+  // validation, an I/O error) — `runInit` only returns `InitOutcome` on success; a thrown error
+  // still propagates as a rejection with no outcome value.
   const ancestorWorkspace = findAncestorPnpmWorkspace(resolved);
 
   // Reject an explicitly-provided but blank `name`/`marketplaceName` at the I/O boundary: an empty

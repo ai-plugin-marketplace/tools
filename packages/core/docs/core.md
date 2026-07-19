@@ -28,7 +28,18 @@ Description
 
 </td><td>
 
-Scaffold skeleton files for a new target in an existing plugin (§6.4).
+Scaffold skeleton files for a new target in an existing plugin (§6.4). Preserve-or-warn, never destructive: an already-materialized target (every file it would write already exists) is a friendly no-op (`status: 'already-present'`<!-- -->) rather than a thrown error, and existing files are never overwritten — see [AddTargetOutcome](./core.addtargetoutcome.md)<!-- -->.
+
+
+</td></tr>
+<tr><td>
+
+[applyRuleSeverityOverrides(diagnostics, overrides)](./core.applyruleseverityoverrides.md)
+
+
+</td><td>
+
+Apply `--rule` overrides to a diagnostic list: a diagnostic whose `ruleId` has an `'off'` override is dropped; one with any other override has its `severity` replaced; diagnostics for rule ids with no entry in `overrides` pass through unchanged. Order is preserved.
 
 
 </td></tr>
@@ -94,7 +105,18 @@ Validate and brand a workspace configuration. Throws a `ZodError` on invalid inp
 
 </td><td>
 
-Scaffold a thin consumer repo (the "template") at `targetDir` that depends on `@ai-plugin-marketplace/cli` and holds plugin sources only (§3.2, §11). The generated `package.json` pins the cli dev dependency to a caret of the current toolkit version (§9.1 lockstep). Refuses to write into a non-empty directory.
+Scaffold a thin consumer repo (the "template") at `targetDir` that depends on `@ai-plugin-marketplace/cli` and holds plugin sources only (§3.2, §11). The generated `package.json` pins the cli dev dependency to a caret of the current toolkit version (§9.1 lockstep). Refuses to write into a non-empty directory. Returns an [InitOutcome](./core.initoutcome.md) flagging an ancestor `pnpm-workspace.yaml`<!-- -->, if one exists (issue \#96 ancestor-contamination guard).
+
+
+</td></tr>
+<tr><td>
+
+[lint(targetPath, options)](./core.lint.md)
+
+
+</td><td>
+
+Lint a single plugin directory or a repo root (aipm-repo discovery mode). Runs every rule the engine knows about and returns the combined, unfiltered diagnostics (no rule-config/severity overrides or suppression — L-D6 configuration is CLI-issue scope, §6 step 2).
 
 
 </td></tr>
@@ -133,12 +155,36 @@ Refresh the toolkit-owned scaffold files (CI workflow, `.gitignore`<!-- -->) of 
 </td></tr>
 <tr><td>
 
+[registeredRuleIds()](./core.registeredruleids.md)
+
+
+</td><td>
+
+Every rule id the engine knows about (spec L-D4's `Rule.meta.id`<!-- -->), regardless of whether a given lint invocation actually runs it — `lint()`<!-- -->'s cross-target/discovery gating still applies at run time, this is the static registry. Backs `aipm lint --rule <id>=<severity>` typo detection: L-D6 says an unknown rule id in config/overrides is itself a `warn` diagnostic.
+
+
+</td></tr>
+<tr><td>
+
 [scaffold(name, opts)](./core.scaffold.md)
 
 
 </td><td>
 
 Scaffold a new plugin under the cwd's configured plugins root (`<cwd>/plugins/<name>` by default, or the relocated `pluginsRoot` from an `aipm.repo.ts`<!-- -->). The plugins directory is derived from the current working directory, matching how `aipm scaffold` is invoked from a repo root.
+
+
+</td></tr>
+<tr><td>
+
+[unknownRuleOverrideDiagnostics(overrides, diagnosticsBeforeOverrides, registeredRuleIds)](./core.unknownruleoverridediagnostics.md)
+
+
+</td><td>
+
+Flag `--rule <id>=<severity>` entries that don't match anything real: neither a diagnostic this run actually produced nor any rule the engine has registered (L-D6 typo protection). Checking both — not just `registeredRuleIds` — means an override is accepted whenever it evidently corresponds to something real, even if the static registry were ever incomplete.
+
+Must be called with the diagnostics `lint()` produced BEFORE [applyRuleSeverityOverrides()](./core.applyruleseverityoverrides.md) — an `=off` override legitimately removes its own rule's diagnostics from the post-filter list, which would make a perfectly valid override look unmatched.
 
 
 </td></tr>
@@ -169,6 +215,21 @@ Description
 
 </th></tr></thead>
 <tbody><tr><td>
+
+[AddTargetOutcome](./core.addtargetoutcome.md)
+
+
+</td><td>
+
+Result of [addTarget()](./core.addtarget.md) (`aipm add-target`<!-- -->, §6.4).
+
+`add-target` NEVER overwrites an existing file — it is preserve-or-warn, never destructive (issue \#90). `status` discriminates the three outcomes so callers (the CLI) can report the right thing without re-deriving it from `written`<!-- -->/`preserved`<!-- -->:
+
+- `'already-present'` — every file this target would write already exists on disk. A friendly no-op: nothing is written, `written` is empty. The envelope is still updated to declare `target` if it did not already (keeps `check-support`<!-- -->/`validate` consistent). - `'added'` — none of the target's files existed; all were written fresh. - `'partially-added'` — some of the target's files existed and were left untouched (`preserved`<!-- -->), the rest were written (`written`<!-- -->). Only possible for multi-file targets (e.g. Gemini's `gemini-extension.json` + `GEMINI.md`<!-- -->).
+
+
+</td></tr>
+<tr><td>
 
 [AipmConfigInput](./core.aipmconfiginput.md)
 
@@ -227,12 +288,45 @@ Result of building a single plugin. One entry per plugin built.
 </td></tr>
 <tr><td>
 
+[Diagnostic](./core.diagnostic.md)
+
+
+</td><td>
+
+The engine's unit of output.
+
+
+</td></tr>
+<tr><td>
+
 [Finding](./core.finding.md)
 
 
 </td><td>
 
 A single validation finding.
+
+
+</td></tr>
+<tr><td>
+
+[Fix](./core.fix.md)
+
+
+</td><td>
+
+Reserved for future auto-fix support (spec §1.3 non-goals: no auto-fix in v1). Not applied by anything in this release; present so the [Diagnostic](./core.diagnostic.md) shape is stable when fix application lands.
+
+
+</td></tr>
+<tr><td>
+
+[FrontmatterDocument](./core.frontmatterdocument.md)
+
+
+</td><td>
+
+A markdown file's YAML frontmatter block, offset-tracked against the full file text.
 
 
 </td></tr>
@@ -260,6 +354,50 @@ Options for [init()](./core.init.md)<!-- -->.
 </td></tr>
 <tr><td>
 
+[InitOutcome](./core.initoutcome.md)
+
+
+</td><td>
+
+Result of [init()](./core.init.md) (issue \#96 ancestor-workspace-contamination guard).
+
+
+</td></tr>
+<tr><td>
+
+[JsonDocument](./core.jsondocument.md)
+
+
+</td><td>
+
+A JSON document, position-tracked via a `jsonc-parser` parse tree (kept internal — see ).
+
+
+</td></tr>
+<tr><td>
+
+[LintOptions](./core.lintoptions.md)
+
+
+</td><td>
+
+Options for [lint()](./core.lint.md)<!-- -->.
+
+
+</td></tr>
+<tr><td>
+
+[LintResult](./core.lintresult.md)
+
+
+</td><td>
+
+Result of [lint()](./core.lint.md)<!-- -->.
+
+
+</td></tr>
+<tr><td>
+
 [MigrateOptions](./core.migrateoptions.md)
 
 
@@ -282,6 +420,28 @@ Result of running [migrate()](./core.migrate.md)<!-- -->.
 </td></tr>
 <tr><td>
 
+[Position](./core.position.md)
+
+
+</td><td>
+
+A 1-indexed source position. `line` and `col` both start at 1, matching editor conventions (not 0-indexed offsets).
+
+
+</td></tr>
+<tr><td>
+
+[Range](./core.range.md)
+
+
+</td><td>
+
+A source range, 1-indexed, half-open in the sense that `end` marks the position immediately after the last character the range covers (mirrors LSP `Range` semantics).
+
+
+</td></tr>
+<tr><td>
+
 [RefreshOptions](./core.refreshoptions.md)
 
 
@@ -299,6 +459,28 @@ Options for [refreshScaffold()](./core.refreshscaffold.md)<!-- -->.
 </td><td>
 
 Per-file outcome of a [refreshScaffold()](./core.refreshscaffold.md) run. Returned (one per managed scaffold file) so the CLI can report what changed without re-deriving it.
+
+
+</td></tr>
+<tr><td>
+
+[Rule](./core.rule.md)
+
+
+</td><td>
+
+A rule module.
+
+
+</td></tr>
+<tr><td>
+
+[RuleContext](./core.rulecontext.md)
+
+
+</td><td>
+
+Read-only context handed to a [Rule](./core.rule.md)<!-- -->'s `check()`<!-- -->. Exposes the parsed document set and workspace model for the plugin currently under lint — rules never do their own file discovery or parsing (L-D3, L-D4).
 
 
 </td></tr>
@@ -343,6 +525,17 @@ Options for [validate()](./core.validate.md)<!-- -->.
 </td><td>
 
 Result of validating one or more plugins.
+
+
+</td></tr>
+<tr><td>
+
+[YamlDocument](./core.yamldocument.md)
+
+
+</td><td>
+
+A standalone YAML document (e.g. `hooks/claude.yaml`<!-- -->), position-tracked via the YAML CST (kept internal — see ).
 
 
 </td></tr>
@@ -396,12 +589,36 @@ Validated workspace configuration. Structurally identical to [AipmWorkspaceInput
 </td></tr>
 <tr><td>
 
+[DiscoveryMode](./core.discoverymode.md)
+
+
+</td><td>
+
+A discovery mode the engine can run rules under (spec §2.4). Only `'aipm-repo'` is implemented by this issue's scope — the others are reserved so a `Rule`<!-- -->'s `appliesTo` can be authored now without becoming a breaking change once foreign discovery modes land (a later issue).
+
+
+</td></tr>
+<tr><td>
+
+[Document](./core.document.md)
+
+
+</td><td>
+
+A position-aware parsed document.
+
+
+</td></tr>
+<tr><td>
+
 [FindingCode](./core.findingcode.md)
 
 
 </td><td>
 
 Enumerated finding codes. Additive — new codes arrive in toolkit MINOR releases; removing or renaming a code is MAJOR. Consumers SHOULD handle unknown codes gracefully.
+
+`version-consistency` — a declared target's manifest `version` field does not match `aipm.config.ts`<!-- -->'s `version`<!-- -->. Installs are keyed by manifest version, so a stale author-maintained manifest (e.g. `.claude-plugin/plugin.json`<!-- -->) silently pins auto-update to a pre-release artifact even after `aipm.config.ts`<!-- -->'s `version` is bumped. Fires HARD, mirroring `name-consistency`<!-- -->.
 
 `single-artifact-host` — a "single-artifact host" (`gemini` or `kiro`<!-- -->), which installs ONE extension/power per repo from the repo ROOT and has no marketplace concept, is declared by MORE THAN ONE plugin in the repo. The root artifact for that host is NOT emitted while the ambiguity stands (the toolkit can't choose which plugin owns the single root slot).
 
@@ -423,6 +640,17 @@ Enumerated finding codes. Additive — new codes arrive in toolkit MINOR release
 The target(s) responsible for producing a [GeneratedFile](./core.generatedfile.md)<!-- -->: either the single [TargetId](./core.targetid.md) whose build step owns the file, or the literal `'shared'` marking an artifact that a build step emits for the whole envelope with no single owning target (e.g. the payload adapter, emitted for any plugin authoring hooks regardless of which targets it declares, or the generated-root sidecar manifest spanning every emitted single-artifact-host/registry owner).
 
 `'shared'` is a value of this field only — it is never added to [TargetId](./core.targetid.md) or `TARGET_IDS`<!-- -->, so real per-target iteration (envelope checks, registry lookups, etc.) is unaffected.
+
+
+</td></tr>
+<tr><td>
+
+[RuleSeverityOverride](./core.ruleseverityoverride.md)
+
+
+</td><td>
+
+A `--rule <id>=<severity>` override value. `'off'` drops matching diagnostics entirely.
 
 
 </td></tr>

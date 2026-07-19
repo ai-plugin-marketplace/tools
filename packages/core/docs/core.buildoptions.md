@@ -54,5 +54,24 @@ _(Optional)_ Abort after the first hard validation finding. Default: false.
 
 
 </td></tr>
+<tr><td>
+
+[forceDowngrade?](./core.buildoptions.forcedowngrade.md)
+
+
+</td><td>
+
+
+</td><td>
+
+boolean
+
+
+</td><td>
+
+_(Optional)_ Override the generator-version downgrade guard (§4.3.1). By default a build whose installed `@ai-plugin-marketplace/core` is OLDER than the version stamped into an existing artifact refuses (to avoid silently reverting generated files to the older generator's output). Set this to proceed anyway and restamp with the older version. Default: false.
+
+
+</td></tr>
 </tbody></table>
 

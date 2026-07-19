@@ -5,10 +5,12 @@ The `aipm` binary — a thin CLI wrapper around
 
 ## Install
 
-First, establish a local `package.json` so the install below cannot land in the wrong place:
+First, establish a local `package.json` so the install below cannot land in the wrong place.
+Use a bootstrap directory distinct from the plugin repo `aipm init` creates below — `aipm init`
+refuses to scaffold into a directory that already has files in it:
 
 ```sh
-mkdir my-plugins && cd my-plugins
+mkdir aipm-bootstrap && cd aipm-bootstrap
 npm init -y
 pnpm add -D @ai-plugin-marketplace/cli
 ```
@@ -53,16 +55,19 @@ pnpm add -D @ai-plugin-marketplace/cli
 
 ## Quick start
 
-Starting from a directory with its own `package.json` (see Install, above — `aipm init`'s
-target directory must not already exist or must be empty, so it scaffolds a fresh subdirectory
-rather than the one you just `npm init`'d):
+Starting from the bootstrap directory above (`aipm init`'s target directory must not already
+exist or must be empty, so it scaffolds a fresh subdirectory rather than the one you just
+`npm init`'d):
 
 ```sh
 pnpm exec aipm init my-plugins
 cd my-plugins
 pnpm install
-aipm scaffold my-plugin
+pnpm exec aipm scaffold my-plugin
 ```
+
+`aipm` isn't on `PATH` for a non-global dev-dependency install like this one — use `pnpm exec`
+for every `aipm` invocation.
 
 `aipm init` also warns (to stderr) if it detects an ancestor `pnpm-workspace.yaml` above the
 target directory, since a later `pnpm install` there could still be swept into that workspace.

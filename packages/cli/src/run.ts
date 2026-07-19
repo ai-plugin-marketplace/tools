@@ -280,7 +280,9 @@ export async function run(argv: readonly string[], opts: RunOptions = {}): Promi
               "  or add it to the ancestor's pnpm-workspace.yaml `packages` list deliberately.\n",
           );
         }
-        out.write('Next: run `pnpm install`, then `aipm scaffold <name>` to add a plugin.\n');
+        out.write(
+          'Next: run `pnpm install`, then `pnpm exec aipm scaffold <name>` to add a plugin.\n',
+        );
         return 0;
       }
 

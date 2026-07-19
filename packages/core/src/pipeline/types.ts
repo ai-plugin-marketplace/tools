@@ -61,6 +61,21 @@ export const TARGET_IDS = [
  */
 declare const _targetIdsAreExhaustive: TargetId extends (typeof TARGET_IDS)[number] ? true : never;
 
+/**
+ * Targets included in a fresh `aipm scaffold` when the caller does not pass an explicit
+ * `targets` list. This is a strict subset of {@link TARGET_IDS}: a target only belongs here once
+ * its build step emits at least one artifact for every scaffolded plugin, so a default scaffold
+ * never contains a silent no-op target. `vercel` is deliberately excluded — it is fully supported
+ * (`add-target`, `build`, `validate` all know about it) but requires an author-authored
+ * `skills/<name>/SKILL.md` that the scaffold does not seed, so it would emit zero build artifacts
+ * out of the box.
+ *
+ * @internal
+ */
+export const DEFAULT_SCAFFOLD_TARGETS = TARGET_IDS.filter(
+  (id): id is Exclude<(typeof TARGET_IDS)[number], 'vercel'> => id !== 'vercel',
+) as readonly Exclude<TargetId, 'vercel'>[];
+
 // ---------------------------------------------------------------------------
 // Build
 

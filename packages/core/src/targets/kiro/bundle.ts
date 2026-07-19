@@ -64,7 +64,12 @@ export interface BundleKiroPluginResult {
  * generates `.kiro/agents/<name>.json` from any agent `.md` files found in
  * `pluginDir/agents/`. Clears `destDir` before writing.
  *
- * Files copied (if present): `POWER.md`, `mcp.json`, `README.md`, `LICENSE`.
+ * Files copied (if present): `POWER.md`, `mcp.json`. README.md/LICENSE are deliberately NOT
+ * copied — the template repo (commit d2d9923, "adopt generated registries and repo-root
+ * Gemini/Kiro emission") moved them from per-plugin source to the repo ROOT, where they are
+ * canonical, author-owned, SHARED artifacts backing the single Kiro power by virtue of already
+ * living beside it (GeneratedFile.target's 'shared' model, per #54) rather than a per-plugin
+ * generated copy. See `gemini/bundle.ts` for the parallel reasoning.
  * Dirs copied (if present): `steering/`, `skills/`.
  * Agent `.md` files are compiled to `.kiro/agents/<name>.json` via
  * `buildKiroAgentConfig`, serialised with 2-space indent + trailing newline.
@@ -80,8 +85,8 @@ export function bundleKiroPlugin(pluginDir: string, destDir: string): BundleKiro
   const emitted: string[] = [];
   const agentsGenerated: string[] = [];
 
-  // Canonical files
-  const files: string[] = ['POWER.md', 'mcp.json', 'README.md', 'LICENSE'];
+  // Canonical files (README.md/LICENSE are intentionally excluded — see module doc above)
+  const files: string[] = ['POWER.md', 'mcp.json'];
   for (const file of files) {
     if (copyIfExists(path.join(pluginDir, file), path.join(destDir, file))) {
       emitted.push(file);

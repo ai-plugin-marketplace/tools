@@ -189,8 +189,6 @@ describe.skipIf(SKIP_PARITY_SUITE)('bundleGeminiPlugin — emitted paths', () =>
 
     expect(emittedSet.has('gemini-extension.json')).toBe(true);
     expect(emittedSet.has('GEMINI.md')).toBe(true);
-    expect(emittedSet.has('README.md')).toBe(true);
-    expect(emittedSet.has('LICENSE')).toBe(true);
     expect(emittedSet.has(path.join('agents', 'experimenter.md'))).toBe(true);
     expect(emittedSet.has(path.join('agents', 'test-subject.md'))).toBe(true);
     expect(emittedSet.has(path.join('skills', 'evaluate-skill', 'SKILL.md'))).toBe(true);
@@ -203,5 +201,25 @@ describe.skipIf(SKIP_PARITY_SUITE)('bundleGeminiPlugin — emitted paths', () =>
 
     // evaluate.md is in the source commands/ but must not be emitted
     expect(emitted.some((p) => p.endsWith('evaluate.md') && p.startsWith('commands'))).toBe(false);
+  });
+
+  it('does not include README.md/LICENSE even when present in pluginDir (root-owned shared artifacts)', () => {
+    // Regression for issue #89: the template repo (commit d2d9923) moved README.md/LICENSE from
+    // per-plugin source to the repo root, where they are canonical shared artifacts (GeneratedFile
+    // .target's 'shared' model, #54) — the bundler must never treat them as per-plugin bundle
+    // content, even when a stray copy exists in pluginDir.
+    const destDir = path.join(tmpDir, 'out');
+    const scratchPlugin = path.join(tmpDir, 'plugin-with-readme');
+    fs.mkdirSync(scratchPlugin, { recursive: true });
+    fs.writeFileSync(path.join(scratchPlugin, 'gemini-extension.json'), '{}\n');
+    fs.writeFileSync(path.join(scratchPlugin, 'README.md'), '# stray\n');
+    fs.writeFileSync(path.join(scratchPlugin, 'LICENSE'), 'MIT\n');
+
+    const { emitted } = bundleGeminiPlugin(scratchPlugin, destDir);
+
+    expect(emitted).not.toContain('README.md');
+    expect(emitted).not.toContain('LICENSE');
+    expect(fs.existsSync(path.join(destDir, 'README.md'))).toBe(false);
+    expect(fs.existsSync(path.join(destDir, 'LICENSE'))).toBe(false);
   });
 });

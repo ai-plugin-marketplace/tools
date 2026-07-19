@@ -186,8 +186,6 @@ describe.skipIf(SKIP_PARITY_SUITE)('bundleKiroPlugin — return values', () => {
 
     expect(emitted).toContain('POWER.md');
     expect(emitted).toContain('mcp.json');
-    expect(emitted).toContain('README.md');
-    expect(emitted).toContain('LICENSE');
     expect(emitted).toContain('steering/');
     expect(emitted).toContain('skills/');
     expect(emitted).toContain('.kiro/agents/');
@@ -200,6 +198,40 @@ describe.skipIf(SKIP_PARITY_SUITE)('bundleKiroPlugin — return values', () => {
     expect(agentsGenerated).toHaveLength(2);
     expect(agentsGenerated).toContain('experimenter');
     expect(agentsGenerated).toContain('test-subject');
+  });
+});
+
+describe('bundleKiroPlugin — README.md/LICENSE exclusion', () => {
+  let tmpDir: string;
+
+  beforeEach(() => {
+    tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'kiro-bundle-readme-test-'));
+  });
+
+  afterEach(() => {
+    if (tmpDir && fs.existsSync(tmpDir)) {
+      fs.rmSync(tmpDir, { recursive: true });
+    }
+  });
+
+  it('does not include README.md/LICENSE even when present in pluginDir (root-owned shared artifacts)', () => {
+    // Regression for issue #89: the template repo (commit d2d9923) moved README.md/LICENSE from
+    // per-plugin source to the repo root, where they are canonical shared artifacts (GeneratedFile
+    // .target's 'shared' model, #54) — the bundler must never treat them as per-plugin bundle
+    // content, even when a stray copy exists in pluginDir.
+    const destDir = path.join(tmpDir, 'out');
+    const scratchPlugin = path.join(tmpDir, 'plugin-with-readme');
+    fs.mkdirSync(scratchPlugin, { recursive: true });
+    fs.writeFileSync(path.join(scratchPlugin, 'POWER.md'), '---\nname: x\n---\n# x\n');
+    fs.writeFileSync(path.join(scratchPlugin, 'README.md'), '# stray\n');
+    fs.writeFileSync(path.join(scratchPlugin, 'LICENSE'), 'MIT\n');
+
+    const { emitted } = bundleKiroPlugin(scratchPlugin, destDir);
+
+    expect(emitted).not.toContain('README.md');
+    expect(emitted).not.toContain('LICENSE');
+    expect(fs.existsSync(path.join(destDir, 'README.md'))).toBe(false);
+    expect(fs.existsSync(path.join(destDir, 'LICENSE'))).toBe(false);
   });
 });
 

@@ -101,8 +101,12 @@ describe('TEMPLATE_REPO_CANDIDATES', () => {
 describe('templateIsComplete', () => {
   // Issue #82: a checkout that merely HAS a `plugins/` dir is not necessarily a complete,
   // current checkout — a stale local clone can be missing files the parity fixtures require
-  // (e.g. README.md/LICENSE for plugins/skill-evaluator), which previously let the coarser
-  // "has plugins/" guard run the parity suites against a fixture that could never pass.
+  // (e.g. gemini-extension.json/POWER.md for plugins/skill-evaluator), which previously let the
+  // coarser "has plugins/" guard run the parity suites against a fixture that could never pass.
+  //
+  // Issue #89: README.md/LICENSE are deliberately NOT part of this required set — the template
+  // repo moved them to the repo root (commit d2d9923), so a complete post-move checkout never
+  // has them under `plugins/skill-evaluator/` at all.
   let templateRoot: string;
 
   beforeEach(() => {
@@ -119,7 +123,7 @@ describe('templateIsComplete', () => {
 
   it('returns false when `plugins/` exists but required fixture files are missing (issue #82)', () => {
     fs.mkdirSync(path.join(templateRoot, 'plugins', 'skill-evaluator'), { recursive: true });
-    // Deliberately do not write README.md/LICENSE — reproduces the stale-checkout scenario.
+    // Deliberately do not write any required fixture file — reproduces the stale-checkout scenario.
 
     expect(templateIsComplete(templateRoot)).toBe(false);
   });
@@ -127,8 +131,20 @@ describe('templateIsComplete', () => {
   it('returns false when only some of the required fixture files are present', () => {
     const pluginDir = path.join(templateRoot, 'plugins', 'skill-evaluator');
     fs.mkdirSync(pluginDir, { recursive: true });
+    fs.writeFileSync(path.join(pluginDir, 'gemini-extension.json'), '{}\n');
+    // The other required fixture files are still missing.
+
+    expect(templateIsComplete(templateRoot)).toBe(false);
+  });
+
+  it('returns false when the checkout still uses the pre-#89 README.md/LICENSE fixture files but not the current required set (issue #89)', () => {
+    // Reproduces a checkout at/before template commit d2d9923: plugins/skill-evaluator/ had
+    // README.md and LICENSE, but not the current required set (gemini-extension.json etc. did
+    // exist too historically — this isolates that README.md/LICENSE alone are NOT sufficient).
+    const pluginDir = path.join(templateRoot, 'plugins', 'skill-evaluator');
+    fs.mkdirSync(pluginDir, { recursive: true });
     fs.writeFileSync(path.join(pluginDir, 'README.md'), '# skill-evaluator\n');
-    // LICENSE still missing.
+    fs.writeFileSync(path.join(pluginDir, 'LICENSE'), 'ISC\n');
 
     expect(templateIsComplete(templateRoot)).toBe(false);
   });

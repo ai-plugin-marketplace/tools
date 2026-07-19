@@ -201,9 +201,20 @@ plugins/<plugin-name>/
 │   └── <skill>/SKILL.md       # Skills (hand-authored)
 ├── steering/                  # Kiro steering (hand-authored)
 ├── rules/                     # Cursor/Claude rules (hand-authored)
-├── README.md
-└── LICENSE
+├── README.md                  # Optional — see note below
+└── LICENSE                    # Optional — see note below
 ```
+
+**`README.md`/`LICENSE` are per-plugin author content, never toolkit-generated, and are never
+copied by the Gemini/Kiro bundlers (`bundleGeminiPlugin`, `bundleKiroPlugin` — §7.2, §12.4).** In
+a repo that emits a repo-root Gemini extension / Kiro power (§8.1 "Repo-root native emission",
+`SINGLE_ARTIFACT_HOSTS`), the repo-root `README.md`/`LICENSE` are the canonical, author-owned
+files backing that single artifact — a **shared** artifact in the same sense as
+`GeneratedFile.target`'s `'shared'` case (§8.1, "no single owning target"), except here they are
+not generated at all: they simply already exist at the root the single artifact is emitted into,
+so the bundlers deliberately omit them from their copied file set rather than duplicating or
+re-homing them per plugin. A plugin MAY still keep its own `README.md`/`LICENSE` for browsing
+`plugins/<name>/` directly (e.g. on GitHub); the bundlers ignore them either way.
 
 ### 4.1 Identity and version
 

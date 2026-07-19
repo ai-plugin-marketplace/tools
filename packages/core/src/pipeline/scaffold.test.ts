@@ -144,8 +144,13 @@ describe('renderAipmConfig + parseDeclaredTargets', () => {
 
 describe('runScaffold', () => {
   it('creates the canonical file set for all default targets by default', async () => {
-    await runScaffold('my-plugin', tmpDir, {});
-    const pluginDir = path.join(tmpDir, 'my-plugin');
+    // `pluginsDir` must NOT be `tmpDir` itself: `runScaffold` derives `repoRoot =
+    // dirname(pluginsDir)` for marketplace registration (§4.4), so passing `tmpDir` directly would
+    // write `marketplace.json`/etc. to `dirname(tmpDir)` — the shared OS temp dir, outside the
+    // sandbox `afterEach` cleans up.
+    const pluginsDir = path.join(tmpDir, 'plugins');
+    await runScaffold('my-plugin', pluginsDir, {});
+    const pluginDir = path.join(pluginsDir, 'my-plugin');
 
     for (const rel of [
       'aipm.config.ts',
@@ -167,8 +172,11 @@ describe('runScaffold', () => {
   // emitted zero build artifacts (its only artifact is an author-authored `skills/*/SKILL.md`
   // the scaffold never seeds), so a fresh scaffold silently included a no-op target.
   it('does not declare vercel among the default targets (issue #94)', async () => {
-    await runScaffold('my-plugin', tmpDir, {});
-    const pluginDir = path.join(tmpDir, 'my-plugin');
+    // See the note in the previous test: `pluginsDir` must be a child of `tmpDir`, not `tmpDir`
+    // itself, so marketplace registration writes stay inside the sandbox.
+    const pluginsDir = path.join(tmpDir, 'plugins');
+    await runScaffold('my-plugin', pluginsDir, {});
+    const pluginDir = path.join(pluginsDir, 'my-plugin');
     const declared = parseDeclaredTargets(read(pluginDir, 'aipm.config.ts'));
     expect(declared).not.toContain('vercel');
     expect(declared).toStrictEqual([...DEFAULT_SCAFFOLD_TARGETS]);

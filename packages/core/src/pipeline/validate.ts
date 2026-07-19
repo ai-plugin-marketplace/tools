@@ -748,6 +748,7 @@ export async function validateVersionConsistency(
   configCache?: ConfigCache,
 ): Promise<Finding[]> {
   const findings: Finding[] = [];
+  const pluginName = path.basename(pluginDir);
   const config = await loadPluginConfig(pluginDir, configCache);
   const expectedVersion = config.version;
 
@@ -763,7 +764,7 @@ export async function validateVersionConsistency(
           findings.push(
             hard(
               'version-consistency',
-              expectedVersion,
+              pluginName,
               `'.claude-plugin/plugin.json' has version '${parsed.data.version}' but aipm.config.ts declares version '${expectedVersion}'.`,
             ),
           );
@@ -780,7 +781,7 @@ export async function validateVersionConsistency(
           findings.push(
             hard(
               'version-consistency',
-              expectedVersion,
+              pluginName,
               `'.codex-plugin/plugin.json' has version '${parsed.data.version}' but aipm.config.ts declares version '${expectedVersion}'.`,
             ),
           );
@@ -797,7 +798,7 @@ export async function validateVersionConsistency(
           findings.push(
             hard(
               'version-consistency',
-              expectedVersion,
+              pluginName,
               `'.cursor-plugin/plugin.json' has version '${parsed.data.version}' but aipm.config.ts declares version '${expectedVersion}'.`,
             ),
           );
@@ -814,7 +815,7 @@ export async function validateVersionConsistency(
           findings.push(
             hard(
               'version-consistency',
-              expectedVersion,
+              pluginName,
               `'gemini-extension.json' has version '${parsed.data.version}' but aipm.config.ts declares version '${expectedVersion}'.`,
             ),
           );
@@ -831,7 +832,7 @@ export async function validateVersionConsistency(
           findings.push(
             hard(
               'version-consistency',
-              expectedVersion,
+              pluginName,
               `'POWER.md' frontmatter has version '${parsed.data.version}' but aipm.config.ts declares version '${expectedVersion}'.`,
             ),
           );
@@ -848,7 +849,7 @@ export async function validateVersionConsistency(
           findings.push(
             hard(
               'version-consistency',
-              expectedVersion,
+              pluginName,
               `'.plugin/plugin.json' has version '${parsed.data.version}' but aipm.config.ts declares version '${expectedVersion}'.`,
             ),
           );

@@ -380,6 +380,22 @@ describe('validateVersionConsistency()', () => {
     expect(findings[0]?.message).toContain('1.2.3');
   });
 
+  // Regression test: hard()'s second positional argument is Finding.plugin (the plugin directory
+  // basename), NOT the value under comparison. A prior version of this check passed
+  // `expectedVersion` there by mistake (copied from validateNameConsistency, where
+  // `expectedName === path.basename(pluginDir)` coincidentally made the same mistake invisible),
+  // which misattributed every finding to a "plugin" named like a version string (e.g. '1.2.3').
+  it('sets Finding.plugin to the plugin directory basename, not the expected version', async () => {
+    const pluginDir = path.join(tmpDir, 'my-plugin');
+    writeConfig(pluginDir, '1.2.3', ['claude']);
+    write(pluginDir, '.claude-plugin/plugin.json', { name: 'my-plugin', version: '0.9.0' });
+
+    const findings = await validateVersionConsistency(pluginDir, ['claude']);
+    expect(findings).toHaveLength(1);
+    expect(findings[0]?.plugin).toBe('my-plugin');
+    expect(findings[0]?.plugin).not.toBe('1.2.3');
+  });
+
   it('emits version-consistency when kiro POWER.md frontmatter version mismatches the config', async () => {
     const pluginDir = path.join(tmpDir, 'my-plugin');
     writeConfig(pluginDir, '1.2.3', ['kiro']);

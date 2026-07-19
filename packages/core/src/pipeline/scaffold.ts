@@ -101,7 +101,7 @@ export function validatePluginName(name: string): void {
  *
  * `version` is {@link INITIAL_PLUGIN_VERSION} — the same starter literal every per-target
  * scaffold module writes into its manifest's `version` field, so a freshly-scaffolded plugin is
- * `version-consistency`-clean out of the box (not {@link SCHEMA_VERSION}, which is a distinct,
+ * `version-consistency`-clean out of the box (not `SCHEMA_VERSION`, which is a distinct,
  * unrelated manifest-schema-version concept).
  */
 export function renderAipmConfig(targets: readonly TargetId[]): string {

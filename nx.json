@@ -45,7 +45,19 @@
     },
     "test": {
       "dependsOn": ["^build"],
-      "inputs": ["default", "^production", "{workspaceRoot}/vitest.config.ts"],
+      // Include the pinned template revision and the AIPM_TEMPLATE_REPO/AIPM_REQUIRE_TEMPLATE
+      // env vars so (a) bumping the pin (packages/core's gemini/kiro bundle parity suites — see
+      // CONTRIBUTING.md "Bumping the pinned template revision") and (b) CI's checkout-then-set-env
+      // step both invalidate the Nx cache, instead of silently reusing a stale pass/skip/fail from
+      // before the pin bump or from a run without the template checked out.
+      "inputs": [
+        "default",
+        "^production",
+        "{workspaceRoot}/vitest.config.ts",
+        "{workspaceRoot}/.github/template-repo.rev",
+        { "env": "AIPM_TEMPLATE_REPO" },
+        { "env": "AIPM_REQUIRE_TEMPLATE" }
+      ],
       "cache": true
     },
     "check": {

@@ -4,18 +4,41 @@
  * Parity tests compare bundleKiroPlugin output against the committed oracle in
  * dist/kiro/skill-evaluator/ from the template repository.
  *
- * @see /Users/mnorth/Development/ai-plugin-marketplace-template/src/build-standalone.ts
- * @see /Users/mnorth/Development/ai-plugin-marketplace-template/dist/kiro/skill-evaluator/
+ * Runs with positive coverage in CI against the template revision pinned in
+ * `.github/template-repo.rev` (see issue #86); skips locally when no complete template checkout
+ * is configured via `AIPM_TEMPLATE_REPO`.
+ *
+ * @see https://github.com/ai-plugin-marketplace/template/blob/main/src/build-standalone.ts
+ * @see https://github.com/ai-plugin-marketplace/template/tree/main/dist/kiro/skill-evaluator
  * @see docs/specs/architecture.md §12.4
  */
 
 import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 
-import { TEMPLATE_REPO, TEMPLATE_REPO_AVAILABLE } from '../../test-support/template-repo.js';
+import {
+  AIPM_REQUIRE_TEMPLATE,
+  assertTemplateRepoAvailable,
+  shouldSkipTemplateRepoSuite,
+  TEMPLATE_REPO,
+  TEMPLATE_REPO_AVAILABLE,
+} from '../../test-support/template-repo.js';
 import { bundleKiroPlugin } from './bundle.js';
+
+const SKIP_PARITY_SUITE = shouldSkipTemplateRepoSuite({
+  available: TEMPLATE_REPO_AVAILABLE,
+  required: AIPM_REQUIRE_TEMPLATE,
+});
+
+function requireTemplateRepo(): void {
+  assertTemplateRepoAvailable({
+    available: TEMPLATE_REPO_AVAILABLE,
+    required: AIPM_REQUIRE_TEMPLATE,
+    templateRoot: TEMPLATE_REPO,
+  });
+}
 
 // ---------------------------------------------------------------------------
 // Path constants — absolute to avoid cwd dependency
@@ -67,7 +90,9 @@ afterEach(() => {
 // Parity tests
 // ---------------------------------------------------------------------------
 
-describe.skipIf(!TEMPLATE_REPO_AVAILABLE)('bundleKiroPlugin — skill-evaluator parity', () => {
+describe.skipIf(SKIP_PARITY_SUITE)('bundleKiroPlugin — skill-evaluator parity', () => {
+  beforeAll(requireTemplateRepo);
+
   it('produces the same file tree as the oracle dist/kiro/skill-evaluator/', () => {
     const destDir = path.join(tmpDir, 'output');
     bundleKiroPlugin(PLUGIN_SRC, destDir);
@@ -145,7 +170,9 @@ describe.skipIf(!TEMPLATE_REPO_AVAILABLE)('bundleKiroPlugin — skill-evaluator 
 // Return value tests
 // ---------------------------------------------------------------------------
 
-describe.skipIf(!TEMPLATE_REPO_AVAILABLE)('bundleKiroPlugin — return values', () => {
+describe.skipIf(SKIP_PARITY_SUITE)('bundleKiroPlugin — return values', () => {
+  beforeAll(requireTemplateRepo);
+
   it('includes expected emitted paths', () => {
     const destDir = path.join(tmpDir, 'output');
     const { emitted } = bundleKiroPlugin(PLUGIN_SRC, destDir);
@@ -173,7 +200,9 @@ describe.skipIf(!TEMPLATE_REPO_AVAILABLE)('bundleKiroPlugin — return values', 
 // Idempotence / clean-first tests
 // ---------------------------------------------------------------------------
 
-describe.skipIf(!TEMPLATE_REPO_AVAILABLE)('bundleKiroPlugin — clean-first behaviour', () => {
+describe.skipIf(SKIP_PARITY_SUITE)('bundleKiroPlugin — clean-first behaviour', () => {
+  beforeAll(requireTemplateRepo);
+
   it('clears destDir content before writing when destDir already has files', () => {
     const destDir = path.join(tmpDir, 'output');
 

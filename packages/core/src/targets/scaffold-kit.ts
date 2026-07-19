@@ -57,15 +57,48 @@ export interface TargetScaffoldOptions {
 }
 
 /**
- * Resolve the description to embed in a scaffolded manifest.
+ * Resolve the description to embed in a scaffolded manifest whose schema treats `description` as
+ * optional (or unconstrained when present).
  *
- * - `placeholder` mode → empty string (author fills it in).
+ * - `placeholder` mode → empty string (author fills it in). Callers whose manifest key is
+ *   itself optional typically omit the key entirely when this returns `''`, so the skeleton
+ *   stays schema-valid; callers whose key is required but unconstrained (e.g. `z.string()` with
+ *   no `.min()`) may emit the empty string directly.
  * - explicit `description` → used verbatim.
  * - otherwise → a deterministic default derived from the plugin name.
  *
  * Deterministic: never reads the clock or environment (scaffold output must be reproducible).
+ *
+ * For a manifest whose `description` is REQUIRED and constrained to be non-empty (e.g. Vercel's
+ * `SKILL.md` frontmatter, `z.string().min(1)`), use {@link resolveRequiredDescription} instead —
+ * an empty string there is schema-invalid, not merely incomplete (issue #90).
  */
 export function resolveDescription(pluginName: string, opts: TargetScaffoldOptions): string {
   if (opts.placeholder) return '';
+  return opts.description ?? `A plugin for ${pluginName}`;
+}
+
+/**
+ * Placeholder prose emitted by {@link resolveRequiredDescription} in placeholder mode — non-empty
+ * so it satisfies `z.string().min(1)`-style schema constraints while still clearly signaling to
+ * the author that it must be replaced.
+ */
+const REQUIRED_DESCRIPTION_PLACEHOLDER = 'TODO: describe this plugin.';
+
+/**
+ * Resolve the description to embed in a scaffolded manifest whose schema REQUIRES a non-empty
+ * `description` (e.g. Vercel's `SKILL.md` frontmatter, `description: z.string().min(1)`).
+ *
+ * Unlike {@link resolveDescription}, `placeholder` mode here returns
+ * {@link REQUIRED_DESCRIPTION_PLACEHOLDER} rather than `''`: the field can't be omitted (it's
+ * required) and an empty string would fail the schema outright, producing a skeleton that
+ * `aipm build`/`aipm validate` immediately rejects as `schema-invalid` (issue #90). The author
+ * still must replace the placeholder text, same as any other placeholder field.
+ */
+export function resolveRequiredDescription(
+  pluginName: string,
+  opts: TargetScaffoldOptions,
+): string {
+  if (opts.placeholder) return REQUIRED_DESCRIPTION_PLACEHOLDER;
   return opts.description ?? `A plugin for ${pluginName}`;
 }

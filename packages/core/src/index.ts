@@ -56,6 +56,7 @@ export type {
 
 export type {
   TargetId,
+  AddTargetOutcome,
   BuildOptions,
   BuildResult,
   GeneratedFile,

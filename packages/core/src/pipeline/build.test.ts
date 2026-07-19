@@ -762,3 +762,46 @@ describe('runBuild — generator-version downgrade guard (§4.3.1)', () => {
     expect(readSentinelVersion(cursorJson, 'json-field')).toBe(getGeneratorVersion());
   });
 });
+
+// ---------------------------------------------------------------------------
+// runBuild — plugin-shaped repo-root subdirectory missing aipm.config.ts (#91, template-independent)
+//
+// Regression for issue #91: `mv p/aipm.config.ts aside` on a plugin-shaped directory used to
+// silently drop it from discovery, so `aipm build` reported "Built 0 plugin(s)" with exit 0. It
+// must now surface a clear, non-zero-exit diagnostic instead.
+// ---------------------------------------------------------------------------
+
+describe('runBuild — plugin-shaped repo-root subdirectory missing aipm.config.ts (#91)', () => {
+  let repoRoot: string | undefined;
+
+  afterEach(() => {
+    if (repoRoot && fs.existsSync(repoRoot)) fs.rmSync(repoRoot, { recursive: true });
+  });
+
+  it('throws a clear diagnostic instead of silently building 0 plugins (repro: manifest present, config removed)', async () => {
+    repoRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'aipm-build-no-config-'));
+    const pluginDir = path.join(repoRoot, 'plugins', 'p');
+    fs.mkdirSync(path.join(pluginDir, '.claude-plugin'), { recursive: true });
+    fs.writeFileSync(
+      path.join(pluginDir, '.claude-plugin', 'plugin.json'),
+      JSON.stringify({ name: 'p', version: '0.1.0' }),
+      'utf-8',
+    );
+    // No aipm.config.ts — repro: `mv p/aipm.config.ts aside`.
+
+    await expect(runBuild(repoRoot)).rejects.toThrow(/aipm\.config\.ts/);
+  });
+
+  it('throws for a config-less directory identified only by a skill (no target manifest)', async () => {
+    repoRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'aipm-build-no-config-skill-'));
+    const pluginDir = path.join(repoRoot, 'plugins', 'p');
+    fs.mkdirSync(path.join(pluginDir, 'skills', 'my-skill'), { recursive: true });
+    fs.writeFileSync(
+      path.join(pluginDir, 'skills', 'my-skill', 'SKILL.md'),
+      '---\nname: my-skill\ndescription: demo\n---\n\n# Body\n',
+      'utf-8',
+    );
+
+    await expect(runBuild(repoRoot)).rejects.toThrow(/aipm\.config\.ts/);
+  });
+});

@@ -56,9 +56,33 @@ export const TEMPLATE_REPO_CANDIDATES: readonly string[] = [
   path.resolve(HERE, '..', '..', '..', '..', '..', 'template'),
 ];
 
-/** A location is a usable template checkout when it contains a `plugins/` directory. */
-function templateHasPlugins(templateRoot: string): boolean {
-  return fs.existsSync(path.join(templateRoot, 'plugins'));
+/**
+ * Files the parity fixtures require to exist under `plugins/skill-evaluator/` in a *complete*
+ * template checkout, relative to the template checkout root (i.e. each entry already includes
+ * the `plugins/skill-evaluator/` prefix). This is deliberately the set the
+ * bundlers must emit (README.md, LICENSE — see e.g. `targets/gemini/bundle.test.ts` "emitted
+ * paths" assertions), not merely "has a `plugins/` directory".
+ *
+ * A checkout can satisfy the coarser "has `plugins/`" check while still being stale/incomplete —
+ * e.g. cloned before README.md/LICENSE were added to the fixture plugin — which previously let
+ * the parity suites run against a checkout that could never produce a passing result. Probing for
+ * these files turns that into a clean skip instead of a hard fail.
+ */
+export const REQUIRED_SKILL_EVALUATOR_FILES: readonly string[] = [
+  path.join('plugins', 'skill-evaluator', 'README.md'),
+  path.join('plugins', 'skill-evaluator', 'LICENSE'),
+];
+
+/**
+ * A location is a usable, *complete* template checkout when it contains a `plugins/` directory
+ * AND every {@link REQUIRED_SKILL_EVALUATOR_FILES required fixture file} the parity suites depend
+ * on. A `plugins/` directory alone is not sufficient — see {@link REQUIRED_SKILL_EVALUATOR_FILES}.
+ */
+export function templateIsComplete(templateRoot: string): boolean {
+  if (!fs.existsSync(path.join(templateRoot, 'plugins'))) return false;
+  return REQUIRED_SKILL_EVALUATOR_FILES.every((relPath) =>
+    fs.existsSync(path.join(templateRoot, relPath)),
+  );
 }
 
 /**
@@ -71,7 +95,8 @@ function templateHasPlugins(templateRoot: string): boolean {
  * otherwise the first existing {@link TEMPLATE_REPO_CANDIDATES candidate} is used.
  *
  * Use `TEMPLATE_REPO_AVAILABLE` as a `describe.skipIf` guard so parity suites are
- * automatically skipped when the template checkout isn't present (e.g. in CI):
+ * automatically skipped when the template checkout isn't present or is incomplete (e.g. in CI,
+ * or a stale local clone missing README.md/LICENSE from the fixture plugin):
  *
  * ```ts
  * describe.skipIf(!TEMPLATE_REPO_AVAILABLE)('parity with skill-evaluator', () => { … })
@@ -80,11 +105,13 @@ function templateHasPlugins(templateRoot: string): boolean {
 export const TEMPLATE_REPO: string = resolveTemplateRepo({
   override: process.env['AIPM_TEMPLATE_REPO'],
   candidates: TEMPLATE_REPO_CANDIDATES,
-  exists: templateHasPlugins,
+  exists: templateIsComplete,
 });
 
 /**
- * True when the template checkout exists on disk. Use as a `describe.skipIf` guard.
- * Parity tests are skipped in CI where the template repo is not checked out.
+ * True when the template checkout exists on disk AND is complete (see
+ * {@link REQUIRED_SKILL_EVALUATOR_FILES}). Use as a `describe.skipIf` guard. Parity tests are
+ * skipped both in CI (template repo not checked out) and locally against a stale/incomplete
+ * checkout, rather than running and failing.
  */
-export const TEMPLATE_REPO_AVAILABLE: boolean = templateHasPlugins(TEMPLATE_REPO);
+export const TEMPLATE_REPO_AVAILABLE: boolean = templateIsComplete(TEMPLATE_REPO);

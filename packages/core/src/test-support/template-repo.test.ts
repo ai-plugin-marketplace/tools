@@ -10,11 +10,17 @@
  * @see docs/specs/architecture.md §13 (Phase A exit criteria — bootstrap parity fixtures)
  */
 
-import { describe, expect, it } from 'vitest';
+import * as fs from 'node:fs';
+import * as os from 'node:os';
+import * as path from 'node:path';
+
+import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
 import {
+  REQUIRED_SKILL_EVALUATOR_FILES,
   resolveTemplateRepo,
   TEMPLATE_REPO_CANDIDATES,
+  templateIsComplete,
   type TemplateRepoResolution,
 } from './template-repo.js';
 
@@ -87,5 +93,51 @@ describe('TEMPLATE_REPO_CANDIDATES', () => {
 
   it('offers at least one candidate so resolution never returns the empty string in practice', () => {
     expect(TEMPLATE_REPO_CANDIDATES.length).toBeGreaterThan(0);
+  });
+});
+
+describe('templateIsComplete', () => {
+  // Issue #82: a checkout that merely HAS a `plugins/` dir is not necessarily a complete,
+  // current checkout — a stale local clone can be missing files the parity fixtures require
+  // (e.g. README.md/LICENSE for plugins/skill-evaluator), which previously let the coarser
+  // "has plugins/" guard run the parity suites against a fixture that could never pass.
+  let templateRoot: string;
+
+  beforeEach(() => {
+    templateRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'template-repo-completeness-'));
+  });
+
+  afterEach(() => {
+    fs.rmSync(templateRoot, { recursive: true, force: true });
+  });
+
+  it('returns false when the checkout has no `plugins/` directory at all', () => {
+    expect(templateIsComplete(templateRoot)).toBe(false);
+  });
+
+  it('returns false when `plugins/` exists but required fixture files are missing (issue #82)', () => {
+    fs.mkdirSync(path.join(templateRoot, 'plugins', 'skill-evaluator'), { recursive: true });
+    // Deliberately do not write README.md/LICENSE — reproduces the stale-checkout scenario.
+
+    expect(templateIsComplete(templateRoot)).toBe(false);
+  });
+
+  it('returns false when only some of the required fixture files are present', () => {
+    const pluginDir = path.join(templateRoot, 'plugins', 'skill-evaluator');
+    fs.mkdirSync(pluginDir, { recursive: true });
+    fs.writeFileSync(path.join(pluginDir, 'README.md'), '# skill-evaluator\n');
+    // LICENSE still missing.
+
+    expect(templateIsComplete(templateRoot)).toBe(false);
+  });
+
+  it('returns true when `plugins/` exists and every required fixture file is present', () => {
+    const pluginDir = path.join(templateRoot, 'plugins', 'skill-evaluator');
+    fs.mkdirSync(pluginDir, { recursive: true });
+    for (const relPath of REQUIRED_SKILL_EVALUATOR_FILES) {
+      fs.writeFileSync(path.join(templateRoot, relPath), 'placeholder\n');
+    }
+
+    expect(templateIsComplete(templateRoot)).toBe(true);
   });
 });

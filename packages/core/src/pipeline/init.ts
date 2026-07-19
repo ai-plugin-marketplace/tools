@@ -25,7 +25,7 @@ import * as path from 'node:path';
 import { getGeneratorVersion } from './generator-version.js';
 import { buildInitFiles } from './init-template.js';
 import { writeScaffoldSidecar } from './scaffold-refresh.js';
-import type { InitOptions } from './types.js';
+import type { InitOptions, InitOutcome } from './types.js';
 
 /**
  * Resolve the default marketplace name from the environment: `${USER}-ai-plugins`. Falls back to
@@ -73,6 +73,34 @@ function isFreshTarget(dir: string): boolean {
 }
 
 /**
+ * Walk upward from `dir`'s parent looking for an ancestor `pnpm-workspace.yaml`. Returns its
+ * absolute path when found, `undefined` when the filesystem root is reached without one.
+ *
+ * This is the ancestor-workspace-contamination guard (issue #96): a directory with no local
+ * `package.json` that sits under an ancestor `pnpm-workspace.yaml` will have `pnpm add`/
+ * `pnpm install` silently target the ANCESTOR's manifest and lockfile instead of the new repo's
+ * own. `runInit` always writes a local `package.json` (a package boundary), but a subsequent
+ * `pnpm install` run from `dir` can still be swept into the ancestor workspace if its `packages`
+ * glob happens to match — surfacing the ancestor's path lets the caller warn before that happens.
+ * Deliberately starts at `dir`'s PARENT: `dir` itself is the freshly-scaffolded repo, not a
+ * pre-existing ancestor.
+ */
+function findAncestorPnpmWorkspace(dir: string): string | undefined {
+  let current = path.dirname(dir);
+  let parent = path.dirname(current);
+  // Loop until the filesystem root is reached: dirname(root) === root.
+  while (current !== parent) {
+    const candidate = path.join(current, 'pnpm-workspace.yaml');
+    if (fs.existsSync(candidate)) return candidate;
+    current = parent;
+    parent = path.dirname(current);
+  }
+  // `current` is now the filesystem root itself — check it too before giving up.
+  const rootCandidate = path.join(current, 'pnpm-workspace.yaml');
+  return fs.existsSync(rootCandidate) ? rootCandidate : undefined;
+}
+
+/**
  * Scaffold a thin consumer repo at `targetDir` (§3.2).
  *
  * Writes `package.json` (with `cli`/`core` dev dependencies pinned to carets of their respective
@@ -91,9 +119,12 @@ function isFreshTarget(dir: string): boolean {
  * @param opts - Init options; `name` overrides the derived repo name, `marketplaceName` the
  *   default `${USER}-ai-plugins` marketplace name, `cliVersion` the pinned cli dependency version
  *   (defaults to core's version).
+ * @returns An {@link InitOutcome}: `ancestorWorkspace`, set when an ancestor directory has a
+ *   `pnpm-workspace.yaml` (issue #96 ancestor-contamination guard — see
+ *   {@link findAncestorPnpmWorkspace}), is `undefined` otherwise.
  * @throws {Error} When `targetDir` exists and is non-empty (or is not a directory).
  */
-export async function runInit(targetDir: string, opts: InitOptions = {}): Promise<void> {
+export async function runInit(targetDir: string, opts: InitOptions = {}): Promise<InitOutcome> {
   const resolved = path.resolve(targetDir);
 
   if (!isFreshTarget(resolved)) {
@@ -102,6 +133,12 @@ export async function runInit(targetDir: string, opts: InitOptions = {}): Promis
         'Choose a new path or an empty directory.',
     );
   }
+
+  // Detected before writing anything, since the check is independent of the scaffold write below
+  // and cheap to do up front. Note this does NOT reach the caller if a later step throws (name
+  // validation, an I/O error) — `runInit` only returns `InitOutcome` on success; a thrown error
+  // still propagates as a rejection with no outcome value.
+  const ancestorWorkspace = findAncestorPnpmWorkspace(resolved);
 
   // Reject an explicitly-provided but blank `name`/`marketplaceName` at the I/O boundary: an empty
   // or whitespace-only value would otherwise produce an invalid `package.json` name and an empty
@@ -127,5 +164,5 @@ export async function runInit(targetDir: string, opts: InitOptions = {}): Promis
   // Seed the refresh sidecar so `aipm init --refresh` has a baseline of toolkit-owned content.
   writeScaffoldSidecar(resolved);
 
-  return Promise.resolve();
+  return Promise.resolve(ancestorWorkspace !== undefined ? { ancestorWorkspace } : {});
 }

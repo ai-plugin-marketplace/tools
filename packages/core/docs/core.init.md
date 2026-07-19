@@ -4,12 +4,12 @@
 
 ## init() function
 
-Scaffold a thin consumer repo (the "template") at `targetDir` that depends on `@ai-plugin-marketplace/cli` and holds plugin sources only (§3.2, §11). The generated `package.json` pins the cli dev dependency to a caret of the current toolkit version (§9.1 lockstep). Refuses to write into a non-empty directory.
+Scaffold a thin consumer repo (the "template") at `targetDir` that depends on `@ai-plugin-marketplace/cli` and holds plugin sources only (§3.2, §11). The generated `package.json` pins the cli dev dependency to a caret of the current toolkit version (§9.1 lockstep). Refuses to write into a non-empty directory. Returns an [InitOutcome](./core.initoutcome.md) flagging an ancestor `pnpm-workspace.yaml`<!-- -->, if one exists (issue \#96 ancestor-contamination guard).
 
 **Signature:**
 
 ```typescript
-export declare function init(targetDir: string, opts?: InitOptions): Promise<void>;
+export declare function init(targetDir: string, opts?: InitOptions): Promise<InitOutcome>;
 ```
 
 ## Parameters
@@ -64,5 +64,5 @@ _(Optional)_
 
 **Returns:**
 
-Promise&lt;void&gt;
+Promise&lt;[InitOutcome](./core.initoutcome.md)<!-- -->&gt;
 

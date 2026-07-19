@@ -160,13 +160,18 @@ export interface GeneratedFile {
 export type GeneratedFileTarget = TargetId | 'shared';
 
 // @public
-export function init(targetDir: string, opts?: InitOptions): Promise<void>;
+export function init(targetDir: string, opts?: InitOptions): Promise<InitOutcome>;
 
 // @public
 export interface InitOptions {
     cliVersion?: string;
     marketplaceName?: string;
     name?: string;
+}
+
+// @public
+export interface InitOutcome {
+    ancestorWorkspace?: string;
 }
 
 // Warning: (ae-unresolved-link) The @link reference could not be resolved: The package "@ai-plugin-marketplace/core" does not have an export "internalTrees"

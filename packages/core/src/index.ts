@@ -67,6 +67,7 @@ export type {
   FindingCode,
   ScaffoldOptions,
   InitOptions,
+  InitOutcome,
   RefreshOptions,
   RefreshOutcome,
   MigrateOptions,

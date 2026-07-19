@@ -378,4 +378,42 @@ describe('runInit', () => {
     fs.writeFileSync(filePath, 'not a dir', 'utf-8');
     await expect(runInit(filePath)).rejects.toThrow(/not empty|not a directory|already exists/);
   });
+
+  // Issue #96: a directory with no local package.json under an ancestor pnpm-workspace.yaml lets
+  // `pnpm add`/`pnpm install` silently target the ANCESTOR's manifest and lockfile. `runInit`
+  // always writes a local package.json (a boundary), but flags the ancestor so the caller (the
+  // CLI) can warn before the user runs `pnpm install`.
+  describe('ancestor pnpm-workspace detection (issue #96)', () => {
+    it('flags an ancestor pnpm-workspace.yaml in the returned outcome', async () => {
+      const wsRoot = path.join(tmpDir, 'ws');
+      fs.mkdirSync(wsRoot);
+      fs.writeFileSync(path.join(wsRoot, 'pnpm-workspace.yaml'), 'packages:\n  - "pkgs/*"\n');
+      const repoDir = path.join(wsRoot, 'sub', 'my-repo');
+
+      const outcome = await runInit(repoDir);
+
+      expect(outcome.ancestorWorkspace).toBe(path.join(wsRoot, 'pnpm-workspace.yaml'));
+      // The boundary is still written regardless of the ancestor.
+      expect(fs.existsSync(path.join(repoDir, 'package.json'))).toBe(true);
+    });
+
+    it('finds an ancestor pnpm-workspace.yaml several directories up', async () => {
+      const wsRoot = path.join(tmpDir, 'deep-ws');
+      fs.mkdirSync(wsRoot);
+      fs.writeFileSync(path.join(wsRoot, 'pnpm-workspace.yaml'), 'packages:\n  - "pkgs/*"\n');
+      const repoDir = path.join(wsRoot, 'a', 'b', 'c', 'my-repo');
+
+      const outcome = await runInit(repoDir);
+
+      expect(outcome.ancestorWorkspace).toBe(path.join(wsRoot, 'pnpm-workspace.yaml'));
+    });
+
+    it('leaves ancestorWorkspace undefined when no ancestor pnpm-workspace.yaml exists', async () => {
+      const repoDir = path.join(tmpDir, 'no-ancestor-ws', 'my-repo');
+
+      const outcome = await runInit(repoDir);
+
+      expect(outcome.ancestorWorkspace).toBeUndefined();
+    });
+  });
 });

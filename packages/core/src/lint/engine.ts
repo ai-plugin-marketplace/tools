@@ -133,9 +133,14 @@ export async function lint(targetPath: string, options?: LintOptions): Promise<L
     diagnostics.push(...(await rule.check(repoCtx)));
   }
 
-  // Repo-relative, deduped, sorted for deterministic output — mirrors `Diagnostic.file`'s
-  // repo-relative convention (L-D1).
-  const scannedFilesList = [...scannedFiles].map((abs) => path.relative(repoRoot, abs)).sort();
+  // Repo-relative, POSIX-separated, deduped, sorted for deterministic cross-platform output —
+  // mirrors `Diagnostic.file`'s repo-relative, `/`-separated convention (L-D1; every rule builds
+  // `file` from hand-written `/`-joined strings, never `path.join`/`path.relative` directly).
+  // `path.relative` returns `path.sep`-separated segments (backslash on Windows), so it must be
+  // normalized here rather than reused as-is.
+  const scannedFilesList = [...scannedFiles]
+    .map((abs) => path.relative(repoRoot, abs).split(path.sep).join('/'))
+    .sort();
 
   return { diagnostics, scannedFiles: scannedFilesList };
 }

@@ -136,6 +136,14 @@ describe('lint()', () => {
         'plugins/scan-target/agents/helper.md',
       ]);
 
+      // Every entry must be `/`-separated (never `path.sep`, which is `\` on Windows) — matching
+      // `Diagnostic.file`'s repo-relative, `/`-joined convention (L-D1) so the two are directly
+      // comparable and the output is deterministic across platforms.
+      for (const rel of result.scannedFiles) {
+        expect(rel).toContain('/');
+        expect(rel).not.toContain('\\');
+      }
+
       // Mutating the manifest (removing the required `name` field, per #92's repro) must not
       // change the scanned-file count — this is the invariant-1 bug: fileCount must track what
       // was actually read, not stay pinned regardless of manifest mutations.

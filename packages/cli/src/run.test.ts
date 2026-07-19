@@ -267,6 +267,83 @@ describe('aipm build --force-downgrade (§4.3.1)', () => {
   });
 });
 
+describe('aipm build success-line ordering (issue #97)', () => {
+  let tmpDir: string;
+
+  beforeEach(() => {
+    tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'cli-build-ordering-'));
+  });
+
+  afterEach(() => {
+    if (tmpDir && fs.existsSync(tmpDir)) fs.rmSync(tmpDir, { recursive: true });
+  });
+
+  /**
+   * Scaffold a minimal `claude`+`cursor`-target plugin whose author-maintained
+   * `.claude-plugin/plugin.json` version does NOT match `aipm.config.ts`'s — a hard
+   * `version-consistency` finding (issue #75) that `build`'s post-build `validate` step surfaces.
+   * Cross-target checks (including version-consistency) only run for a multi-target envelope,
+   * hence the second (`cursor`) target.
+   */
+  function writeVersionMismatchedPlugin(): string {
+    const pluginDir = path.join(tmpDir, 'plugins', 'mismatch-plugin');
+    fs.mkdirSync(path.join(pluginDir, 'hooks'), { recursive: true });
+    fs.mkdirSync(path.join(pluginDir, '.claude-plugin'), { recursive: true });
+    fs.writeFileSync(
+      path.join(pluginDir, 'aipm.config.ts'),
+      "import { defineConfig } from '@ai-plugin-marketplace/core';\n\nexport default defineConfig({\n  version: '0.1.0',\n  targets: ['claude', 'cursor'],\n});\n",
+      'utf-8',
+    );
+    fs.writeFileSync(
+      path.join(pluginDir, '.claude-plugin', 'plugin.json'),
+      JSON.stringify({ name: 'mismatch-plugin', version: '9.9.9' }, null, 2) + '\n',
+      'utf-8',
+    );
+    fs.writeFileSync(
+      path.join(pluginDir, 'hooks', 'claude.yaml'),
+      'hooks:\n  PreToolUse:\n    - matcher: Bash\n      hooks:\n        - { type: command, command: ./guard.sh }\n',
+      'utf-8',
+    );
+    return pluginDir;
+  }
+
+  it('does not print "Built N plugin(s)" when the post-build validate has a hard finding', async () => {
+    const pluginDir = writeVersionMismatchedPlugin();
+    const { code, out } = await invoke(['build', pluginDir]);
+
+    expect(code).toBe(1);
+    expect(out).toContain('version-consistency');
+    // The success summary must never appear on a failing run (issue #97) — not merely reordered
+    // below the failure.
+    expect(out).not.toMatch(/Built \d+ plugin/);
+  });
+
+  it('still prints "Built N plugin(s)" before validation output on a clean run', async () => {
+    // A `vercel`-only plugin needs no marketplace.json registry and no hooks source (a bare
+    // `skills/*/SKILL.md` satisfies its adherence + schema checks), so this is the minimal
+    // fixture that reaches a genuinely passing `validate` via the real CLI.
+    const pluginDir = path.join(tmpDir, 'plugins', 'clean-plugin');
+    fs.mkdirSync(path.join(pluginDir, 'skills', 'my-skill'), { recursive: true });
+    fs.writeFileSync(
+      path.join(pluginDir, 'aipm.config.ts'),
+      "import { defineConfig } from '@ai-plugin-marketplace/core';\n\nexport default defineConfig({\n  version: '0.1.0',\n  targets: ['vercel'],\n});\n",
+      'utf-8',
+    );
+    fs.writeFileSync(
+      path.join(pluginDir, 'skills', 'my-skill', 'SKILL.md'),
+      '---\nname: my-skill\ndescription: A test skill.\n---\n\nBody.\n',
+      'utf-8',
+    );
+
+    const { code, out } = await invoke(['build', pluginDir]);
+    expect(code).toBe(0);
+    const builtIndex = out.indexOf('Built 1 plugin(s)');
+    const okIndex = out.indexOf('OK — no findings.');
+    expect(builtIndex).toBeGreaterThanOrEqual(0);
+    expect(okIndex).toBeGreaterThan(builtIndex);
+  });
+});
+
 describe('aipm migrate', () => {
   it('is a no-op and reports no-migrations-needed', async () => {
     const { code, out } = await invoke(['migrate']);

@@ -289,11 +289,16 @@ export async function run(argv: readonly string[], opts: RunOptions = {}): Promi
         const target = rest.find((a) => !a.startsWith('-')) ?? process.cwd();
         const results = await build(target, { forceDowngrade });
         const artifactCount = results.reduce((n, r) => n + r.artifacts.length, 0);
-        out.write(
-          `Built ${String(results.length)} plugin(s), ${String(artifactCount)} artifact(s).\n`,
-        );
-        // §5.4: build runs validate before reporting success.
+        // §5.4: build runs validate before reporting success. The success summary is written
+        // only when validate passes — printing it unconditionally would put a "Built N
+        // plugin(s)" line ABOVE a hard finding that fails the run, misleading the user into
+        // thinking the run succeeded (issue #97).
         const result = await validate(target);
+        if (result.passed) {
+          out.write(
+            `Built ${String(results.length)} plugin(s), ${String(artifactCount)} artifact(s).\n`,
+          );
+        }
         const passed = reportValidation(result, out);
         return passed ? 0 : 1;
       }

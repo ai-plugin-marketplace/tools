@@ -404,7 +404,7 @@ export type AipmConfig = AipmConfigInput & { readonly [aipmConfigBrand]: 'AipmCo
 export function defineConfig(config: AipmConfigInput): AipmConfig;
 
 // Operations
-export function init(dir: string, opts?: InitOptions): Promise<void>;
+export function init(dir: string, opts?: InitOptions): Promise<InitOutcome>;
 export function build(path: string, opts?: BuildOptions): Promise<BuildResult[]>;
 export function validate(path: string, opts?: ValidateOptions): Promise<ValidationResult>;
 export function scaffold(name: string, opts: ScaffoldOptions): Promise<void>;
@@ -484,9 +484,17 @@ export interface MigrateResult {
 export interface InitOptions {
   name?: string; // repo name in the generated package.json; defaults to basename(dir)
 }
+
+export interface InitOutcome {
+  // absolute path to an ancestor pnpm-workspace.yaml, if one exists above `dir` (issue #96
+  // ancestor-workspace-contamination guard); undefined when none was found
+  ancestorWorkspace?: string;
+}
 ```
 
 **Why `init` lives in `core`.** `init` scaffolds the thin consumer repo described in §3.2 — `package.json` (private, ESM, with the `@ai-plugin-marketplace/cli` dev dependency pinned to a caret of the current toolkit version), both repo-root marketplace registries, an empty `plugins/`, a README, and a CI workflow that runs `aipm build` then `aipm validate` (§10.5). Pinning the dev dependency in lockstep with `core` (§9.1) is the seam that makes `pnpm up` the single upgrade path (§11). It refuses to write into a non-empty directory.
+
+**Ancestor-workspace guard (issue #96).** `init` always writes a local `package.json`, but a directory nested under an ancestor `pnpm-workspace.yaml` can still have a later `pnpm install` swept into that ancestor workspace (shared lockfile/hoisting) instead of staying local. `init` walks up from the target directory looking for an ancestor `pnpm-workspace.yaml` and reports it via `InitOutcome.ancestorWorkspace`; the `aipm init` CLI surface prints a warning to stderr when it is set, before instructing the user to run `pnpm install`.
 
 **Why one `build` signature.** `path` may be a plugin directory or the repo root; the function detects which and either builds one plugin or all. Returns a length-1 array for single-plugin input. Avoids forking the return type on an operational detail.
 

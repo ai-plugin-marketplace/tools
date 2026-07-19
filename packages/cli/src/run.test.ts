@@ -112,6 +112,34 @@ describe('aipm init', () => {
     expect(fs.existsSync(path.join(target, 'package.json'))).toBe(true);
   });
 
+  // Issue #96: a directory with no local package.json under an ancestor pnpm-workspace.yaml lets
+  // `pnpm add`/`pnpm install` silently target the ANCESTOR's manifest and lockfile. `aipm init`
+  // must warn (to stderr, before the "Next: run pnpm install" line) when that ancestor exists.
+  it('warns to stderr when an ancestor pnpm-workspace.yaml exists', async () => {
+    const wsRoot = path.join(tmpDir, 'ws');
+    fs.mkdirSync(wsRoot);
+    const workspaceFile = path.join(wsRoot, 'pnpm-workspace.yaml');
+    fs.writeFileSync(workspaceFile, 'packages:\n  - "pkgs/*"\n');
+    const target = path.join(wsRoot, 'sub', 'my-repo');
+
+    const { code, out, err } = await invoke(['init', target]);
+
+    expect(code).toBe(0);
+    expect(err).toContain('Warning');
+    expect(err).toContain(workspaceFile);
+    expect(err).toContain('pnpm install');
+    // Still scaffolds — the warning does not block init.
+    expect(fs.existsSync(path.join(target, 'package.json'))).toBe(true);
+    expect(out).toContain('Next: run `pnpm install`');
+  });
+
+  it('does not warn when there is no ancestor pnpm-workspace.yaml', async () => {
+    const target = path.join(tmpDir, 'no-ancestor', 'my-repo');
+    const { code, err } = await invoke(['init', target]);
+    expect(code).toBe(0);
+    expect(err).toBe('');
+  });
+
   it('init --name <name> writes the marketplace name into the repo-root registries', async () => {
     const target = path.join(tmpDir, 'named-repo');
     const { code } = await invoke(['init', '--name', 'acme-ai-plugins', target]);

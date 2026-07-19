@@ -285,6 +285,23 @@ export interface InitOptions {
 }
 
 /**
+ * Result of {@link init} (issue #96 ancestor-workspace-contamination guard).
+ *
+ * @public
+ */
+export interface InitOutcome {
+  /**
+   * Absolute path to an ancestor `pnpm-workspace.yaml`, set when one exists above the newly
+   * scaffolded directory. `init` always writes a local `package.json` (a package boundary), but a
+   * `pnpm install`/`pnpm add` run from the new repo can still be swept into the ancestor
+   * workspace if its `packages` glob matches — callers (the CLI) should warn the user before they
+   * install, rather than let pnpm silently target the ancestor's manifest and lockfile.
+   * `undefined` when no ancestor `pnpm-workspace.yaml` was found.
+   */
+  ancestorWorkspace?: string;
+}
+
+/**
  * Options for {@link refreshScaffold}.
  *
  * @public

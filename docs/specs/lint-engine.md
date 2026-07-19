@@ -154,8 +154,8 @@ reference, and quality warning lands on a clickable `file:line:col`.
 > Detection evaluates **all** signals at the target path. `aipm-repo` takes precedence when it
 > matches (it subsumes the other shapes: an aipm repo legitimately contains plugin trees and
 > skills). Absent an `aipm-repo` match, exactly one remaining signal must match; if more than one
-> does, detection emits an explicit ambiguity diagnostic (usage exit) telling the user to pass
-> `--as` — it never guesses. Discovery-mode names reuse established vocabulary (`open-plugins`
+> does, detection is a **CLI usage error** (see below) telling the user to pass `--as` — it never
+> guesses. Discovery-mode names reuse established vocabulary (`open-plugins`
 > matches the `TargetId` spelling). Cross-file semantic rules that require the aipm workspace model (freshness,
 > mcp-key-sync, name-consistency, version-consistency, envelope adherence) declare
 > `appliesTo: ['aipm-repo']` and are
@@ -179,20 +179,29 @@ reference, and quality warning lands on a clickable `file:line:col`.
 > channel; suppression there is config-file-only. Unknown rule ids in config or suppressions are
 > themselves a `warn` diagnostic (typo protection).
 >
-> **Config precedence.** `aipm.lint.ts` is **foreign-mode-only** — a standalone config for a
-> target that has no `aipm.config.ts` at all. In a repo that has `aipm.config.ts` (i.e. discovery
-> resolved `aipm-repo`), that repo's `lint` block is the sole source of rule config; a coexisting
-> `aipm.lint.ts` is **ignored, with a `warn` diagnostic** pointing at the winning `aipm.config.ts`
-> `lint` block, rather than silently merged or silently dropped — an author who leaves a stale
-> `aipm.lint.ts` around after adopting `aipm.config.ts` gets a visible signal, not silent
-> divergence between the two files.
+> **Known gap — L-D6's config/suppression machinery is design-only today, not shipped.** `lint()`
+> currently applies no `lint`-block config and no inline suppression at all; the only severity
+> lever that exists today is the CLI's `--rule <id>=<severity>` override (§4.1), which is separate
+> from and does not require L-D6. The three conventions below are the normative target this
+> machinery must follow once built — tracked as part of §6 item 3 (foreign discovery modes), since
+> `aipm.lint.ts` has no purpose while `--as` supports only `aipm-repo`. They are **not** current
+> behavior.
 >
-> **`disable-next-line` line matching.** A `# aipm-lint-disable-next-line <ruleId>` /
-> `<!-- aipm-lint-disable-next-line <ruleId> -->` comment suppresses a diagnostic **iff** the
-> diagnostic's `range.start.line === commentLine + 1` (1-indexed, per L-D1) — i.e. it suppresses
-> only the single line immediately following the comment, not the comment's own line and not a
-> multi-line span. A diagnostic with no `range` (file-scoped, L-D1) can never be
-> line-suppressed — only per-rule config (`'off'` or a path ignore glob) can silence it.
+> **Config precedence (follow-up, §6 item 3).** `aipm.lint.ts` is **foreign-mode-only** — a
+> standalone config for a target that has no `aipm.config.ts` at all. In a repo that has
+> `aipm.config.ts` (i.e. discovery resolved `aipm-repo`), that repo's `lint` block is the sole
+> source of rule config; a coexisting `aipm.lint.ts` is **ignored, with a `warn` diagnostic**
+> pointing at the winning `aipm.config.ts` `lint` block, rather than silently merged or silently
+> dropped — an author who leaves a stale `aipm.lint.ts` around after adopting `aipm.config.ts`
+> gets a visible signal, not silent divergence between the two files.
+>
+> **`disable-next-line` line matching (follow-up, §6 item 3).** A
+> `# aipm-lint-disable-next-line <ruleId>` / `<!-- aipm-lint-disable-next-line <ruleId> -->`
+> comment will suppress a diagnostic **iff** the diagnostic's
+> `range.start.line === commentLine + 1` (1-indexed, per L-D1) — i.e. it suppresses only the
+> single line immediately following the comment, not the comment's own line and not a multi-line
+> span. A diagnostic with no `range` (file-scoped, L-D1) can never be line-suppressed — only
+> per-rule config (`'off'` or a path ignore glob) can silence it.
 
 ---
 
@@ -211,9 +220,11 @@ rules carry this category:
   `metadata-dir-isolation` and `open-plugins-conformance` (soft, advisory-only) findings the same
   underlying check can also emit (see the migration table, §3.6).
 
-`repo-config-invalid` (a malformed `aipm.workspace.ts`) is a repo-scoped orchestration finding
-emitted directly by `validate()`'s top-level dispatch, not yet wrapped as its own `Rule` — see
-§3.6's migration table for the full accounting.
+`repo-config-invalid` (a malformed `aipm.repo.ts` that `discoverPlugins()` fails to load, or a
+malformed `aipm.workspace.ts` that `loadWorkspaceConfig()` fails to load) is a repo-scoped
+orchestration finding emitted directly by `validate()`'s top-level dispatch (`runValidate()`,
+`packages/core/src/pipeline/validate.ts`), not yet wrapped as its own `Rule` — see §3.6's
+migration table for the full accounting.
 
 ### 3.2 `correctness/*` — things that silently break at runtime
 
@@ -248,8 +259,8 @@ Plus four new rules with no legacy `Finding`/`FindingCode` predecessor:
 > sidecar sentinels) records the `@ai-plugin-marketplace/core` version that produced it
 > (`architecture.md` §4.3.1, #81). The `correctness/freshness` and
 > `correctness/root-artifact-freshness` rules compare on-disk content against freshly-generated
-> content **modulo this stamp**: `withoutGeneratorVersion()` (`packages/core/src/pipeline/
-sentinel.ts`) strips only the stamp token via a minimal string edit before the comparison, so an
+> content **modulo this stamp**: `withoutGeneratorVersion()` (`packages/core/src/pipeline/sentinel.ts`)
+> strips only the stamp token via a minimal string edit before the comparison, so an
 > artifact that differs from a fresh build _only_ in its stamped generator version is not flagged
 > stale — a version bump alone must not mark every committed artifact stale (version safety is the
 > build downgrade guard's job, §4.3.1 of `architecture.md`, not freshness's). The normalization is
@@ -406,8 +417,8 @@ Per-rule documentation pages are generated from `Rule.meta` (id, description, ca
 severity, examples, false-positive posture per L-D7); `docsUrl` in every diagnostic points at
 them. Generation is freshness-checked like other emitted artifacts.
 
-> **Note — `docs-url.ts` is dangling until this item ships.** `packages/core/src/lint/rules/
-docs-url.ts`'s `docsUrlFor()` already fabricates the stable URL shape every `Diagnostic.docsUrl`
+> **Note — `docs-url.ts` is dangling until this item ships.** `packages/core/src/lint/rules/docs-url.ts`'s
+> `docsUrlFor()` already fabricates the stable URL shape every `Diagnostic.docsUrl`
 > uses (`https://ai-plugin-marketplace.dev/rules/<ruleId>`), but nothing in §6 item 7 (generated
 > rule docs) has shipped yet, so those URLs 404 today. This is a spec note only — §6 item 7 is
 > where `docs-url.ts` gets adopted (its URL shape becomes what the generator actually publishes
@@ -454,17 +465,17 @@ A single reference gathering every L-D invariant plus the conventions that other
 in code before this reconciliation. Each entry links back to its defining subsection; this section
 does not redefine them, only indexes them.
 
-| ID    | One-line summary                                                                                                                                                                                                                    | Defined in |
-| ----- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ---------- |
-| L-D1  | `Diagnostic` shape; `range` required for any content-derived diagnostic.                                                                                                                                                            | §2.1       |
-| L-D2  | `Finding`/`FindingCode` remain public API; `diagnosticToFinding()`/`findingToDiagnostic()` are the pure, lossless conversion (including the `'(repo)'` file↔plugin sentinel).                                                       | §2.1       |
-| L-D3  | All parsing flows through the position-aware document layer; no ad hoc re-parsing.                                                                                                                                                  | §2.2       |
-| L-D4  | Rule module shape; severity MAY be a function of `RuleContext` (e.g. `ctx.ci` freshness escalation), subject to user `--rule` overrides winning last.                                                                               | §2.3       |
-| L-D5  | Discovery modes, `aipm-repo` precedence, and ambiguous discovery = CLI usage error (exit 2, stderr, never a `Diagnostic`).                                                                                                          | §2.4       |
-| L-D6  | Rule config lives in `aipm.config.ts`'s `lint` block (repo) or `aipm.lint.ts` (foreign-mode-only, ignored-with-`warn` when a repo config exists); inline `disable-next-line` suppresses iff `range.start.line === commentLine + 1`. | §2.5       |
-| L-D7  | Heuristic rules (security, agent-ux) document false-positive posture and default non-blocking; only deterministic rules (schema, correctness) may default `error`.                                                                  | §3.5       |
-| L-D8  | Published JSON Schemas are generated from zod, never hand-authored; round-trip test asserts freshness.                                                                                                                              | §4.2       |
-| L-D9  | Lint scan scope = files actually read via `getDocument()`; `json` format's `fileCount` = `scannedFiles.length`, not diagnostic-bearing-file count.                                                                                  | §4.1       |
-| L-D10 | `FindingCode → (ruleId, category, defaultSeverity)` migration table matches `rules/index.ts`/`types.ts` exactly.                                                                                                                    | §3.6       |
-| L-D11 | Freshness rules compare generated content modulo the generator-version stamp (#81); a version bump alone is never "stale", but formatting-only hand-edits remain detectable.                                                        | §3.2       |
-| L-D12 | Diagnostics sort deterministically by `(file, line, col, ruleId)` before rendering (known partial-implementation gap noted at the definition site).                                                                                 | §4.1       |
+| ID    | One-line summary                                                                                                                                                                                                                                                                                                                   | Defined in |
+| ----- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ---------- |
+| L-D1  | `Diagnostic` shape; `range` required for any content-derived diagnostic.                                                                                                                                                                                                                                                           | §2.1       |
+| L-D2  | `Finding`/`FindingCode` remain public API; `diagnosticToFinding()`/`findingToDiagnostic()` are the pure, lossless conversion (including the `'(repo)'` file↔plugin sentinel).                                                                                                                                                      | §2.1       |
+| L-D3  | All parsing flows through the position-aware document layer; no ad hoc re-parsing.                                                                                                                                                                                                                                                 | §2.2       |
+| L-D4  | Rule module shape; severity MAY be a function of `RuleContext` (e.g. `ctx.ci` freshness escalation), subject to user `--rule` overrides winning last.                                                                                                                                                                              | §2.3       |
+| L-D5  | Discovery modes, `aipm-repo` precedence, and ambiguous discovery = CLI usage error (exit 2, stderr, never a `Diagnostic`).                                                                                                                                                                                                         | §2.4       |
+| L-D6  | Rule config target design: `aipm.config.ts`'s `lint` block (repo) or `aipm.lint.ts` (foreign-mode-only, ignored-with-`warn` when a repo config exists); inline `disable-next-line` suppresses iff `range.start.line === commentLine + 1`. **Not shipped** — `lint()` applies no config/suppression today; tracked under §6 item 3. | §2.5       |
+| L-D7  | Heuristic rules (security, agent-ux) document false-positive posture and default non-blocking; only deterministic rules (schema, correctness) may default `error`.                                                                                                                                                                 | §3.5       |
+| L-D8  | Published JSON Schemas are generated from zod, never hand-authored; round-trip test asserts freshness.                                                                                                                                                                                                                             | §4.2       |
+| L-D9  | Lint scan scope = files actually read via `getDocument()`; `json` format's `fileCount` = `scannedFiles.length`, not diagnostic-bearing-file count.                                                                                                                                                                                 | §4.1       |
+| L-D10 | `FindingCode → (ruleId, category, defaultSeverity)` migration table matches `rules/index.ts`/`types.ts` exactly.                                                                                                                                                                                                                   | §3.6       |
+| L-D11 | Freshness rules compare generated content modulo the generator-version stamp (#81); a version bump alone is never "stale", but formatting-only hand-edits remain detectable.                                                                                                                                                       | §3.2       |
+| L-D12 | Diagnostics sort deterministically by `(file, line, col, ruleId)` before rendering (known partial-implementation gap noted at the definition site).                                                                                                                                                                                | §4.1       |

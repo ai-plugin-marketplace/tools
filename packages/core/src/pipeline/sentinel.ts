@@ -331,8 +331,11 @@ export function readSentinelVersion(content: string, mode: SentinelMode): string
  * NOT flag every artifact as stale: freshness is about CONTENT correctness (wrong hooks, wrong
  * source, missing files), while version safety is enforced separately by the build downgrade guard.
  *
- * - `'json-field'` — re-serialize the object with `_generated` first (minus its `version`),
- *   2-space indent + trailing newline. Non-object / non-sentinel JSON is returned unchanged.
+ * The transform is a MINIMAL string edit that removes only the stamp token, preserving all other
+ * bytes — so a formatting-only hand-edit of a generated artifact is still detected as stale.
+ *
+ * - `'json-field'` — remove only the canonical `_generated.version` line `applyJsonSentinel` emits.
+ *   Non-canonical, legacy-versionless, or non-`_generated` JSON is returned byte-for-byte unchanged.
  * - `'inline'` / `'sidecar'` — drop the `# version:` line from the sentinel block, if present.
  *   Content with no recognized sentinel is returned unchanged.
  *
@@ -359,27 +362,27 @@ function stripInlineVersionLine(content: string): string {
 }
 
 /**
- * Re-serialize JSON content with the `_generated.version` field removed, `_generated` first,
- * 2-space indent + trailing newline. Passthrough on malformed JSON or content with no `_generated`
- * field (so a non-generated file is never rewritten by the normalization).
+ * Matches the `_generated.version` stamp EXACTLY as {@link applyJsonSentinel} emits it. `version`
+ * is the last key of the `_generated` object (which is itself the first top-level key), and
+ * `JSON.stringify(_, null, 2)` puts that object's keys at a 4-space indent, so the stamp always
+ * appears as `,\n    "version": "<value>"` immediately before `_generated`'s closing `\n  }`. The
+ * leading comma (after the preceding `source` line) is captured so removing the whole match yields
+ * exactly the versionless canonical form. Applied non-globally (first match only): because
+ * `_generated` is serialized first, the first such occurrence is always its own version key, never
+ * a coincidental deeper `"version"` field.
+ */
+const CANONICAL_JSON_VERSION_STAMP = /,\n {4}"version": "(?:[^"\\]|\\.)*"(?=\n {2}})/;
+
+/**
+ * Remove ONLY the canonical `_generated.version` stamp via a minimal string transform, preserving
+ * every other byte. Unlike a parse+re-serialize, this leaves any non-canonical formatting intact,
+ * so the freshness check still flags formatting-only hand-edits of a generated JSON artifact as
+ * stale — it ignores solely the generator-version token (§4.3.1). Content without the canonical
+ * stamp (a legacy versionless file, a hand-reformatted file, or non-`_generated` JSON) is returned
+ * byte-for-byte unchanged, so no non-generated file is ever rewritten by the normalization.
  */
 function stripJsonVersionField(content: string): string {
-  const obj = parseJsonObject(content);
-  if (!obj || !('_generated' in obj)) return content;
-  const generated = obj['_generated'];
-  const restGenerated: Record<string, unknown> = {};
-  if (typeof generated === 'object' && generated !== null && !Array.isArray(generated)) {
-    for (const [key, value] of Object.entries(generated)) {
-      if (key === 'version') continue;
-      restGenerated[key] = value;
-    }
-  }
-  const rebuilt: Record<string, unknown> = { _generated: restGenerated };
-  for (const [key, value] of Object.entries(obj)) {
-    if (key === '_generated') continue;
-    rebuilt[key] = value;
-  }
-  return JSON.stringify(rebuilt, null, 2) + '\n';
+  return content.replace(CANONICAL_JSON_VERSION_STAMP, '');
 }
 
 /**

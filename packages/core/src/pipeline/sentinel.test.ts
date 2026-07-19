@@ -372,6 +372,36 @@ describe('withoutGeneratorVersion', () => {
     expect(withoutGeneratorVersion(content, 'json-field')).toBe(content);
   });
 
+  it('does NOT mask a formatting-only edit — reindented JSON stays distinguishable', () => {
+    // Copilot #81: the normalization must strip ONLY the version stamp, not canonicalize
+    // formatting, so a whitespace-only hand-edit of a generated JSON artifact is still flagged as
+    // stale by freshness. Reindent the canonical output (2-space → 4-space) with the SAME data and
+    // SAME version; the two must remain unequal after normalization.
+    const canonical = applyJsonSentinel({ name: 'x' }, SOURCE, VERSION);
+    const reindented = JSON.stringify(JSON.parse(canonical), null, 4) + '\n';
+    expect(reindented).not.toBe(canonical); // formatting differs
+    expect(withoutGeneratorVersion(reindented, 'json-field')).not.toBe(
+      withoutGeneratorVersion(canonical, 'json-field'),
+    );
+  });
+
+  it('strips the version but preserves the exact bytes of everything else', () => {
+    // The versionless normalization of a canonical artifact is byte-identical to the same artifact
+    // built without a version stamp (a minimal transform, not a re-serialization).
+    const withVersion = applyJsonSentinel({ hooks: { a: 1 } }, SOURCE, VERSION);
+    const expectedVersionless =
+      '{\n' +
+      '  "_generated": {\n' +
+      '    "by": "@ai-plugin-marketplace/cli",\n' +
+      '    "source": "hooks/claude.yaml"\n' +
+      '  },\n' +
+      '  "hooks": {\n' +
+      '    "a": 1\n' +
+      '  }\n' +
+      '}\n';
+    expect(withoutGeneratorVersion(withVersion, 'json-field')).toBe(expectedVersionless);
+  });
+
   it('passes through malformed json unchanged', () => {
     expect(withoutGeneratorVersion('{not json', 'json-field')).toBe('{not json');
   });

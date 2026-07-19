@@ -195,6 +195,43 @@ describeMaybe('runValidate — freshness (§10.5, §10.2)', () => {
     expect(result.passed).toBe(false);
   });
 
+  it('a formatting-only (reindented) hooks/claude.json is still a HARD freshness finding (§4.3.1)', async () => {
+    // The generator-version normalization strips ONLY the version stamp, not formatting — so a
+    // whitespace-only hand-edit of a generated JSON artifact (same data, same version, reindented)
+    // must still be flagged as stale, not masked (Copilot #81).
+    repo = synthPluginRepo(ALL_SYNTH_TARGETS);
+    await runBuild(repo.repoRoot);
+
+    const claudeJsonPath = path.join(repo.pluginDir, 'hooks', 'claude.json');
+    const obj = JSON.parse(fs.readFileSync(claudeJsonPath, 'utf-8')) as unknown;
+    // Re-serialize with 4-space indent: identical data and version, different bytes only.
+    fs.writeFileSync(claudeJsonPath, JSON.stringify(obj, null, 4) + '\n', 'utf-8');
+
+    const result = await runValidate(repo.repoRoot, { ci: true });
+    const fresh = ofCode(result.findings, 'freshness');
+    expect(fresh.some((f) => f.message.includes('claude.json'))).toBe(true);
+    expect(result.passed).toBe(false);
+  });
+
+  it('a pure generator-version bump in hooks/claude.json is NOT flagged (§4.3.1)', async () => {
+    // Conversely, an artifact that differs from a fresh build ONLY in its stamped version is fresh:
+    // a version bump alone must not mark every committed artifact stale.
+    repo = synthPluginRepo(ALL_SYNTH_TARGETS);
+    await runBuild(repo.repoRoot);
+
+    const claudeJsonPath = path.join(repo.pluginDir, 'hooks', 'claude.json');
+    const obj = JSON.parse(fs.readFileSync(claudeJsonPath, 'utf-8')) as {
+      _generated: Record<string, unknown>;
+    };
+    // Bump only the stamp to a newer version, preserving canonical formatting.
+    obj._generated['version'] = '999.0.0';
+    fs.writeFileSync(claudeJsonPath, JSON.stringify(obj, null, 2) + '\n', 'utf-8');
+
+    const result = await runValidate(repo.repoRoot, { ci: true });
+    const fresh = ofCode(result.findings, 'freshness');
+    expect(fresh.some((f) => f.message.includes('claude.json'))).toBe(false);
+  });
+
   it('skipFreshness suppresses the freshness check entirely', async () => {
     repo = synthPluginRepo(ALL_SYNTH_TARGETS);
     await runBuild(repo.repoRoot);

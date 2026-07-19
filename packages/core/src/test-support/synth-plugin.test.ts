@@ -27,6 +27,9 @@ import {
 } from '../pipeline/sentinel.js';
 import { stripGeneratedArtifacts } from './synth-plugin.js';
 
+/** Arbitrary generator version for sentinel stamps (§4.3.1); irrelevant to strip detection. */
+const V = '0.8.0';
+
 describe('stripGeneratedArtifacts', () => {
   let dir: string;
 
@@ -47,7 +50,7 @@ describe('stripGeneratedArtifacts', () => {
   }
 
   it('removes a JSON file carrying a `_generated` field sentinel', () => {
-    write('hooks/claude.json', applyJsonSentinel({ hooks: {} }, 'hooks/claude.yaml'));
+    write('hooks/claude.json', applyJsonSentinel({ hooks: {} }, 'hooks/claude.yaml', V));
 
     const removed = stripGeneratedArtifacts(dir);
 
@@ -56,7 +59,7 @@ describe('stripGeneratedArtifacts', () => {
   });
 
   it('removes a plain-text file carrying an inline-comment sentinel', () => {
-    write('GENERATED.md', applyInlineSentinel('# body\n', 'source.md'));
+    write('GENERATED.md', applyInlineSentinel('# body\n', 'source.md', V));
 
     const removed = stripGeneratedArtifacts(dir);
 
@@ -70,7 +73,7 @@ describe('stripGeneratedArtifacts', () => {
     const artifactRel = 'gemini-extension.json';
     const sidecarRel = path.relative(dir, sidecarPath(path.join(dir, artifactRel)));
     write(artifactRel, JSON.stringify({ name: 'skill-evaluator' }, null, 2) + '\n');
-    write(sidecarRel, sidecarContent(artifactRel));
+    write(sidecarRel, sidecarContent(artifactRel, V));
 
     const removed = stripGeneratedArtifacts(dir);
 
@@ -82,7 +85,7 @@ describe('stripGeneratedArtifacts', () => {
   it('removes a dangling `.generated` marker even when its companion artifact is absent', () => {
     // Defensive: a sidecar with no companion must not throw, and only the marker is reported.
     const sidecarRel = path.relative(dir, sidecarPath(path.join(dir, 'gemini-extension.json')));
-    write(sidecarRel, sidecarContent('gemini-extension.json'));
+    write(sidecarRel, sidecarContent('gemini-extension.json', V));
 
     const removed = stripGeneratedArtifacts(dir);
 
@@ -106,8 +109,8 @@ describe('stripGeneratedArtifacts', () => {
 
   it('removes only generated files from a mixed tree and returns sorted relative paths', () => {
     write('hooks/claude.yaml', 'PreToolUse: []\n');
-    write('hooks/claude.json', applyJsonSentinel({ hooks: {} }, 'hooks/claude.yaml'));
-    write('hooks/hooks.json', applyJsonSentinel({ hooks: {} }, 'hooks/claude.yaml'));
+    write('hooks/claude.json', applyJsonSentinel({ hooks: {} }, 'hooks/claude.yaml', V));
+    write('hooks/hooks.json', applyJsonSentinel({ hooks: {} }, 'hooks/claude.yaml', V));
     write('README.md', '# readme\n');
     write('gemini-extension.json', JSON.stringify({ name: 'skill-evaluator' }, null, 2) + '\n');
 
@@ -121,7 +124,7 @@ describe('stripGeneratedArtifacts', () => {
   });
 
   it('leaves directories in place (removes files, not their containing dirs)', () => {
-    write('hooks/claude.json', applyJsonSentinel({ hooks: {} }, 'hooks/claude.yaml'));
+    write('hooks/claude.json', applyJsonSentinel({ hooks: {} }, 'hooks/claude.yaml', V));
 
     stripGeneratedArtifacts(dir);
 

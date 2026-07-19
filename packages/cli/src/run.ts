@@ -62,6 +62,8 @@ Commands:
   init --name <name> [dir]      Scaffold a new plugin repo with an explicit marketplace/package name
   init --refresh [dir]          Update toolkit-owned scaffold files in an existing repo
   build [path]                  Build plugin artifacts (default: cwd)
+                                (refuses to run with a toolkit older than the one that generated
+                                existing artifacts; see --force-downgrade)
   validate [path]               Run validators on plugins (default: cwd)
   lint [path]                   Run the lint engine on plugins (default: cwd)
   scaffold <name>               Create a new plugin from templates
@@ -76,6 +78,8 @@ Options:
                                 Must be unique across marketplaces.
   --refresh                     With init: refresh an existing repo instead of creating one
   --force                       With init --refresh: overwrite locally-modified scaffold files
+  --force-downgrade             With build: proceed even when the installed toolkit is older than
+                                the version that generated existing artifacts (restamps with it)
   --as <mode>                   With lint: discovery mode (only 'aipm-repo' is supported today)
   --format <text|json|sarif>    With lint: output format (default: text)
   --rule <id>=<severity>        With lint: override a rule's severity (error|warn|info|off);
@@ -235,8 +239,11 @@ export async function run(argv: readonly string[], opts: RunOptions = {}): Promi
       }
 
       case 'build': {
-        const target = rest[0] ?? process.cwd();
-        const results = await build(target);
+        const forceDowngrade = rest.includes('--force-downgrade');
+        // Resolve the target from the first non-flag positional so `aipm build --force-downgrade`
+        // does not mistake the flag for a path.
+        const target = rest.find((a) => !a.startsWith('-')) ?? process.cwd();
+        const results = await build(target, { forceDowngrade });
         const artifactCount = results.reduce((n, r) => n + r.artifacts.length, 0);
         out.write(
           `Built ${String(results.length)} plugin(s), ${String(artifactCount)} artifact(s).\n`,

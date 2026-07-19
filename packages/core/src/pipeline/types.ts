@@ -72,6 +72,13 @@ declare const _targetIdsAreExhaustive: TargetId extends (typeof TARGET_IDS)[numb
 export interface BuildOptions {
   /** Abort after the first hard validation finding. Default: false. */
   failFast?: boolean;
+  /**
+   * Override the generator-version downgrade guard (§4.3.1). By default a build whose installed
+   * `@ai-plugin-marketplace/core` is OLDER than the version stamped into an existing artifact
+   * refuses (to avoid silently reverting generated files to the older generator's output). Set
+   * this to proceed anyway and restamp with the older version. Default: false.
+   */
+  forceDowngrade?: boolean;
 }
 
 /**

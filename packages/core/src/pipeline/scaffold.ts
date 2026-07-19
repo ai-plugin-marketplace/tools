@@ -36,7 +36,7 @@ import { scaffoldKiroFiles } from '../targets/kiro/scaffold.js';
 import { scaffoldOpenPluginsFiles } from '../targets/open-plugins/scaffold.js';
 import { scaffoldVercelFiles } from '../targets/vercel/scaffold.js';
 import type { ScaffoldedFile, TargetScaffoldOptions } from '../targets/scaffold-kit.js';
-import { SCHEMA_VERSION } from '../targets/scaffold-kit.js';
+import { INITIAL_PLUGIN_VERSION } from '../targets/scaffold-kit.js';
 import { TARGET_IDS } from './types.js';
 import type { ScaffoldOptions, SupportReport, TargetId } from './types.js';
 import { TARGET_MIN_REQUIRED } from './validate.js';
@@ -98,6 +98,11 @@ export function validatePluginName(name: string): void {
  *
  * Emits a `defineConfig({ version, targets })` literal importing from the public package root
  * (§8.1 — the only public subpath). Deterministic: stable target ordering, no timestamps.
+ *
+ * `version` is {@link INITIAL_PLUGIN_VERSION} — the same starter literal every per-target
+ * scaffold module writes into its manifest's `version` field, so a freshly-scaffolded plugin is
+ * `version-consistency`-clean out of the box (not `SCHEMA_VERSION`, which is a distinct,
+ * unrelated manifest-schema-version concept).
  */
 export function renderAipmConfig(targets: readonly TargetId[]): string {
   const ordered = orderTargets(targets);
@@ -105,7 +110,7 @@ export function renderAipmConfig(targets: readonly TargetId[]): string {
   return ts`import { defineConfig } from '@ai-plugin-marketplace/core';
 
 export default defineConfig({
-  version: '${SCHEMA_VERSION}',
+  version: '${INITIAL_PLUGIN_VERSION}',
   targets: [${targetList}],
 });
 `;

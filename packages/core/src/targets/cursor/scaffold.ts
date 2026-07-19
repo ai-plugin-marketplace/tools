@@ -18,6 +18,7 @@
 
 import {
   resolveDescription,
+  INITIAL_PLUGIN_VERSION,
   SCHEMA_VERSION,
   type ScaffoldedFile,
   type TargetScaffoldOptions,
@@ -40,7 +41,7 @@ export function scaffoldCursorFiles(
   const manifest: Record<string, unknown> = {
     schemaVersion: SCHEMA_VERSION,
     name: pluginName,
-    version: '0.0.1',
+    version: INITIAL_PLUGIN_VERSION,
     // `description` is optional and constrained to min length 1; omit it in placeholder mode
     // (add-target) so the skeleton stays schema-valid while leaving the field for the author.
     ...(description !== '' ? { description } : {}),

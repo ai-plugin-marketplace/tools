@@ -157,6 +157,12 @@ export interface ValidationResult {
  * Enumerated finding codes. Additive — new codes arrive in toolkit MINOR releases; removing
  * or renaming a code is MAJOR. Consumers SHOULD handle unknown codes gracefully.
  *
+ * `version-consistency` — a declared target's manifest `version` field does not match
+ * `aipm.config.ts`'s `version`. Installs are keyed by manifest version, so a stale
+ * author-maintained manifest (e.g. `.claude-plugin/plugin.json`) silently pins auto-update to a
+ * pre-release artifact even after `aipm.config.ts`'s `version` is bumped. Fires HARD, mirroring
+ * `name-consistency`.
+ *
  * `single-artifact-host` — a "single-artifact host" (`gemini` or `kiro`), which installs ONE
  * extension/power per repo from the repo ROOT and has no marketplace concept, is declared by MORE
  * THAN ONE plugin in the repo. The root artifact for that host is NOT emitted while the ambiguity
@@ -199,6 +205,7 @@ export type FindingCode =
   | 'envelope-adherence'
   | 'schema-invalid'
   | 'name-consistency'
+  | 'version-consistency'
   | 'mcp-key-sync'
   | 'marketplace-registration'
   | 'freshness'

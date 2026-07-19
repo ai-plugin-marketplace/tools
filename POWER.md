@@ -2,7 +2,7 @@
 schemaVersion: 0.1.0
 name: marketplace-authoring
 description: Turn a software repo into an AI plugin marketplace with the aipm toolkit — scaffold, author, build, and validate agent plugins across Claude Code, Cursor, Codex, Gemini, and Kiro.
-version: 0.0.1
+version: 0.1.0
 ---
 
 # marketplace-authoring

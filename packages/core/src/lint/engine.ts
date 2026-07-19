@@ -26,6 +26,7 @@ import {
   mcpKeySyncRule,
   nameConsistencyRule,
   targetSchemaRule,
+  versionConsistencyRule,
 } from './rules/index.js';
 import type { Diagnostic, LintOptions, LintResult } from './types.js';
 
@@ -97,6 +98,7 @@ export async function lint(targetPath: string, options?: LintOptions): Promise<L
     // matches `runValidate`'s `if (envelope.length > 1 && !hasBlockingSchemaError)` block exactly.
     if (envelope.length > 1 && !hasBlockingSchemaError) {
       diagnostics.push(...(await nameConsistencyRule.check(ctx)));
+      diagnostics.push(...(await versionConsistencyRule.check(ctx)));
       diagnostics.push(...(await mcpKeySyncRule.check(ctx)));
       // When registries are generated, their correctness is enforced by registry-freshness
       // instead — skip the hand-authored-registry check to avoid double-reporting.

@@ -151,7 +151,11 @@ interface SynthConfigMetadata {
 function renderAipmConfig(
   targets: readonly TargetId[],
   meta: SynthConfigMetadata = {},
-  version = '0.1.0',
+  // Matches the version already baked into the copied template manifests
+  // (.claude-plugin/plugin.json, gemini-extension.json, POWER.md, the synthesized Codex
+  // manifest, etc.) so `version-consistency` (issue #75) does not spuriously fire for every
+  // synthesized repo.
+  version = '0.0.1',
 ): string {
   const targetList = targets.map((t) => `'${t}'`).join(', ');
   const lines = [`  version: '${version}',`, `  targets: [${targetList}],`];

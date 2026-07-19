@@ -15,6 +15,7 @@
  */
 
 import {
+  INITIAL_PLUGIN_VERSION,
   resolveDescription,
   SCHEMA_VERSION,
   type ScaffoldedFile,
@@ -47,7 +48,7 @@ export function scaffoldKiroFiles(
 schemaVersion: ${SCHEMA_VERSION}
 name: ${pluginName}
 description: ${JSON.stringify(description)}
-version: 0.0.1
+version: ${INITIAL_PLUGIN_VERSION}
 ---
 
 # ${pluginName}

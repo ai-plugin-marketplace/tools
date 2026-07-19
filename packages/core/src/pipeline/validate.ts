@@ -64,6 +64,7 @@ import {
   registryFreshnessRule,
   rootArtifactFreshnessRule,
   targetSchemaRule,
+  versionConsistencyRule,
 } from '../lint/rules/index.js';
 
 // ---------------------------------------------------------------------------
@@ -715,6 +716,148 @@ export function validateNameConsistency(
       }
       case 'vercel': {
         // Vercel has no top-level plugin name field — skip
+        break;
+      }
+    }
+  }
+
+  return findings;
+}
+
+// ---------------------------------------------------------------------------
+// validateVersionConsistency
+// ---------------------------------------------------------------------------
+
+/**
+ * Check that every declared target's manifest `version` field matches `aipm.config.ts`'s
+ * `version`. Installs are keyed by manifest version, so a stale author-maintained manifest (e.g.
+ * `.claude-plugin/plugin.json`, which `aipm build` deliberately does not own beyond the
+ * name-consistency check) silently pins auto-update to a pre-release artifact even after
+ * `aipm.config.ts`'s `version` is bumped for a release.
+ *
+ * Mirrors {@link validateNameConsistency}'s shape exactly: reads each manifest and loosely parses
+ * its `version` field (doesn't re-run the full schema). A missing manifest, or a manifest that
+ * exists but declares no `version`, is not a mismatch (guarded like name-consistency) — this check
+ * only fires when there is an actual, comparable drift.
+ *
+ * Emits `version-consistency` findings, one per mismatched manifest.
+ */
+export async function validateVersionConsistency(
+  pluginDir: string,
+  envelope: readonly TargetId[],
+  configCache?: ConfigCache,
+): Promise<Finding[]> {
+  const findings: Finding[] = [];
+  const pluginName = path.basename(pluginDir);
+  const config = await loadPluginConfig(pluginDir, configCache);
+  const expectedVersion = config.version;
+
+  for (const target of envelope) {
+    switch (target) {
+      case 'claude': {
+        const manifestPath = path.join(pluginDir, '.claude-plugin/plugin.json');
+        if (!fs.existsSync(manifestPath)) break;
+        const manifest = tryReadJson(manifestPath);
+        const parsed = z.object({ version: z.string().optional() }).loose().safeParse(manifest);
+        if (!parsed.success || parsed.data.version === undefined) break;
+        if (parsed.data.version !== expectedVersion) {
+          findings.push(
+            hard(
+              'version-consistency',
+              pluginName,
+              `'.claude-plugin/plugin.json' has version '${parsed.data.version}' but aipm.config.ts declares version '${expectedVersion}'.`,
+            ),
+          );
+        }
+        break;
+      }
+      case 'codex': {
+        const manifestPath = path.join(pluginDir, '.codex-plugin/plugin.json');
+        if (!fs.existsSync(manifestPath)) break;
+        const manifest = tryReadJson(manifestPath);
+        const parsed = z.object({ version: z.string().optional() }).loose().safeParse(manifest);
+        if (!parsed.success || parsed.data.version === undefined) break;
+        if (parsed.data.version !== expectedVersion) {
+          findings.push(
+            hard(
+              'version-consistency',
+              pluginName,
+              `'.codex-plugin/plugin.json' has version '${parsed.data.version}' but aipm.config.ts declares version '${expectedVersion}'.`,
+            ),
+          );
+        }
+        break;
+      }
+      case 'cursor': {
+        const manifestPath = path.join(pluginDir, '.cursor-plugin/plugin.json');
+        if (!fs.existsSync(manifestPath)) break;
+        const manifest = tryReadJson(manifestPath);
+        const parsed = z.object({ version: z.string().optional() }).loose().safeParse(manifest);
+        if (!parsed.success || parsed.data.version === undefined) break;
+        if (parsed.data.version !== expectedVersion) {
+          findings.push(
+            hard(
+              'version-consistency',
+              pluginName,
+              `'.cursor-plugin/plugin.json' has version '${parsed.data.version}' but aipm.config.ts declares version '${expectedVersion}'.`,
+            ),
+          );
+        }
+        break;
+      }
+      case 'gemini': {
+        const manifestPath = path.join(pluginDir, 'gemini-extension.json');
+        if (!fs.existsSync(manifestPath)) break;
+        const manifest = tryReadJson(manifestPath);
+        const parsed = z.object({ version: z.string().optional() }).loose().safeParse(manifest);
+        if (!parsed.success || parsed.data.version === undefined) break;
+        if (parsed.data.version !== expectedVersion) {
+          findings.push(
+            hard(
+              'version-consistency',
+              pluginName,
+              `'gemini-extension.json' has version '${parsed.data.version}' but aipm.config.ts declares version '${expectedVersion}'.`,
+            ),
+          );
+        }
+        break;
+      }
+      case 'kiro': {
+        const powerMdPath = path.join(pluginDir, 'POWER.md');
+        if (!fs.existsSync(powerMdPath)) break;
+        const fm = tryParseFrontmatter(powerMdPath);
+        const parsed = z.object({ version: z.string() }).loose().safeParse(fm);
+        if (!parsed.success) break;
+        if (parsed.data.version !== expectedVersion) {
+          findings.push(
+            hard(
+              'version-consistency',
+              pluginName,
+              `'POWER.md' frontmatter has version '${parsed.data.version}' but aipm.config.ts declares version '${expectedVersion}'.`,
+            ),
+          );
+        }
+        break;
+      }
+      case 'open-plugins': {
+        const manifestPath = path.join(pluginDir, '.plugin/plugin.json');
+        if (!fs.existsSync(manifestPath)) break;
+        const manifest = tryReadJson(manifestPath);
+        const parsed = z.object({ version: z.string().optional() }).loose().safeParse(manifest);
+        if (!parsed.success || parsed.data.version === undefined) break;
+        if (parsed.data.version !== expectedVersion) {
+          findings.push(
+            hard(
+              'version-consistency',
+              pluginName,
+              `'.plugin/plugin.json' has version '${parsed.data.version}' but aipm.config.ts declares version '${expectedVersion}'.`,
+            ),
+          );
+        }
+        break;
+      }
+      case 'vercel': {
+        // Vercel has no top-level plugin version field — skip
         break;
       }
     }
@@ -1423,7 +1566,8 @@ function compareTrees(actualDir: string, expectedDir: string): string[] {
  *      **block cross-target checks** for that plugin (§10.3).
  *   3. Envelope adherence.
  *   4. Cross-target consistency (only when the envelope has more than one target and no blocking
- *      schema errors): name consistency, MCP key sync, marketplace registration.
+ *      schema errors): name consistency, version consistency, MCP key sync, marketplace
+ *      registration.
  *   5. Freshness (unless `opts.skipFreshness`). Severity is `hard` in CI, `soft` locally (§10.2).
  *
  * `passed` is `true` iff no **hard** findings were emitted (§10.2).
@@ -1542,6 +1686,9 @@ export async function runValidate(
     if (envelope.length > 1 && !hasBlockingSchemaError) {
       findings.push(
         ...(await nameConsistencyRule.check(ctx)).map((d) => diagnosticToFinding(d, ci)),
+      );
+      findings.push(
+        ...(await versionConsistencyRule.check(ctx)).map((d) => diagnosticToFinding(d, ci)),
       );
       findings.push(...(await mcpKeySyncRule.check(ctx)).map((d) => diagnosticToFinding(d, ci)));
       // When registries are generated, their correctness is enforced by freshness below — skip the

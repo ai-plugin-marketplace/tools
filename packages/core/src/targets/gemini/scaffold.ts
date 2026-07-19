@@ -16,6 +16,7 @@
 
 import {
   resolveDescription,
+  INITIAL_PLUGIN_VERSION,
   SCHEMA_VERSION,
   type ScaffoldedFile,
   type TargetScaffoldOptions,
@@ -42,7 +43,7 @@ export function scaffoldGeminiFiles(
   const manifest: Record<string, unknown> = {
     schemaVersion: SCHEMA_VERSION,
     name: pluginName,
-    version: '0.0.1',
+    version: INITIAL_PLUGIN_VERSION,
     description,
     contextFileName: 'GEMINI.md',
     mcpServers: {},

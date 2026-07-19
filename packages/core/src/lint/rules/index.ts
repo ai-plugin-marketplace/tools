@@ -11,6 +11,7 @@ import {
   marketplaceRegistrationRule,
   mcpKeySyncRule,
   nameConsistencyRule,
+  versionConsistencyRule,
 } from './legacy-correctness.js';
 import { envelopeShapeRule } from './legacy-envelope-shape.js';
 import {
@@ -36,6 +37,7 @@ export {
   registryFreshnessRule,
   rootArtifactFreshnessRule,
   targetSchemaRule,
+  versionConsistencyRule,
 };
 
 /**
@@ -45,13 +47,14 @@ export {
  * engine runs it first and separately so it can compute `hasBlockingSchemaError` from its own
  * diagnostics, exactly as `pipeline/validate.ts`'s `runValidate` does.
  *
- * The three cross-target consistency rules (`nameConsistencyRule`, `mcpKeySyncRule`,
- * `marketplaceRegistrationRule`) are intentionally NOT in this array — `validate()` only runs
- * them when `envelope.length > 1 && !hasBlockingSchemaError` (and skips marketplace-registration
- * entirely when registry generation is opted in), per §10.1 step 4 / §10.3. `engine.ts`'s `lint()`
- * replicates that exact gating rather than running them unconditionally, so `lint()` and
- * `validate()` agree on when these fire (avoiding e.g. a double-report against the
- * registry-freshness-owned diagnostic when `aipm.workspace.ts` is present).
+ * The four cross-target consistency rules (`nameConsistencyRule`, `versionConsistencyRule`,
+ * `mcpKeySyncRule`, `marketplaceRegistrationRule`) are intentionally NOT in this array —
+ * `validate()` only runs them when `envelope.length > 1 && !hasBlockingSchemaError` (and skips
+ * marketplace-registration entirely when registry generation is opted in), per §10.1 step 4 /
+ * §10.3. `engine.ts`'s `lint()` replicates that exact gating rather than running them
+ * unconditionally, so `lint()` and `validate()` agree on when these fire (avoiding e.g. a
+ * double-report against the registry-freshness-owned diagnostic when `aipm.workspace.ts` is
+ * present).
  */
 export const PER_PLUGIN_RULES: readonly Rule[] = [
   envelopeAdherenceRule,
@@ -73,7 +76,7 @@ export const REPO_SCOPED_RULES: readonly Rule[] = [
 /**
  * Every rule the engine knows about, regardless of when/whether it actually runs for a given
  * lint invocation (`PER_PLUGIN_RULES`/`REPO_SCOPED_RULES` above already encode that gating).
- * `envelopeShapeRule`/`targetSchemaRule` (run first and separately by `engine.ts`) and the three
+ * `envelopeShapeRule`/`targetSchemaRule` (run first and separately by `engine.ts`) and the four
  * cross-target consistency rules (run only when `envelope.length > 1`) are excluded from those
  * two arrays for gating reasons, not because they aren't real rules, so this is their own
  * assembled superset. Backs `registeredRuleIds()` (`registered-rules.ts`), which `--rule
@@ -85,6 +88,7 @@ export const ALL_RULES: readonly Rule[] = [
   ...PER_PLUGIN_RULES,
   ...REPO_SCOPED_RULES,
   nameConsistencyRule,
+  versionConsistencyRule,
   mcpKeySyncRule,
   marketplaceRegistrationRule,
 ];

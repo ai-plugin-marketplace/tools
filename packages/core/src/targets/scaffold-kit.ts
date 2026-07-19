@@ -19,6 +19,15 @@
 export const SCHEMA_VERSION = '0.1.0';
 
 /**
+ * Canonical starter `version` for a freshly-scaffolded plugin — a conventional "not yet released"
+ * semver, distinct from {@link SCHEMA_VERSION} (which is a manifest *schema* version, not the
+ * plugin's own release version). Both `aipm.config.ts`'s `version` and every scaffolded target
+ * manifest's `version` field must emit this same literal so a freshly-scaffolded plugin passes
+ * `version-consistency` out of the box.
+ */
+export const INITIAL_PLUGIN_VERSION = '0.0.1';
+
+/**
  * A single file a target contributes to a scaffolded plugin.
  *
  * `path` is RELATIVE to the plugin directory (e.g. `.claude-plugin/plugin.json`). Content is the

@@ -1,5 +1,43 @@
 # @ai-plugin-marketplace/cli
 
+## 0.6.0
+
+### Minor Changes
+
+- [#81](https://github.com/ai-plugin-marketplace/tools/pull/81) [`cb16c38`](https://github.com/ai-plugin-marketplace/tools/commit/cb16c385a403afce900560e072ec4f8c4bbad244) Thanks [@mike-north](https://github.com/mike-north)! - Guard `aipm build` against a stale installed toolkit silently reverting generated artifacts.
+
+  Every sentinel-carrying generated artifact is now stamped with the `@ai-plugin-marketplace/core`
+  version that produced it (`_generated.version` in JSON outputs, a `# version:` line in
+  inline/sidecar outputs). Before writing anything, `aipm build` compares the installed core version
+  against the version stamped into existing committed artifacts: if the installed toolkit is **older**
+  (by semver precedence), the build refuses with a non-zero exit and a message naming both versions
+  and suggesting `pnpm install`. This closes the failure mode where a checkout with a stale
+  `node_modules` regenerates committed outputs with an older generator and silently reverts a shipped
+  fix. Equal-or-newer installs, first-time/unstamped trees, and same-version rebuilds proceed as
+  before and (re)stamp with the installed version.
+  - New `BuildOptions.forceDowngrade` and the `aipm build --force-downgrade` flag override the guard.
+  - The freshness check ignores the version stamp, so a version bump alone no longer marks committed
+    artifacts stale.
+
+- [#84](https://github.com/ai-plugin-marketplace/tools/pull/84) [`6d2ee20`](https://github.com/ai-plugin-marketplace/tools/commit/6d2ee2028a7fcd77a7513106656a1d9f3853c925) Thanks [@mike-north](https://github.com/mike-north)! - `aipm validate` (and `lint()`'s `correctness/version-consistency` rule) now fails when a declared
+  target's manifest `version` field (`.claude-plugin/plugin.json`, `.codex-plugin/plugin.json`,
+  `.cursor-plugin/plugin.json`, `gemini-extension.json`, `POWER.md` frontmatter,
+  `.plugin/plugin.json`) does not match `aipm.config.ts`'s `version`. Installs are keyed by manifest
+  version, so a stale author-maintained manifest previously let a release ship with `aipm.config.ts`
+  bumped but the manifest still pointing at the old version — auto-update silently kept serving the
+  pre-release artifact. Mirrors the existing `name-consistency` check: a new `version-consistency`
+  `FindingCode`, hard severity, one finding per mismatched manifest.
+
+  Fixes a related scaffold bug this check surfaced: `aipm scaffold` wrote `aipm.config.ts` with
+  `version: '0.1.0'` while every per-target scaffolded manifest wrote `version: '0.0.1'`, so a
+  freshly-scaffolded plugin failed `version-consistency` immediately. `aipm scaffold` now emits
+  `'0.0.1'` consistently everywhere.
+
+### Patch Changes
+
+- Updated dependencies [[`d0ac824`](https://github.com/ai-plugin-marketplace/tools/commit/d0ac824e2cfb2010bcd903901ccbb08a155527d6), [`cb16c38`](https://github.com/ai-plugin-marketplace/tools/commit/cb16c385a403afce900560e072ec4f8c4bbad244), [`f061725`](https://github.com/ai-plugin-marketplace/tools/commit/f0617256ba7abd918a12c67511b9f1644abe69fc), [`6d2ee20`](https://github.com/ai-plugin-marketplace/tools/commit/6d2ee2028a7fcd77a7513106656a1d9f3853c925)]:
+  - @ai-plugin-marketplace/core@0.9.0
+
 ## 0.5.0
 
 ### Minor Changes

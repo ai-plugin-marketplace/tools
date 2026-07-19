@@ -26,6 +26,16 @@ import {
 const md = String.raw;
 
 /**
+ * A single literal backtick character, for interpolation into `md`-tagged templates.
+ *
+ * `md` is `String.raw`, so it does NOT interpret escape sequences — a `` \` `` inside a raw
+ * template stays as the two literal characters backslash+backtick in the output (never becomes a
+ * real backtick byte `0x60`). To embed an actual backtick in raw-tagged Markdown, interpolate this
+ * constant instead of writing an escaped backtick in the template source.
+ */
+const bt = '`';
+
+/**
  * Produce the Kiro skeleton files for a plugin.
  *
  * The minimum required artifact (`TARGET_MIN_REQUIRED.kiro`) is `POWER.md`. Its frontmatter
@@ -61,7 +71,7 @@ ${description}
 
 ## Related Files
 
-- \`steering/\` — Steering files for Kiro
+- ${bt}steering/${bt} (optional, hand-authored) — add Kiro steering files here if needed
 `;
 
   return [{ path: 'POWER.md', content }];

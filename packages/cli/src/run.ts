@@ -243,6 +243,16 @@ export async function run(argv: readonly string[], opts: RunOptions = {}): Promi
     return 0;
   }
 
+  // `-h`/`--help` must short-circuit to usage for every subcommand, before any argument parsing
+  // or side effect: without this check, e.g. `aipm build --help` ran a real build, and
+  // `aipm validate --help` misparsed `--help` as a path (issue #95). Checked ahead of the
+  // `switch` below so it applies uniformly to every command, present and future, rather than
+  // requiring each case to remember its own check.
+  if (rest.includes('--help') || rest.includes('-h')) {
+    out.write(HELP);
+    return 0;
+  }
+
   try {
     switch (command) {
       case 'init': {

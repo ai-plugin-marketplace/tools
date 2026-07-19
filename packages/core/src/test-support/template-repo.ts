@@ -58,7 +58,8 @@ export const TEMPLATE_REPO_CANDIDATES: readonly string[] = [
 
 /**
  * Files the parity fixtures require to exist under `plugins/skill-evaluator/` in a *complete*
- * template checkout, relative to that plugin's source root. This is deliberately the set the
+ * template checkout, relative to the template checkout root (i.e. each entry already includes
+ * the `plugins/skill-evaluator/` prefix). This is deliberately the set the
  * bundlers must emit (README.md, LICENSE — see e.g. `targets/gemini/bundle.test.ts` "emitted
  * paths" assertions), not merely "has a `plugins/` directory".
  *

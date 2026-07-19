@@ -5,7 +5,17 @@
 ```ts
 
 // @public
-export function addTarget(pluginDir: string, target: TargetId): Promise<void>;
+export function addTarget(pluginDir: string, target: TargetId): Promise<AddTargetOutcome>;
+
+// @public
+export interface AddTargetOutcome {
+    preserved: string[];
+    // (undocumented)
+    status: 'already-present' | 'added' | 'partially-added';
+    // (undocumented)
+    target: TargetId;
+    written: string[];
+}
 
 // @public
 export type AipmConfig = AipmConfigInput & {

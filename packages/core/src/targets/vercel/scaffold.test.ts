@@ -53,4 +53,18 @@ describe('scaffoldVercelFiles', () => {
     const fm = parseFrontmatter(skillMdContent('bad-', 'Does a thing'));
     expect(vercelSkillFrontmatterSchema.safeParse(fm).success).toBe(false);
   });
+
+  // Regression test for issue #90: `description` is REQUIRED and constrained to min length 1
+  // (schemas.ts), unlike the optional-description targets (Claude/Codex/Cursor/Open Plugins),
+  // which omit the key entirely in placeholder mode. Blanking it to `""` here would be
+  // schema-invalid on write, not merely incomplete.
+  it('emits non-empty placeholder description in placeholder mode and stays schema-valid (issue #90)', () => {
+    const file = scaffoldVercelFiles('my-plugin', { placeholder: true })[0];
+    expect(file?.content).not.toContain('description: ""');
+
+    const fm = parseFrontmatter(file?.content ?? '') as Record<string, unknown>;
+    expect(fm.description).toBeTypeOf('string');
+    expect((fm.description as string).length).toBeGreaterThan(0);
+    expect(vercelSkillFrontmatterSchema.safeParse(fm).success).toBe(true);
+  });
 });

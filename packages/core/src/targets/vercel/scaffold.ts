@@ -17,7 +17,7 @@
  */
 
 import {
-  resolveDescription,
+  resolveRequiredDescription,
   SCHEMA_VERSION,
   type ScaffoldedFile,
   type TargetScaffoldOptions,
@@ -44,11 +44,10 @@ export function scaffoldVercelFiles(
   pluginName: string,
   opts: TargetScaffoldOptions = {},
 ): ScaffoldedFile[] {
-  const description = resolveDescription(pluginName, opts);
-
-  // `description` is constrained to min length 1. In placeholder mode (add-target) we emit an
-  // empty value, intentionally leaving an incomplete-but-fillable skeleton per §6.4; the author
-  // completes it before the plugin validates.
+  // `description` is REQUIRED and constrained to min length 1 (schemas.ts). In placeholder mode
+  // (add-target) an empty string would be schema-invalid on write, not merely incomplete — so we
+  // emit non-empty placeholder prose (issue #90) instead of blanking the field.
+  const description = resolveRequiredDescription(pluginName, opts);
   const content = md`---
 schemaVersion: ${SCHEMA_VERSION}
 name: ${pluginName}

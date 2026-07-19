@@ -20,6 +20,7 @@ import { runScaffold, runAddTarget, runCheckSupport } from './scaffold.js';
 import { TARGET_IDS } from './types.js';
 import { runValidate } from './validate.js';
 import type {
+  AddTargetOutcome,
   BuildOptions,
   BuildResult,
   InitOptions,
@@ -131,11 +132,14 @@ export function checkSupport(pluginDir: string): Promise<SupportReport> {
 }
 
 /**
- * Scaffold skeleton files for a new target in an existing plugin (§6.4).
+ * Scaffold skeleton files for a new target in an existing plugin (§6.4). Preserve-or-warn, never
+ * destructive: an already-materialized target (every file it would write already exists) is a
+ * friendly no-op (`status: 'already-present'`) rather than a thrown error, and existing files are
+ * never overwritten — see {@link AddTargetOutcome}.
  *
  * @public
  */
-export function addTarget(pluginDir: string, target: TargetId): Promise<void> {
+export function addTarget(pluginDir: string, target: TargetId): Promise<AddTargetOutcome> {
   return runAddTarget(pluginDir, target);
 }
 

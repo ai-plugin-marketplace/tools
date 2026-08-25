@@ -9,6 +9,7 @@
  * marketplace-registration, freshness) are out of scope for this module.
  *
  * @see docs/specs/architecture.md §10 (validation contract), §8.1 (Finding types)
+ * @see docs/specs/architecture.md §10.1.5 (auto-loaded `hooks/hooks.json`)
  * @see docs/specs/architecture.md §12.5 (internal module shape)
  */
 
@@ -382,6 +383,84 @@ function validateHooksFile(pluginDir: string, pluginName: string): Finding[] {
 }
 
 // ---------------------------------------------------------------------------
+// Auto-loaded hooks/hooks.json duplicate-reference validation
+// ---------------------------------------------------------------------------
+
+/**
+ * The plugin-relative path Claude Code loads automatically, in POSIX form.
+ *
+ * Claude Code auto-loads `<pluginDir>/hooks/hooks.json` when the file is present; a manifest
+ * `hooks` reference to that same file is a *duplicate* registration and Claude Code hard-errors
+ * ("Duplicate hooks file detected … The standard hooks/hooks.json is loaded automatically, so
+ * manifest.hooks should only reference additional hook files").
+ *
+ * @see https://code.claude.com/docs/en/plugins-reference — Hooks component location:
+ * "`hooks/hooks.json` in plugin root, or inline in plugin.json"; the manifest `hooks` field
+ * names *additional* hook config paths (`"./my-extra-hooks.json"`).
+ */
+const CLAUDE_AUTOLOADED_HOOKS_PATH = 'hooks/hooks.json';
+
+/**
+ * Normalize a manifest path ref for comparison against a plugin-relative POSIX path:
+ * backslashes → `/`, collapse `.` segments and duplicate separators, strip a leading `./`.
+ * Returns `null` for a ref that escapes the plugin dir (`../…`), which is rejected elsewhere.
+ */
+function toPluginRelativePosix(ref: string): string | null {
+  const normalized = path.posix.normalize(ref.replace(/\\/g, '/'));
+  if (normalized === '..' || normalized.startsWith('../')) return null;
+  return normalized.replace(/^\.\//, '');
+}
+
+/**
+ * Reject a manifest `hooks` reference that resolves to the plugin's auto-loaded
+ * `hooks/hooks.json`.
+ *
+ * This is not a filesystem-existence problem (that is {@link checkRef}'s job) — it is a
+ * *duplicate registration*: Claude Code loads `hooks/hooks.json` on its own, so naming it in the
+ * manifest makes the host refuse to load the plugin. In this toolkit `hooks/hooks.json` is the
+ * shared Codex/Gemini artifact and `hooks/claude.json` is Claude's, so a manifest pointing at
+ * `hooks/hooks.json` is always wrong for the Claude target.
+ *
+ * Reads the manifest JSON directly rather than the schema-parsed value so an array-valued `hooks`
+ * field — legal in Claude Code, not modeled by `claudePluginManifestSchema` — is still caught.
+ */
+function validateHooksAutoloadDuplicate(pluginDir: string, pluginName: string): Finding[] {
+  const manifestPath = path.join(pluginDir, '.claude-plugin', 'plugin.json');
+  if (!fs.existsSync(manifestPath)) return [];
+
+  let raw: unknown;
+  try {
+    raw = JSON.parse(fs.readFileSync(manifestPath, 'utf-8')) as unknown;
+  } catch {
+    // Malformed JSON is reported by validateManifestFileRefs.
+    return [];
+  }
+
+  if (typeof raw !== 'object' || raw === null || Array.isArray(raw)) return [];
+  const hooksField = (raw as Record<string, unknown>)['hooks'];
+
+  const refs: string[] = [];
+  if (typeof hooksField === 'string') {
+    refs.push(hooksField);
+  } else if (Array.isArray(hooksField)) {
+    refs.push(...hooksField.filter((v): v is string => typeof v === 'string'));
+  }
+
+  const findings: Finding[] = [];
+  for (const ref of refs) {
+    if (toPluginRelativePosix(ref) !== CLAUDE_AUTOLOADED_HOOKS_PATH) continue;
+    findings.push(
+      hardFinding(
+        pluginName,
+        `.claude-plugin/plugin.json hooks references ${ref}: Claude Code auto-loads ${CLAUDE_AUTOLOADED_HOOKS_PATH} and errors on a duplicate manifest reference`,
+        `remove the hooks reference from plugin.json — ${CLAUDE_AUTOLOADED_HOOKS_PATH} is loaded automatically. Claude's own hooks artifact is ./hooks/claude.json; the manifest hooks field may only name additional hook files.`,
+      ),
+    );
+  }
+  return findings;
+}
+
+// ---------------------------------------------------------------------------
 // Public entry point
 // ---------------------------------------------------------------------------
 
@@ -401,6 +480,7 @@ export function validateClaudePlugin(pluginDir: string): Finding[] {
     ...validateManifestFileRefs(pluginDir, pluginName),
     ...validateAgentFrontmatter(pluginDir, pluginName),
     ...validateHooksFile(pluginDir, pluginName),
+    ...validateHooksAutoloadDuplicate(pluginDir, pluginName),
     ...validateOpenPluginsConformance(pluginDir, pluginName),
   ];
 }

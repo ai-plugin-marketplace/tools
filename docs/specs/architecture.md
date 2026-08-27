@@ -1,14 +1,18 @@
 # ai-plugin-marketplace — Architecture Specification
 
 **Status:** Draft
-**Spec version:** 0.4.3
-**Supersedes:** 0.4.2 (reintroduced `'shared'` to `GeneratedFile.target`)
-**Last updated:** 2026-07-18
+**Spec version:** 0.4.4
+**Supersedes:** 0.4.3 (generator-version stamp + downgrade guard)
+**Last updated:** 2026-08-27
 **Scope:** Umbrella architecture for the `ai-plugin-marketplace/template` and `ai-plugin-marketplace/tools` repositories and the `@ai-plugin-marketplace/*` npm packages.
 
 > **Note to future readers.** This spec is durable documentation. It describes not only what the system does but _why_ each decision exists, which invariants must hold, and which capabilities are deferred with what hooks reserved so they can be added later without breaking changes. When the design evolves, update this document in the same change that moves the code.
 
+> **What changed from 0.4.3 → 0.4.4.** §10.1 gains a fifth validator category — **host-contract checks** — with its first rule, §10.1.5: a Claude manifest `hooks` reference that resolves to the auto-loaded `hooks/hooks.json` is a hard `schema-invalid`, because Claude Code loads that file automatically and errors on the duplicate. See Appendix B, 0.4.4.
+
 > **What changed from 0.4.2 → 0.4.3.** Toolkit-generated artifacts now carry a generator-version stamp (`_generated.version` / `# version:` line), and `aipm build` enforces a downgrade guard (§4.3.1): a build whose installed `@ai-plugin-marketplace/core` is older than the version that produced a committed artifact refuses (or `--force-downgrade`) rather than silently reverting the file to the older generator's output. Freshness (§10.5) compares modulo the stamp. See Appendix B, 0.4.3.
+
+> **What changed from 0.4.1 → 0.4.2.** `GeneratedFile.target` regains the `'shared'` marker 0.4.0 dropped as unused: two build-internal artifacts (the payload adapter/sidecar, and the generated-root sidecar manifest) span the whole envelope or every emitted owner with no single owning target, and had each been attributed to an arbitrary single target as a stopgap. See Appendix B, 0.4.2.
 
 ---
 
@@ -415,7 +419,7 @@ export type AipmConfig = AipmConfigInput & { readonly [aipmConfigBrand]: 'AipmCo
 export function defineConfig(config: AipmConfigInput): AipmConfig;
 
 // Operations
-export function init(dir: string, opts?: InitOptions): Promise<void>;
+export function init(dir: string, opts?: InitOptions): Promise<InitOutcome>;
 export function build(path: string, opts?: BuildOptions): Promise<BuildResult[]>;
 export function validate(path: string, opts?: ValidateOptions): Promise<ValidationResult>;
 export function scaffold(name: string, opts: ScaffoldOptions): Promise<void>;
@@ -495,9 +499,17 @@ export interface MigrateResult {
 export interface InitOptions {
   name?: string; // repo name in the generated package.json; defaults to basename(dir)
 }
+
+export interface InitOutcome {
+  // absolute path to an ancestor pnpm-workspace.yaml, if one exists above `dir` (issue #96
+  // ancestor-workspace-contamination guard); undefined when none was found
+  ancestorWorkspace?: string;
+}
 ```
 
 **Why `init` lives in `core`.** `init` scaffolds the thin consumer repo described in §3.2 — `package.json` (private, ESM, with the `@ai-plugin-marketplace/cli` dev dependency pinned to a caret of the current toolkit version), both repo-root marketplace registries, an empty `plugins/`, a README, and a CI workflow that runs `aipm build` then `aipm validate` (§10.5). Pinning the dev dependency in lockstep with `core` (§9.1) is the seam that makes `pnpm up` the single upgrade path (§11). It refuses to write into a non-empty directory.
+
+**Ancestor-workspace guard (issue #96).** `init` always writes a local `package.json`, but a directory nested under an ancestor `pnpm-workspace.yaml` can still have a later `pnpm install` swept into that ancestor workspace (shared lockfile/hoisting) instead of staying local. `init` walks up from the target directory looking for an ancestor `pnpm-workspace.yaml` and reports it via `InitOutcome.ancestorWorkspace`; the `aipm init` CLI surface prints a warning to stderr when it is set, before instructing the user to run `pnpm install`.
 
 **Why one `build` signature.** `path` may be a plugin directory or the repo root; the function detects which and either builds one plugin or all. Returns a length-1 array for single-plugin input. Avoids forking the return type on an operational detail.
 
@@ -595,11 +607,30 @@ Validators run in defined order; each either passes or emits findings:
    - `name` consistency across all manifests and the plugin directory name.
    - MCP server key sync between `.mcp.json` (Claude/Cursor) and `mcp.json` (Kiro).
    - Marketplace registration: the plugin is listed in `.claude-plugin/marketplace.json` iff `claude` is in the envelope; likewise for Cursor.
+5. **Host-contract checks** — per-target rules that encode a host's own loading behavior rather than a schema shape. Currently one, for `claude` (§10.1.5).
+
+#### 10.1.5 Claude — no manifest reference to the auto-loaded `hooks/hooks.json` (hard)
+
+Claude Code **auto-loads** `<pluginDir>/hooks/hooks.json` when that file is present; the manifest `hooks` field (`string | array | object`) names only _additional_ hook config files. Naming the auto-loaded file in the manifest is a duplicate registration and Claude Code refuses to load the plugin:
+
+```
+Duplicate hooks file detected … The standard hooks/hooks.json is loaded automatically,
+so manifest.hooks should only reference additional hook files.
+```
+
+> **Normative.** If `.claude-plugin/plugin.json`'s `hooks` field — the string value, or **any** string entry when it is an array — resolves (after normalizing a leading `./` and `.` segments) to the plugin-relative path `hooks/hooks.json`, `aipm validate` emits a **hard** `schema-invalid` finding. The hint is to remove the manifest reference, because the file is auto-loaded. Claude's toolkit-generated hooks artifact is `hooks/claude.json` (§7.2), which the manifest may reference normally.
+
+The rule is deliberately about the _reference_, not the file: a plugin may legitimately carry `hooks/hooks.json` as the shared Codex/Gemini artifact (`adapter-system.md` D6) with no manifest reference at all, and that alone draws no finding here. The broader collision — Claude Code auto-loading a Gemini-format `hooks/hooks.json`, or double-loading Codex's copy of Claude's content — is a separate, unresolved design question tracked outside this section.
+
+Implemented in `packages/core/src/targets/claude/validate.ts`; regression coverage in `validate.test.ts`.
+
+Reference: [Claude Code plugins reference](https://code.claude.com/docs/en/plugins-reference) — Hooks component location, "`hooks/hooks.json` in plugin root, or inline in plugin.json".
 
 ### 10.2 Failure semantics
 
 - Envelope, schema, and adherence errors are **hard**.
 - Cross-target consistency mismatches are **hard**.
+- Host-contract violations (§10.1.5) are **hard** — the host refuses to load the plugin.
 - Freshness mismatches (see §10.5) are **hard** in CI, **soft** locally.
 - `ValidationResult.passed` is `true` iff no hard findings were emitted. Soft findings do not flip it.
 
@@ -846,3 +877,4 @@ How do authors test their plugins? A `@ai-plugin-marketplace/testing` package (o
 | 0.4.1   | 2026-05-31 | Added `init` to the public API: `core.init(dir, opts?)` + `aipm init [dir]` scaffold the thin consumer repo of §3.2 (private/ESM `package.json` with the `@ai-plugin-marketplace/cli` dev dependency pinned to a caret of the current toolkit version, both repo-root marketplace registries, empty `plugins/`, README, and a build→validate CI workflow). This makes the template generatable from the CLI and centrally versioned via `pnpm up` (§11).                                                                                                                                                                                                |
 | 0.4.2   | 2026-07-15 | Reintroduced `'shared'` to `GeneratedFile.target` (now `GeneratedFileTarget = TargetId \| 'shared'`), 0.4.0 having dropped it as unused. Two build-internal artifacts genuinely have no single owning target — the payload adapter (and its sidecar), emitted for any plugin authoring hooks regardless of envelope, and the generated-root sidecar manifest, which spans every emitted single-artifact-host/registry owner — and had each been attributed to an arbitrary, deterministically-chosen single target as a workaround. Both now report `target: 'shared'` honestly instead. Breaking change to the `@public` `GeneratedFile.target` field. |
 | 0.4.3   | 2026-07-18 | Added the generator-version stamp + downgrade guard (§4.3.1): sentinel-carrying artifacts now record the producing `@ai-plugin-marketplace/core` version (`_generated.version` / `# version:` line), and `aipm build` refuses (non-zero exit, or `--force-downgrade`) when the installed toolkit is older than a stamped version — closing the silent-revert failure mode where a stale `node_modules` reverts committed artifacts to an older generator's output. Freshness (§10.5) compares modulo the version stamp so a version bump alone is not "stale". New `BuildOptions.forceDowngrade`.                                                       |
+| 0.4.4   | 2026-08-27 | Added §10.1 category 5, **host-contract checks**, and its first rule §10.1.5: Claude Code auto-loads `<pluginDir>/hooks/hooks.json` and hard-errors when the plugin manifest's `hooks` field also names it, so `aipm validate` now emits a hard `schema-invalid` when that field — string, or any string entry of an array — normalizes to `hooks/hooks.json`. §10.2 records host-contract violations as hard. Notes the still-open collision between this auto-load and the shared Codex/Gemini `hooks/hooks.json` artifact (`adapter-system.md` D6).                                                                                                  |

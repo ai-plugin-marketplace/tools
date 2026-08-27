@@ -766,6 +766,7 @@ export async function validateVersionConsistency(
               'version-consistency',
               pluginName,
               `'.claude-plugin/plugin.json' has version '${parsed.data.version}' but aipm.config.ts declares version '${expectedVersion}'.`,
+              `Bump the manifest's version to match aipm.config.ts, which is the source of truth for the plugin's version.`,
             ),
           );
         }
@@ -783,6 +784,7 @@ export async function validateVersionConsistency(
               'version-consistency',
               pluginName,
               `'.codex-plugin/plugin.json' has version '${parsed.data.version}' but aipm.config.ts declares version '${expectedVersion}'.`,
+              `Bump the manifest's version to match aipm.config.ts, which is the source of truth for the plugin's version.`,
             ),
           );
         }
@@ -800,6 +802,7 @@ export async function validateVersionConsistency(
               'version-consistency',
               pluginName,
               `'.cursor-plugin/plugin.json' has version '${parsed.data.version}' but aipm.config.ts declares version '${expectedVersion}'.`,
+              `Bump the manifest's version to match aipm.config.ts, which is the source of truth for the plugin's version.`,
             ),
           );
         }
@@ -817,6 +820,7 @@ export async function validateVersionConsistency(
               'version-consistency',
               pluginName,
               `'gemini-extension.json' has version '${parsed.data.version}' but aipm.config.ts declares version '${expectedVersion}'.`,
+              `Bump the manifest's version to match aipm.config.ts, which is the source of truth for the plugin's version.`,
             ),
           );
         }
@@ -834,6 +838,7 @@ export async function validateVersionConsistency(
               'version-consistency',
               pluginName,
               `'POWER.md' frontmatter has version '${parsed.data.version}' but aipm.config.ts declares version '${expectedVersion}'.`,
+              `Bump the manifest's version to match aipm.config.ts, which is the source of truth for the plugin's version.`,
             ),
           );
         }
@@ -851,6 +856,7 @@ export async function validateVersionConsistency(
               'version-consistency',
               pluginName,
               `'.plugin/plugin.json' has version '${parsed.data.version}' but aipm.config.ts declares version '${expectedVersion}'.`,
+              `Bump the manifest's version to match aipm.config.ts, which is the source of truth for the plugin's version.`,
             ),
           );
         }
@@ -1261,6 +1267,20 @@ export function checkFreshness(
       const drift = compareTrees(bundle.destDir, tempDir);
       for (const rel of drift) {
         const distRel = path.relative(distDir, path.join(bundle.destDir, rel));
+        // A drifted path that isn't on disk at all was never built (e.g. first build hasn't run
+        // yet) — report it as `missing`, not `stale`, so the user isn't told a nonexistent file
+        // "differs" from expected output (issue #97).
+        if (!fs.existsSync(path.join(bundle.destDir, rel))) {
+          findings.push(
+            freshnessFinding(
+              ci,
+              pluginName,
+              `Generated bundle file 'dist/${distRel}' is missing.`,
+              `run \`aipm build\` to generate the ${bundle.target} bundle.`,
+            ),
+          );
+          continue;
+        }
         findings.push(
           freshnessFinding(
             ci,

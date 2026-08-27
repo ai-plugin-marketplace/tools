@@ -227,6 +227,26 @@ describeMaybe('runValidate — freshness (§10.5, §10.2)', () => {
     expect(result.passed).toBe(false);
   });
 
+  it('a not-yet-built dist bundle file reports missing, not stale (issue #97)', async () => {
+    repo = synthPluginRepo(ALL_SYNTH_TARGETS);
+    await runBuild(repo.repoRoot);
+
+    // Delete a single committed dist file WITHOUT rebuilding: from validate's perspective this
+    // file was never built (drift because it's absent), not hand-edited/out-of-date content —
+    // the message must say `missing`, not `is stale`.
+    const distGeminiMd = path.join(repo.repoRoot, 'dist', 'gemini', SYNTH_PLUGIN_NAME, 'GEMINI.md');
+    fs.rmSync(distGeminiMd);
+
+    const result = await runValidate(repo.repoRoot, { ci: true });
+    const fresh = ofCode(result.findings, 'freshness');
+    const geminiFinding = fresh.find((f) => f.message.includes('GEMINI.md'));
+    expect(geminiFinding).toBeDefined();
+    expect(geminiFinding?.message).toContain('missing');
+    expect(geminiFinding?.message).not.toContain('is stale');
+    expect(geminiFinding?.hint).toContain('aipm build');
+    expect(result.passed).toBe(false);
+  });
+
   it('a formatting-only (reindented) hooks/claude.json is still a HARD freshness finding (§4.3.1)', async () => {
     // The generator-version normalization strips ONLY the version stamp, not formatting — so a
     // whitespace-only hand-edit of a generated JSON artifact (same data, same version, reindented)

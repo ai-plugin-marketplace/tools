@@ -24,6 +24,7 @@ import type {
   BuildOptions,
   BuildResult,
   InitOptions,
+  InitOutcome,
   MigrateOptions,
   MigrateResult,
   RefreshOptions,
@@ -65,11 +66,12 @@ export function validate(targetPath: string, opts?: ValidateOptions): Promise<Va
  * Scaffold a thin consumer repo (the "template") at `targetDir` that depends on
  * `@ai-plugin-marketplace/cli` and holds plugin sources only (§3.2, §11). The generated
  * `package.json` pins the cli dev dependency to a caret of the current toolkit version (§9.1
- * lockstep). Refuses to write into a non-empty directory.
+ * lockstep). Refuses to write into a non-empty directory. Returns an {@link InitOutcome} flagging
+ * an ancestor `pnpm-workspace.yaml`, if one exists (issue #96 ancestor-contamination guard).
  *
  * @public
  */
-export function init(targetDir: string, opts?: InitOptions): Promise<void> {
+export function init(targetDir: string, opts?: InitOptions): Promise<InitOutcome> {
   return runInit(targetDir, opts);
 }
 

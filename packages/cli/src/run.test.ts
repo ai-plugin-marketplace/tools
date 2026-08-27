@@ -112,6 +112,34 @@ describe('aipm init', () => {
     expect(fs.existsSync(path.join(target, 'package.json'))).toBe(true);
   });
 
+  // Issue #96: a directory with no local package.json under an ancestor pnpm-workspace.yaml lets
+  // `pnpm add`/`pnpm install` silently target the ANCESTOR's manifest and lockfile. `aipm init`
+  // must warn (to stderr, before the "Next: run pnpm install" line) when that ancestor exists.
+  it('warns to stderr when an ancestor pnpm-workspace.yaml exists', async () => {
+    const wsRoot = path.join(tmpDir, 'ws');
+    fs.mkdirSync(wsRoot);
+    const workspaceFile = path.join(wsRoot, 'pnpm-workspace.yaml');
+    fs.writeFileSync(workspaceFile, 'packages:\n  - "pkgs/*"\n');
+    const target = path.join(wsRoot, 'sub', 'my-repo');
+
+    const { code, out, err } = await invoke(['init', target]);
+
+    expect(code).toBe(0);
+    expect(err).toContain('Warning');
+    expect(err).toContain(workspaceFile);
+    expect(err).toContain('pnpm install');
+    // Still scaffolds — the warning does not block init.
+    expect(fs.existsSync(path.join(target, 'package.json'))).toBe(true);
+    expect(out).toContain('Next: run `pnpm install`');
+  });
+
+  it('does not warn when there is no ancestor pnpm-workspace.yaml', async () => {
+    const target = path.join(tmpDir, 'no-ancestor', 'my-repo');
+    const { code, err } = await invoke(['init', target]);
+    expect(code).toBe(0);
+    expect(err).toBe('');
+  });
+
   it('init --name <name> writes the marketplace name into the repo-root registries', async () => {
     const target = path.join(tmpDir, 'named-repo');
     const { code } = await invoke(['init', '--name', 'acme-ai-plugins', target]);
@@ -264,6 +292,83 @@ describe('aipm build --force-downgrade (§4.3.1)', () => {
     expect(err).not.toContain('build failed');
     // Restamped DOWN off the future version — the build ran and rewrote the artifact.
     expect(stampVersion(cursorJson)).not.toBe('99.0.0');
+  });
+});
+
+describe('aipm build success-line ordering (issue #97)', () => {
+  let tmpDir: string;
+
+  beforeEach(() => {
+    tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'cli-build-ordering-'));
+  });
+
+  afterEach(() => {
+    if (tmpDir && fs.existsSync(tmpDir)) fs.rmSync(tmpDir, { recursive: true });
+  });
+
+  /**
+   * Scaffold a minimal `claude`+`cursor`-target plugin whose author-maintained
+   * `.claude-plugin/plugin.json` version does NOT match `aipm.config.ts`'s — a hard
+   * `version-consistency` finding (issue #75) that `build`'s post-build `validate` step surfaces.
+   * Cross-target checks (including version-consistency) only run for a multi-target envelope,
+   * hence the second (`cursor`) target.
+   */
+  function writeVersionMismatchedPlugin(): string {
+    const pluginDir = path.join(tmpDir, 'plugins', 'mismatch-plugin');
+    fs.mkdirSync(path.join(pluginDir, 'hooks'), { recursive: true });
+    fs.mkdirSync(path.join(pluginDir, '.claude-plugin'), { recursive: true });
+    fs.writeFileSync(
+      path.join(pluginDir, 'aipm.config.ts'),
+      "import { defineConfig } from '@ai-plugin-marketplace/core';\n\nexport default defineConfig({\n  version: '0.1.0',\n  targets: ['claude', 'cursor'],\n});\n",
+      'utf-8',
+    );
+    fs.writeFileSync(
+      path.join(pluginDir, '.claude-plugin', 'plugin.json'),
+      JSON.stringify({ name: 'mismatch-plugin', version: '9.9.9' }, null, 2) + '\n',
+      'utf-8',
+    );
+    fs.writeFileSync(
+      path.join(pluginDir, 'hooks', 'claude.yaml'),
+      'hooks:\n  PreToolUse:\n    - matcher: Bash\n      hooks:\n        - { type: command, command: ./guard.sh }\n',
+      'utf-8',
+    );
+    return pluginDir;
+  }
+
+  it('does not print "Built N plugin(s)" when the post-build validate has a hard finding', async () => {
+    const pluginDir = writeVersionMismatchedPlugin();
+    const { code, out } = await invoke(['build', pluginDir]);
+
+    expect(code).toBe(1);
+    expect(out).toContain('version-consistency');
+    // The success summary must never appear on a failing run (issue #97) — not merely reordered
+    // below the failure.
+    expect(out).not.toMatch(/Built \d+ plugin/);
+  });
+
+  it('still prints "Built N plugin(s)" before validation output on a clean run', async () => {
+    // A `vercel`-only plugin needs no marketplace.json registry and no hooks source (a bare
+    // `skills/*/SKILL.md` satisfies its adherence + schema checks), so this is the minimal
+    // fixture that reaches a genuinely passing `validate` via the real CLI.
+    const pluginDir = path.join(tmpDir, 'plugins', 'clean-plugin');
+    fs.mkdirSync(path.join(pluginDir, 'skills', 'my-skill'), { recursive: true });
+    fs.writeFileSync(
+      path.join(pluginDir, 'aipm.config.ts'),
+      "import { defineConfig } from '@ai-plugin-marketplace/core';\n\nexport default defineConfig({\n  version: '0.1.0',\n  targets: ['vercel'],\n});\n",
+      'utf-8',
+    );
+    fs.writeFileSync(
+      path.join(pluginDir, 'skills', 'my-skill', 'SKILL.md'),
+      '---\nname: my-skill\ndescription: A test skill.\n---\n\nBody.\n',
+      'utf-8',
+    );
+
+    const { code, out } = await invoke(['build', pluginDir]);
+    expect(code).toBe(0);
+    const builtIndex = out.indexOf('Built 1 plugin(s)');
+    const okIndex = out.indexOf('OK — no findings.');
+    expect(builtIndex).toBeGreaterThanOrEqual(0);
+    expect(okIndex).toBeGreaterThan(builtIndex);
   });
 });
 

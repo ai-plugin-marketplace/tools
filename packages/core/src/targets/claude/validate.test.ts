@@ -7,7 +7,15 @@
  *
  * @see docs/specs/architecture.md §10 (validation contract)
  * @see docs/specs/architecture.md §8.1 (Finding, FindingCode types)
- * @see /Users/mnorth/Development/ai-plugin-marketplace-template/plugins/skill-evaluator/
+ * @see docs/specs/architecture.md §10.1.5 (auto-loaded `hooks/hooks.json`)
+ * @see https://code.claude.com/docs/en/plugins-reference — plugin manifest `hooks` field
+ *   (`string|array|object`, e.g. `"./my-extra-hooks.json"`) and the Hooks component's
+ *   auto-loaded location: "`hooks/hooks.json` in plugin root, or inline in plugin.json".
+ * @see https://code.claude.com/docs/en/hooks — Claude hooks file format.
+ *   Error contract observed from Claude Code on a duplicate reference:
+ *   "Duplicate hooks file detected … The standard hooks/hooks.json is loaded automatically,
+ *   so manifest.hooks should only reference additional hook files."
+ * @see https://github.com/ai-plugin-marketplace/template — `plugins/skill-evaluator/` (parity fixture)
  */
 
 import * as fs from 'node:fs';
@@ -718,5 +726,108 @@ describe('validateClaudePlugin — mcpServers path traversal', () => {
     const hard = validateClaudePlugin(tmpDir).filter((f) => f.code === 'schema-invalid');
     expect(hard).toHaveLength(1);
     expect(hard[0]?.severity).toBe('hard');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Auto-loaded hooks/hooks.json duplicate manifest reference (architecture.md §10.1.5)
+//
+// Claude Code auto-loads `<pluginDir>/hooks/hooks.json` and hard-errors when the plugin manifest
+// also names it: "Duplicate hooks file detected … The standard hooks/hooks.json is loaded
+// automatically, so manifest.hooks should only reference additional hook files."
+// ---------------------------------------------------------------------------
+
+describe('validateClaudePlugin — hooks/hooks.json auto-load duplicate reference', () => {
+  let tmpDir: string;
+  beforeEach(() => {
+    tmpDir = makeTempDir();
+  });
+  afterEach(() => {
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  });
+
+  /** Findings whose message is about the auto-loaded hooks file. */
+  const duplicates = (findings: Finding[]): Finding[] =>
+    findings.filter((f) => f.message.includes('auto-loads hooks/hooks.json'));
+
+  it('emits a HARD schema-invalid when the manifest hooks field is ./hooks/hooks.json', () => {
+    writeFile(
+      tmpDir,
+      '.claude-plugin/plugin.json',
+      JSON.stringify({ name: 'test-plugin', hooks: './hooks/hooks.json' }),
+    );
+    writeFile(tmpDir, 'hooks/hooks.json', VALID_HOOKS_JSON);
+
+    const findings = validateClaudePlugin(tmpDir);
+    const dup = duplicates(findings);
+
+    expect(dup).toHaveLength(1);
+    expect(dup[0]?.severity).toBe('hard');
+    expect(dup[0]?.code).toBe('schema-invalid');
+    expect(dup[0]?.plugin).toBe(path.basename(tmpDir));
+    expect(dup[0]?.hint).toContain('loaded automatically');
+    // The reference is otherwise well-formed and the file exists, so this is the ONLY finding.
+    expect(findings).toHaveLength(1);
+  });
+
+  it('fires even when hooks/hooks.json is written without the "./" prefix', () => {
+    // Normalization must treat `hooks/hooks.json` and `./hooks/./hooks.json` as the same file.
+    writeFile(
+      tmpDir,
+      '.claude-plugin/plugin.json',
+      JSON.stringify({ name: 'test-plugin', hooks: 'hooks/./hooks.json' }),
+    );
+    writeFile(tmpDir, 'hooks/hooks.json', VALID_HOOKS_JSON);
+
+    expect(duplicates(validateClaudePlugin(tmpDir))).toHaveLength(1);
+  });
+
+  it('fires for an array-valued hooks field containing ./hooks/hooks.json', () => {
+    // Array form is legal in Claude Code and not modeled by claudePluginManifestSchema, so the
+    // check must read the raw manifest rather than the schema-parsed value.
+    writeFile(
+      tmpDir,
+      '.claude-plugin/plugin.json',
+      JSON.stringify({
+        name: 'test-plugin',
+        hooks: ['./hooks/extra.json', './hooks/hooks.json'],
+      }),
+    );
+    writeFile(tmpDir, 'hooks/extra.json', VALID_HOOKS_JSON);
+    writeFile(tmpDir, 'hooks/hooks.json', VALID_HOOKS_JSON);
+
+    const dup = duplicates(validateClaudePlugin(tmpDir));
+    expect(dup).toHaveLength(1);
+    expect(dup[0]?.message).toContain('./hooks/hooks.json');
+  });
+
+  it('emits NO finding when the manifest hooks field is ./hooks/claude.json', () => {
+    writeFile(
+      tmpDir,
+      '.claude-plugin/plugin.json',
+      JSON.stringify({ name: 'test-plugin', hooks: './hooks/claude.json' }),
+    );
+    writeFile(tmpDir, 'hooks/claude.json', VALID_HOOKS_JSON);
+
+    expect(validateClaudePlugin(tmpDir)).toEqual([]);
+  });
+
+  it('emits NO finding when hooks/hooks.json exists but the manifest omits hooks', () => {
+    // The auto-loaded file on its own is fine — only the duplicate manifest reference errors.
+    writeFile(tmpDir, '.claude-plugin/plugin.json', MINIMAL_MANIFEST);
+    writeFile(tmpDir, 'hooks/hooks.json', VALID_HOOKS_JSON);
+
+    expect(validateClaudePlugin(tmpDir)).toEqual([]);
+  });
+
+  it('emits NO finding for a similarly-named file that is not the auto-loaded one', () => {
+    writeFile(
+      tmpDir,
+      '.claude-plugin/plugin.json',
+      JSON.stringify({ name: 'test-plugin', hooks: './hooks/extra-hooks.json' }),
+    );
+    writeFile(tmpDir, 'hooks/extra-hooks.json', VALID_HOOKS_JSON);
+
+    expect(validateClaudePlugin(tmpDir)).toEqual([]);
   });
 });

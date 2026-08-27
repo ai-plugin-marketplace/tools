@@ -450,6 +450,18 @@ describe('validateVersionConsistency()', () => {
     expect(findings).toHaveLength(0);
   });
 
+  // Issue #97 acceptance criterion 3: the finding's hint names aipm.config.ts as the source of
+  // truth, so the user knows to bump the MANIFEST (not aipm.config.ts) to match.
+  it('hints that aipm.config.ts is the source of truth for the version', async () => {
+    const pluginDir = path.join(tmpDir, 'my-plugin');
+    writeConfig(pluginDir, '1.2.3', ['claude']);
+    write(pluginDir, '.claude-plugin/plugin.json', { name: 'my-plugin', version: '0.9.0' });
+
+    const findings = await validateVersionConsistency(pluginDir, ['claude']);
+    expect(findings).toHaveLength(1);
+    expect(findings[0]?.hint).toContain('aipm.config.ts');
+  });
+
   // Acceptance criterion 4: a manifest present but without a `version` field does not fabricate
   // a mismatch.
   it('does not fire when a present manifest declares no version field', async () => {

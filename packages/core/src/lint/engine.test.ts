@@ -11,6 +11,7 @@ import * as os from 'node:os';
 import * as path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { runBuild } from '../pipeline/build.js';
+import { runValidate } from '../pipeline/validate.js';
 import { synthRegistryRepo } from '../test-support/synth-plugin.js';
 import type { SynthRegistryRepo } from '../test-support/synth-plugin.js';
 import { lint } from './engine.js';
@@ -218,5 +219,107 @@ describe('lint()', () => {
       );
       expect(marketplaceRegistrationDiagnostics.length).toBeGreaterThan(0);
     });
+  });
+});
+
+// Regression coverage for #101: #91 made `runValidate` (hard `envelope-invalid`) and `runBuild`
+// (thrown `ConfigLoadError`) catch a plugin-shaped directory missing `aipm.config.ts`, but `lint()`
+// stayed silent for the identical tree. `lint` and `validate` must agree on this case.
+describe('lint() — plugin-shaped repo-root subdirectory missing aipm.config.ts (#91, #101)', () => {
+  it('agrees with runValidate(): both report the equivalent envelope-invalid finding for the same tree', async () => {
+    // Repro shape from #91: a plugins/* dir with a target manifest but no aipm.config.ts.
+    write('plugins/broken/.claude-plugin/plugin.json', { name: 'broken', version: '0.1.0' });
+
+    const [lintResult, validateResult] = await Promise.all([lint(repoRoot), runValidate(repoRoot)]);
+
+    // validate() surfaces its existing hard envelope-invalid finding (unchanged by this fix, #91).
+    const envelopeFindings = validateResult.findings.filter((f) => f.code === 'envelope-invalid');
+    expect(envelopeFindings).toHaveLength(1);
+    expect(envelopeFindings[0]?.plugin).toBe('broken');
+    expect(envelopeFindings[0]?.severity).toBe('hard');
+    expect(validateResult.passed).toBe(false);
+
+    // lint() must now surface the equivalent diagnostic — same rule as a malformed config
+    // (`schema/envelope-shape`), `error` severity (validate's `hard` maps to lint's `error`,
+    // L-D2's findingToDiagnostic), carrying the legacy `envelope-invalid` code, and the identical
+    // message validate reports — not silent, as it was pre-fix.
+    const lintEnvelopeDiagnostics = lintResult.diagnostics.filter(
+      (d) => d.legacyCode === 'envelope-invalid',
+    );
+    expect(lintEnvelopeDiagnostics).toHaveLength(1);
+    expect(lintEnvelopeDiagnostics[0]).toMatchObject({
+      ruleId: 'schema/envelope-shape',
+      category: 'schema',
+      severity: 'error',
+      file: 'broken',
+    });
+    expect(lintEnvelopeDiagnostics[0]?.message).toBe(envelopeFindings[0]?.message);
+  });
+
+  it('emits nothing further beyond the envelope-invalid diagnostic for the config-less plugin', async () => {
+    // No other rule can run without a resolved envelope (engine.ts's `continue` after the failed
+    // loadPluginConfig call) — mirroring validate()'s short-circuit on an unusable envelope.
+    write('plugins/broken/.claude-plugin/plugin.json', { name: 'broken', version: '0.1.0' });
+
+    const result = await lint(repoRoot);
+
+    expect(result.diagnostics.filter((d) => d.file === 'broken')).toHaveLength(1);
+  });
+});
+
+// #101, follow-on: the same lint/validate disagreement exists for an `aipm.config.ts` that is
+// present but cannot be imported (syntax error, no usable default export). `runValidate` reports
+// a hard `envelope-invalid` for it; `lint()` previously returned no diagnostic at all, so a
+// syntax-broken envelope still got a clean bill of health from `lint`.
+describe('lint() — plugin whose aipm.config.ts exists but fails to import (#101)', () => {
+  it('agrees with runValidate(): both report the equivalent envelope-invalid for an unparseable config', async () => {
+    write('plugins/broken/.claude-plugin/plugin.json', { name: 'broken', version: '0.1.0' });
+    // Deliberately unparseable TypeScript — the transpile/import step throws, so the failure
+    // never reaches the envelope schema and is not a ZodError.
+    write('plugins/broken/aipm.config.ts', 'export default {{{ not valid typescript\n');
+
+    const [lintResult, validateResult] = await Promise.all([lint(repoRoot), runValidate(repoRoot)]);
+
+    const envelopeFindings = validateResult.findings.filter((f) => f.code === 'envelope-invalid');
+    expect(envelopeFindings).toHaveLength(1);
+    expect(envelopeFindings[0]?.plugin).toBe('broken');
+    expect(envelopeFindings[0]?.severity).toBe('hard');
+    expect(validateResult.passed).toBe(false);
+
+    const lintEnvelopeDiagnostics = lintResult.diagnostics.filter(
+      (d) => d.legacyCode === 'envelope-invalid',
+    );
+    expect(lintEnvelopeDiagnostics).toHaveLength(1);
+    expect(lintEnvelopeDiagnostics[0]).toMatchObject({
+      ruleId: 'schema/envelope-shape',
+      category: 'schema',
+      severity: 'error',
+      file: 'broken',
+    });
+    // Byte-identical to validate's: both take the ConfigLoadError's own message.
+    expect(lintEnvelopeDiagnostics[0]?.message).toBe(envelopeFindings[0]?.message);
+  });
+
+  it('still reports the schema-violation case as per-issue envelope-invalid diagnostics', async () => {
+    // A config that imports cleanly but violates the envelope schema stays on the ZodError path,
+    // which expands into one diagnostic per issue rather than a single loader-message diagnostic.
+    write('plugins/broken/.claude-plugin/plugin.json', { name: 'broken', version: '0.1.0' });
+    write(
+      'plugins/broken/aipm.config.ts',
+      "import { defineConfig } from '@ai-plugin-marketplace/core';\n" +
+        "export default defineConfig({ version: 'not-semver', targets: ['not-a-target'] });\n",
+    );
+
+    const result = await lint(repoRoot);
+
+    const envelopeDiagnostics = result.diagnostics.filter(
+      (d) => d.legacyCode === 'envelope-invalid',
+    );
+    expect(envelopeDiagnostics.length).toBeGreaterThan(0);
+    for (const d of envelopeDiagnostics) {
+      expect(d.ruleId).toBe('schema/envelope-shape');
+      expect(d.severity).toBe('error');
+      expect(d.message).toMatch(/^Invalid aipm\.config: \[/);
+    }
   });
 });

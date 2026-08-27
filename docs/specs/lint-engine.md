@@ -213,8 +213,13 @@ The existing zod schemas (per-target `schemas.ts`, config schemas in `config.ts`
 through L-D3 so every issue has a range. Zod remains the sole authority (L-D8). Two migrated
 rules carry this category:
 
-- `schema/envelope-shape` — `aipm.config.ts` parses strictly against the envelope schema; legacy
-  code `envelope-invalid`.
+- `schema/envelope-shape` — `aipm.config.ts` loads and parses strictly against the envelope
+  schema. Fires on _any_ failure to resolve the envelope, not only a schema violation: a missing
+  `aipm.config.ts` in a plugin-shaped directory, a file that cannot be imported (syntax error, no
+  usable default export), or a file that imports but violates the schema (#101). The first two
+  carry the config loader's own message; the third expands into one diagnostic per Zod issue. In
+  every case this mirrors `validate()`'s `envelope-invalid` for the same tree — `lint`, `validate`
+  and `build` must agree rather than one staying silent; legacy code `envelope-invalid`.
 - `schema/target-conformance` — every target manifest in a plugin's envelope parses against that
   target's current schema; legacy codes `schema-invalid`, plus the Open Plugins-specific
   `metadata-dir-isolation` and `open-plugins-conformance` (soft, advisory-only) findings the same

@@ -1,5 +1,29 @@
 # @ai-plugin-marketplace/core
 
+## 0.10.1
+
+### Patch Changes
+
+- [#109](https://github.com/ai-plugin-marketplace/tools/pull/109) [`37bb067`](https://github.com/ai-plugin-marketplace/tools/commit/37bb067b1f0312a58b8499693cae8663073991c8) Thanks [@mike-north](https://github.com/mike-north)! - Fix `aipm lint` staying silent for a plugin whose `aipm.config.ts` cannot be resolved — cases
+  `aipm validate` (hard `envelope-invalid`) and `aipm build` (thrown `ConfigLoadError`) already
+  caught. The `schema/envelope-shape` rule now fires for every envelope-load failure, not only a
+  schema violation: a plugin-shaped directory missing `aipm.config.ts`, and a config file that is
+  present but cannot be imported (syntax error, no usable default export). Both emit the same
+  `envelope-invalid`-backed, `error`-severity diagnostic `validate` reports for the identical tree,
+  carrying the config loader's own message verbatim, so the three surfaces agree instead of `lint`
+  reporting a clean bill of health for a broken plugin.
+
+- [#111](https://github.com/ai-plugin-marketplace/tools/pull/111) [`39b08b6`](https://github.com/ai-plugin-marketplace/tools/commit/39b08b6e5347a262ecf56e002dbfc912082241f9) Thanks [@mike-north](https://github.com/mike-north)! - Stop copying `README.md`/`LICENSE` into Gemini CLI and Kiro bundle output (`bundleGeminiPlugin`,
+  `bundleKiroPlugin`, and the repo-root single-artifact-host emission built on them).
+
+  The `ai-plugin-marketplace/template` repo moved `README.md`/`LICENSE` from per-plugin source to
+  the repo root, where they are canonical, author-owned files backing the single emitted Gemini
+  extension / Kiro power — never a per-plugin generated copy. The bundlers previously still tried to
+  copy a plugin's own `README.md`/`LICENSE` (when present) into `dist/gemini/<plugin>/`,
+  `dist/kiro/<plugin>/`, and the repo-root artifact set, which diverged from the template's actual
+  output and, for repo-root emission, could trip the `root-artifact-collision` guard against the
+  repo's real root `README.md`/`LICENSE`.
+
 ## 0.10.0
 
 ### Minor Changes

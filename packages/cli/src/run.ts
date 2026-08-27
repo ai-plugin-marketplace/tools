@@ -272,13 +272,27 @@ export async function run(argv: readonly string[], opts: RunOptions = {}): Promi
         // `--name` sets BOTH the package.json name and the marketplace name: the marketplace name
         // is the identity that matters (must be unique across marketplaces), and tying the repo
         // name to it reads cleanly for a freshly scaffolded repo.
-        await init(dir, {
+        const outcome = await init(dir, {
           cliVersion: toolkitVersion(),
           ...(nameOpt !== undefined ? { name: nameOpt, marketplaceName: nameOpt } : {}),
         });
         const created = path.resolve(dir);
         out.write(`Created plugin repo at ${created}.\n`);
-        out.write('Next: run `pnpm install`, then `aipm scaffold <name>` to add a plugin.\n');
+        // Issue #96: an ancestor pnpm-workspace.yaml means a `pnpm install` from `created` can be
+        // swept into that ancestor's workspace (shared lockfile/hoisting) instead of staying
+        // local. Warn before telling the user to install, so they can move/isolate first.
+        if (outcome.ancestorWorkspace !== undefined) {
+          err.write(
+            `Warning: found an ancestor pnpm workspace at ${outcome.ancestorWorkspace}.\n` +
+              `  Running 'pnpm install' inside ${created} may be swept into that ancestor\n` +
+              '  workspace (shared lockfile/hoisting) instead of staying local to this repo.\n' +
+              '  If that is not what you want, move this repo outside the ancestor workspace,\n' +
+              "  or add it to the ancestor's pnpm-workspace.yaml `packages` list deliberately.\n",
+          );
+        }
+        out.write(
+          'Next: run `pnpm install`, then `pnpm exec aipm scaffold <name>` to add a plugin.\n',
+        );
         return 0;
       }
 
@@ -289,11 +303,16 @@ export async function run(argv: readonly string[], opts: RunOptions = {}): Promi
         const target = rest.find((a) => !a.startsWith('-')) ?? process.cwd();
         const results = await build(target, { forceDowngrade });
         const artifactCount = results.reduce((n, r) => n + r.artifacts.length, 0);
-        out.write(
-          `Built ${String(results.length)} plugin(s), ${String(artifactCount)} artifact(s).\n`,
-        );
-        // §5.4: build runs validate before reporting success.
+        // §5.4: build runs validate before reporting success. The success summary is written
+        // only when validate passes — printing it unconditionally would put a "Built N
+        // plugin(s)" line ABOVE a hard finding that fails the run, misleading the user into
+        // thinking the run succeeded (issue #97).
         const result = await validate(target);
+        if (result.passed) {
+          out.write(
+            `Built ${String(results.length)} plugin(s), ${String(artifactCount)} artifact(s).\n`,
+          );
+        }
         const passed = reportValidation(result, out);
         return passed ? 0 : 1;
       }

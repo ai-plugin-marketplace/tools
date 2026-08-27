@@ -16,7 +16,8 @@ import * as path from 'node:path';
 
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
-import { TARGET_IDS } from './types.js';
+import { DEFAULT_SCAFFOLD_TARGETS, TARGET_IDS } from './types.js';
+import { runBuild } from './build.js';
 import {
   parseDeclaredTargets,
   renderAipmConfig,
@@ -142,9 +143,14 @@ describe('renderAipmConfig + parseDeclaredTargets', () => {
 // ---------------------------------------------------------------------------
 
 describe('runScaffold', () => {
-  it('creates the canonical file set for all targets by default', async () => {
-    await runScaffold('my-plugin', tmpDir, {});
-    const pluginDir = path.join(tmpDir, 'my-plugin');
+  it('creates the canonical file set for all default targets by default', async () => {
+    // `pluginsDir` must NOT be `tmpDir` itself: `runScaffold` derives `repoRoot =
+    // dirname(pluginsDir)` for marketplace registration (§4.4), so passing `tmpDir` directly would
+    // write `marketplace.json`/etc. to `dirname(tmpDir)` — the shared OS temp dir, outside the
+    // sandbox `afterEach` cleans up.
+    const pluginsDir = path.join(tmpDir, 'plugins');
+    await runScaffold('my-plugin', pluginsDir, {});
+    const pluginDir = path.join(pluginsDir, 'my-plugin');
 
     for (const rel of [
       'aipm.config.ts',
@@ -157,10 +163,24 @@ describe('runScaffold', () => {
       'gemini-extension.json',
       'GEMINI.md',
       'POWER.md',
-      'skills/my-plugin/SKILL.md',
     ]) {
       expect(fs.existsSync(path.join(pluginDir, rel)), `expected ${rel}`).toBe(true);
     }
+  });
+
+  // Regression test for issue #94: `vercel` shipped in the default scaffolded target list but
+  // emitted zero build artifacts (its only artifact is an author-authored `skills/*/SKILL.md`
+  // the scaffold never seeds), so a fresh scaffold silently included a no-op target.
+  it('does not declare vercel among the default targets (issue #94)', async () => {
+    // See the note in the previous test: `pluginsDir` must be a child of `tmpDir`, not `tmpDir`
+    // itself, so marketplace registration writes stay inside the sandbox.
+    const pluginsDir = path.join(tmpDir, 'plugins');
+    await runScaffold('my-plugin', pluginsDir, {});
+    const pluginDir = path.join(pluginsDir, 'my-plugin');
+    const declared = parseDeclaredTargets(read(pluginDir, 'aipm.config.ts'));
+    expect(declared).not.toContain('vercel');
+    expect(declared).toStrictEqual([...DEFAULT_SCAFFOLD_TARGETS]);
+    expect(fs.existsSync(path.join(pluginDir, 'skills', 'my-plugin', 'SKILL.md'))).toBe(false);
   });
 
   it('writes an aipm.config.ts declaring exactly the requested targets', async () => {
@@ -582,5 +602,92 @@ describe('runAddTarget — marketplace registration', () => {
     // Gemini is not registry-backed → no new registry, claude registry unchanged.
     expect(registryExists(tmpDir, '.cursor-plugin')).toBe(false);
     expect(readRegistry(tmpDir, '.claude-plugin')).toStrictEqual(claudeBefore);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Default-target build-artifact guard (issue #94)
+// ---------------------------------------------------------------------------
+
+describe('every default-scaffolded target emits a build artifact (issue #94)', () => {
+  // Registry-backed targets (claude/cursor/codex/open-plugins) only produce build artifacts when
+  // the repo has opted into registry generation via `aipm.workspace.ts` (§4.4); gemini/kiro's dist
+  // bundles are unconditional. A hand-written workspace file mirrors this repo's own
+  // `aipm.workspace.ts` and reproduces the exact repro shape from issue #94 (`aipm scaffold` +
+  // `aipm build` inside a workspace-mode repo), so the guard exercises the realistic path rather
+  // than an artificial one.
+  function writeWorkspaceConfig(repoRoot: string): void {
+    fs.writeFileSync(
+      path.join(repoRoot, 'aipm.workspace.ts'),
+      "import { defineWorkspace } from '@ai-plugin-marketplace/core';\n\n" +
+        'export default defineWorkspace({\n' +
+        "  marketplace: { name: 'guard-marketplace', owner: { name: 'guard-owner' }, description: 'x' },\n" +
+        '});\n',
+      'utf-8',
+    );
+  }
+
+  /**
+   * `runScaffold` hand-writes the repo-root Open Plugins `marketplace.json` (§4.4) unconditionally
+   * when `open-plugins` is in the envelope, regardless of workspace mode. In a workspace-mode repo,
+   * `runBuild` wants to generate that SAME path and refuses to overwrite a root file it doesn't yet
+   * track as its own (`root-artifact-collision`) — a pre-existing, separate gap in adopting
+   * workspace mode on top of an already-scaffolded plugin, orthogonal to this issue. The build's own
+   * finding documents the remediation ("remove marketplace.json... and re-run `aipm build`"); this
+   * helper performs exactly that so the guard test below isolates the #94 behavior it targets.
+   */
+  function clearHandAuthoredRootRegistry(repoRoot: string): void {
+    const rootRegistry = path.join(repoRoot, 'marketplace.json');
+    if (fs.existsSync(rootRegistry)) {
+      fs.rmSync(rootRegistry);
+    }
+  }
+
+  it('produces at least one build artifact per target for a freshly scaffolded plugin with default targets', async () => {
+    const repoRoot = tmpDir;
+    const pluginsDir = path.join(repoRoot, 'plugins');
+    writeWorkspaceConfig(repoRoot);
+
+    await runScaffold('my-plugin', pluginsDir, {});
+    clearHandAuthoredRootRegistry(repoRoot);
+
+    // Read back the targets `runScaffold` ACTUALLY declared (rather than asserting against
+    // `DEFAULT_SCAFFOLD_TARGETS` directly) so this guard independently catches any future default
+    // target that emits no build artifact — including one added without updating
+    // `DEFAULT_SCAFFOLD_TARGETS`'s own definition.
+    const declaredTargets = parseDeclaredTargets(
+      read(path.join(pluginsDir, 'my-plugin'), 'aipm.config.ts'),
+    );
+    expect(declaredTargets.length).toBeGreaterThan(0);
+
+    const [result] = await runBuild(repoRoot);
+    expect(result).toBeDefined();
+
+    const emittedTargets = new Set(result?.artifacts.map((a) => a.target) ?? []);
+    for (const target of declaredTargets) {
+      expect(
+        emittedTargets.has(target),
+        `expected an artifact for default target '${target}'`,
+      ).toBe(true);
+    }
+  });
+
+  // Negative/regression case: a target scaffolded ONLY via the non-default `targets` option (here,
+  // vercel, the target this issue removed from the defaults) is not held to the same guarantee —
+  // it legitimately needs author-authored content the scaffold does not seed. This documents why
+  // vercel is excluded from `DEFAULT_SCAFFOLD_TARGETS` rather than silently included above.
+  it('vercel (excluded from defaults) emits zero build artifacts on a bare scaffold (negative)', async () => {
+    const repoRoot = tmpDir;
+    const pluginsDir = path.join(repoRoot, 'plugins');
+    writeWorkspaceConfig(repoRoot);
+
+    await runScaffold('my-plugin', pluginsDir, {
+      targets: [...DEFAULT_SCAFFOLD_TARGETS, 'vercel'],
+    });
+    clearHandAuthoredRootRegistry(repoRoot);
+
+    const [result] = await runBuild(repoRoot);
+    const vercelArtifacts = result?.artifacts.filter((a) => a.target === 'vercel') ?? [];
+    expect(vercelArtifacts).toStrictEqual([]);
   });
 });

@@ -15,7 +15,7 @@
  *   Error contract observed from Claude Code on a duplicate reference:
  *   "Duplicate hooks file detected … The standard hooks/hooks.json is loaded automatically,
  *   so manifest.hooks should only reference additional hook files."
- * @see /Users/mnorth/Development/ai-plugin-marketplace-template/plugins/skill-evaluator/
+ * @see https://github.com/ai-plugin-marketplace/template — `plugins/skill-evaluator/` (parity fixture)
  */
 
 import * as fs from 'node:fs';

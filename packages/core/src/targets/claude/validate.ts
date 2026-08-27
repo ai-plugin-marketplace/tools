@@ -453,7 +453,7 @@ function validateHooksAutoloadDuplicate(pluginDir: string, pluginName: string): 
       hardFinding(
         pluginName,
         `.claude-plugin/plugin.json hooks references ${ref}: Claude Code auto-loads ${CLAUDE_AUTOLOADED_HOOKS_PATH} and errors on a duplicate manifest reference`,
-        `remove the hooks reference from plugin.json — ${CLAUDE_AUTOLOADED_HOOKS_PATH} is loaded automatically. Claude's own hooks artifact is ./hooks/claude.json; the manifest hooks field may only name additional hook files.`,
+        `remove the ${ref} entry from the manifest hooks field (drop the field entirely if it names nothing else) — ${CLAUDE_AUTOLOADED_HOOKS_PATH} is loaded automatically. Claude's own hooks artifact is ./hooks/claude.json; the manifest hooks field may only name additional hook files.`,
       ),
     );
   }

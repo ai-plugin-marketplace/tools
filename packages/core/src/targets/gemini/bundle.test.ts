@@ -202,7 +202,15 @@ describe.skipIf(SKIP_PARITY_SUITE)('bundleGeminiPlugin — emitted paths', () =>
     // evaluate.md is in the source commands/ but must not be emitted
     expect(emitted.some((p) => p.endsWith('evaluate.md') && p.startsWith('commands'))).toBe(false);
   });
+});
 
+// ---------------------------------------------------------------------------
+// README.md / LICENSE exclusion (template-independent — must never be gated on
+// SKIP_PARITY_SUITE: it builds its own scratch plugin dir and would otherwise
+// vanish exactly when the parity oracle is unavailable to catch the regression)
+// ---------------------------------------------------------------------------
+
+describe('bundleGeminiPlugin — README.md/LICENSE exclusion', () => {
   it('does not include README.md/LICENSE even when present in pluginDir (root-owned shared artifacts)', () => {
     // Regression for issue #89: the template repo (commit d2d9923) moved README.md/LICENSE from
     // per-plugin source to the repo root, where they are canonical shared artifacts (GeneratedFile

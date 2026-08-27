@@ -119,7 +119,16 @@ export function bundleGeminiPlugin(
   cleanDir(destDir);
 
   // ── Flat files (only if present) ──────────────────────────────────────────
-  const flatFiles = ['gemini-extension.json', 'GEMINI.md', 'README.md', 'LICENSE'];
+  // README.md/LICENSE are deliberately NOT copied here: the template repo (commit d2d9923,
+  // "adopt generated registries and repo-root Gemini/Kiro emission") moved them from
+  // per-plugin source to the repo ROOT, where they are canonical, author-owned, SHARED
+  // artifacts backing the single Gemini extension by virtue of already living beside it
+  // (GeneratedFile.target's 'shared' model, per #54) rather than a per-plugin generated copy.
+  // Emitting them here would (a) diverge from the template's real `dist/gemini/<plugin>/`
+  // oracle, which no longer contains them, and (b) for repo-root single-artifact-host
+  // emission, collide with the repo's own root README/LICENSE via the `root-artifact-collision`
+  // guard (build.ts) — generation must never try to own files it does not generate.
+  const flatFiles = ['gemini-extension.json', 'GEMINI.md'];
   for (const name of flatFiles) {
     copyIfExists(path.join(pluginDir, name), path.join(destDir, name));
   }

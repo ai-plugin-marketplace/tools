@@ -1,5 +1,104 @@
 # @ai-plugin-marketplace/cli
 
+## 0.7.0
+
+### Minor Changes
+
+- [#99](https://github.com/ai-plugin-marketplace/tools/pull/99) [`7efeba9`](https://github.com/ai-plugin-marketplace/tools/commit/7efeba9036fcc54a439eb93d3cb4765407f5dfbd) Thanks [@mike-north](https://github.com/mike-north)! - Make `aipm add-target` preserve-or-warn instead of refusing an already-materialized target and
+  generating a schema-invalid skeleton on retry.
+
+  Previously, `add-target` threw `Refusing to overwrite` when any file the target would write
+  already existed — including the common case where the target is already fully scaffolded — and
+  the printed remedy ("remove the file, then re-run") regenerated a placeholder with a blanked
+  `description`, which is schema-invalid for targets whose manifest requires a non-empty
+  `description` (e.g. Vercel's `SKILL.md`), immediately failing `aipm build`.
+  - An already-materialized target (every file it would write already exists) is now a friendly
+    no-op: `addTarget()` resolves with `{ status: 'already-present', written: [], preserved: [...] }`
+    and the CLI prints `'<target>' is already present in <plugin>; nothing to do.` instead of
+    throwing.
+  - Existing files are never overwritten. For a multi-file target with a partial conflict, the
+    existing file(s) are preserved untouched and only the missing file(s) are written
+    (`status: 'partially-added'`); the CLI reports which files were preserved so the author can
+    review them by hand.
+  - `addTarget()`'s public return type changes from `Promise<void>` to
+    `Promise<AddTargetOutcome>` (new exported type: `{ target, status, written, preserved }`).
+  - Placeholder fields a schema requires to be non-empty (Vercel's `SKILL.md` `description`) are now
+    emitted as non-empty placeholder prose instead of a blank string, so add-target's own output
+    always passes `aipm build`/`aipm validate`.
+
+- [#106](https://github.com/ai-plugin-marketplace/tools/pull/106) [`45d20f7`](https://github.com/ai-plugin-marketplace/tools/commit/45d20f7578e5725f8a3763ef8398c0a8cd81eb75) Thanks [@mike-north](https://github.com/mike-north)! - Warn `aipm init` about an ancestor pnpm workspace instead of leaving newcomers to silently
+  corrupt it, and sync the CLI's `README.md`/docs quick start with `aipm --help`.
+
+  A directory with no local `package.json` that sits under an ancestor `pnpm-workspace.yaml` has
+  `pnpm add`/`pnpm install` silently target the ANCESTOR's manifest and lockfile instead of a new
+  repo's own — a first-time user following the old quick start verbatim could corrupt an unrelated
+  parent project with no warning.
+  - `init()`'s public return type changes from `Promise<void>` to `Promise<InitOutcome>` (new
+    exported type: `{ ancestorWorkspace?: string }`). `ancestorWorkspace` is the absolute path to an
+    ancestor `pnpm-workspace.yaml`, when one exists above the newly scaffolded directory.
+  - `aipm init` prints a warning to stderr when `ancestorWorkspace` is set, before telling the user
+    to run `pnpm install`.
+  - `packages/cli/README.md` ("GUIDE.md" in the published package) now: requires `npm init -y`
+    before the install command, with an explicit workspace-hazard note; documents the `lint`
+    command and every subcommand's flags (previously undocumented, though implemented); includes
+    the quick start's install step; and replaces the dead `../../docs/specs/architecture.md`
+    relative link (only resolvable inside the monorepo checkout, not the published npm package)
+    with an absolute GitHub URL.
+
+- [#107](https://github.com/ai-plugin-marketplace/tools/pull/107) [`9467da0`](https://github.com/ai-plugin-marketplace/tools/commit/9467da09a2ce2ad77b713b5de9d2acc1372108e4) Thanks [@mike-north](https://github.com/mike-north)! - Remove `vercel` from the default set of targets a fresh `aipm scaffold`/`core.scaffold()` declares.
+
+  `vercel`'s only build artifact is an author-authored `skills/<name>/SKILL.md`, which the scaffold
+  never seeds — so a plugin created with the default target set declared `vercel` but emitted zero
+  artifacts for it anywhere on `aipm build`, while `aipm list-targets`/`aipm check-support` reported
+  it as fully supported. A fresh scaffold now declares every known target except `vercel`; `vercel`
+  remains fully supported and can still be requested explicitly via `core.scaffold(name, { targets:
+[...] })` or added to an existing plugin with `aipm add-target <plugin> vercel`.
+
+### Patch Changes
+
+- [#98](https://github.com/ai-plugin-marketplace/tools/pull/98) [`8a72630`](https://github.com/ai-plugin-marketplace/tools/commit/8a726300251c944e2aa0f3e37f552e6fb96ab33c) Thanks [@mike-north](https://github.com/mike-north)! - Fix `aipm validate`/`aipm build` silently ignoring a plugin-shaped `plugins/*` directory (has a
+  target manifest and/or a skill) that is missing `aipm.config.ts`. Discovery previously filtered
+  repo-root candidates on config presence alone, so such a directory never reached the plugin list —
+  `validate` reported green and `build` reported "Built 0 plugin(s)" with exit 0 even though the
+  plugin was broken and unbuildable. Discovery now also includes plugin-shaped-but-configless
+  directories; downstream handling is unchanged (hard `envelope-invalid` from `validate`, a thrown
+  error naming the missing `aipm.config.ts` from `build`) — the same diagnostic a single-plugin
+  target missing its config already produced. A directory with neither a config nor any plugin-shape
+  marker is still correctly excluded from discovery.
+
+- [#110](https://github.com/ai-plugin-marketplace/tools/pull/110) [`4e5f352`](https://github.com/ai-plugin-marketplace/tools/commit/4e5f352a0266760dbb10109ff62cc2d4837f71b9) Thanks [@mike-north](https://github.com/mike-north)! - Fix three CLI output-wording/ordering defects that misled users during a normal build/validate
+  run (no behavior change — the same conditions are still detected, only how/when they are
+  reported changes):
+  - Pre-build freshness on a dist bundle file that was never built now reports `missing` with a
+    "run `aipm build`" hint, instead of `stale`.
+  - `aipm build`'s `Built N plugin(s), M artifact(s).` success line no longer prints when the
+    post-build `validate` step has a hard finding that fails the run.
+  - The `version-consistency` finding now hints that `aipm.config.ts` is the source of truth for
+    the version, so the manifest — not the config — is the one to bump.
+
+- [#104](https://github.com/ai-plugin-marketplace/tools/pull/104) [`fa00aae`](https://github.com/ai-plugin-marketplace/tools/commit/fa00aae644835a55bc6a51af9043802e99bdd7d9) Thanks [@mike-north](https://github.com/mike-north)! - Fix `aipm init`'s `README.md` and `aipm scaffold`'s Kiro `POWER.md` emitting literal
+  backslash-backtick sequences (`` \` ``, byte pair `5c 60`) instead of real backtick characters
+  (`0x60`), which rendered the generated Markdown visibly broken.
+
+  Root cause: these templates are tagged with `String.raw` (the project convention for multi-line
+  embedded Markdown, which disables escape-sequence interpretation), but their source still wrote an
+  escaped backtick (`` \` ``) to embed a literal backtick character — the escape is only interpreted
+  in an ordinary template literal, so under `String.raw` it stayed as the two literal characters
+  backslash + backtick. Both templates now interpolate a ``bt = '`'`` constant instead of escaping
+  the backtick in the template source.
+
+  Also fixes Kiro's `POWER.md` "Related Files" bullet, which presented `steering/` as an existing
+  sibling file even though a freshly-scaffolded plugin has no `steering/` directory (Kiro's scaffold
+  contributes only `POWER.md`) — it now reads `` `steering/` (optional, hand-authored) — add Kiro
+steering files here if needed``.
+
+- [#100](https://github.com/ai-plugin-marketplace/tools/pull/100) [`dbc0e68`](https://github.com/ai-plugin-marketplace/tools/commit/dbc0e6850728237db0f2fbe7aeafb0770a165675) Thanks [@mike-north](https://github.com/mike-north)! - Fix `aipm validate` and `aipm lint` silently accepting a Claude `plugin.json` that is valid JSON but omits a schema-required field (e.g. `name`) — this now emits a hard `schema-invalid` finding / `schema/target-conformance` diagnostic, matching the other targets' behavior. `aipm lint --format json`'s `summary.fileCount` now reflects the files a run actually scanned (`LintResult.scannedFiles`) instead of the number of distinct files a diagnostic happened to be attached to, which previously stayed pinned regardless of manifest changes.
+
+- [#103](https://github.com/ai-plugin-marketplace/tools/pull/103) [`43db451`](https://github.com/ai-plugin-marketplace/tools/commit/43db4514a4aaa99645cb363df6f1e41c803c951a) Thanks [@mike-north](https://github.com/mike-north)! - Fix `-h`/`--help` on subcommands (`build`, `validate`, `lint`, `scaffold`, `init`, `migrate`, `check-support`, `add-target`, `list-targets`) executing the subcommand instead of printing usage — `aipm build --help` ran a real build, and `aipm validate --help` misparsed `--help` as the target path. `--help`/`-h` now short-circuits to usage and exits 0 before any argument parsing or side effect, for every subcommand.
+
+- Updated dependencies [[`7efeba9`](https://github.com/ai-plugin-marketplace/tools/commit/7efeba9036fcc54a439eb93d3cb4765407f5dfbd), [`5e45ad5`](https://github.com/ai-plugin-marketplace/tools/commit/5e45ad5889f1454521126c07c7aea40092647a76), [`8a72630`](https://github.com/ai-plugin-marketplace/tools/commit/8a726300251c944e2aa0f3e37f552e6fb96ab33c), [`4e5f352`](https://github.com/ai-plugin-marketplace/tools/commit/4e5f352a0266760dbb10109ff62cc2d4837f71b9), [`fa00aae`](https://github.com/ai-plugin-marketplace/tools/commit/fa00aae644835a55bc6a51af9043802e99bdd7d9), [`dbc0e68`](https://github.com/ai-plugin-marketplace/tools/commit/dbc0e6850728237db0f2fbe7aeafb0770a165675), [`45d20f7`](https://github.com/ai-plugin-marketplace/tools/commit/45d20f7578e5725f8a3763ef8398c0a8cd81eb75), [`9467da0`](https://github.com/ai-plugin-marketplace/tools/commit/9467da09a2ce2ad77b713b5de9d2acc1372108e4)]:
+  - @ai-plugin-marketplace/core@0.10.0
+
 ## 0.6.0
 
 ### Minor Changes

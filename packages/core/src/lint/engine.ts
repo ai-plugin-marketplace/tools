@@ -74,8 +74,9 @@ export async function lint(targetPath: string, options?: LintOptions): Promise<L
     try {
       envelope = (await loadPluginConfig(pluginDir, configCache)).targets;
     } catch {
-      // Unusable envelope: envelopeShapeRule (or the config loader itself) already explains why;
-      // no other rule can run without a resolved envelope.
+      // Unusable envelope: envelopeShapeRule ran first against this same pluginDir and has
+      // already reported why (missing/unimportable/schema-violating aipm.config.ts), so this
+      // failure is never silent; no other rule can run without a resolved envelope.
       continue;
     }
 

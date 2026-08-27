@@ -1,35 +1,31 @@
 /**
- * `schema/envelope-shape` — `aipm.config.ts` parses strictly against the envelope schema
+ * `schema/envelope-shape` — `aipm.config.ts` loads and parses strictly against the envelope schema
  * (§10.1 step 1). Wraps the existing `validateEnvelopeShape()` check.
  *
  * Unlike the other migrated rules, this one runs *before* a plugin's envelope (`ctx.envelope`)
  * is known — it is what determines whether the envelope can be trusted at all. It therefore
- * loads the raw `aipm.config.ts` default export itself rather than reading anything off
- * `RuleContext.envelope`. A missing `aipm.config.ts` (including a plugin-shaped directory
- * discovered without one, per #91) is reported here too, as an `envelope-invalid` diagnostic
- * equivalent to `validate()`'s — `lint` and `validate` must agree on this case rather than one
- * staying silent while the other flags it (#101).
+ * loads `aipm.config.ts` itself rather than reading anything off `RuleContext.envelope`.
  *
- * Reuses `ctx.configCache` (via {@link loadPluginConfig}) rather than importing the raw config a
- * second time: `loadPluginConfig` transpiles-and-validates once and caches the result, so when
- * the engine's subsequent envelope resolution calls `loadPluginConfig` for the same plugin, it is
- * a cache hit rather than a second jiti transpile. On a `ConfigLoadError` whose `cause` is the
- * `ZodError` `defineConfig` throws for a schema violation, this rule reformats those issues into
- * the same per-issue diagnostics `validateEnvelopeShape` would have produced from the raw value;
- * any other failure (import/syntax error) is left to load-config's own `ConfigLoadError` path in
- * `validate()`'s orchestration.
+ * Every way loading can fail is reported here, so `lint` never stays silent on a tree `validate`
+ * and `build` both flag (#101): a missing `aipm.config.ts` (including a plugin-shaped directory
+ * discovered without one, per #91), a file that cannot be imported (syntax error, no usable
+ * default export), and a file that imports but violates the envelope schema. The first two become
+ * a single `envelope-invalid` diagnostic carrying the loader's own message; the third is expanded
+ * into the same per-issue diagnostics `validateEnvelopeShape` would have produced from the raw
+ * value. This catch mirrors `runValidate()`'s envelope-load catch in `pipeline/validate.ts`, so
+ * the two surfaces agree by construction rather than by a duplicated message string.
+ *
+ * Loading goes through {@link loadPluginConfig} with `ctx.configCache` rather than importing the
+ * raw config a second time: `loadPluginConfig` transpiles-and-validates once and caches the
+ * result, so when the engine's subsequent envelope resolution calls `loadPluginConfig` for the
+ * same plugin, it is a cache hit rather than a second jiti transpile.
  *
  * @see docs/specs/lint-engine.md L-D2
  */
 
-import * as fs from 'node:fs';
 import * as path from 'node:path';
 import { z } from 'zod';
-import {
-  AIPM_CONFIG_FILENAME,
-  ConfigLoadError,
-  loadPluginConfig,
-} from '../../pipeline/load-config.js';
+import { ConfigLoadError, loadPluginConfig } from '../../pipeline/load-config.js';
 import { zodEnvelopeIssuesToFindings } from '../../pipeline/validate.js';
 import { findingToDiagnostic } from '../diagnostic.js';
 import type { Diagnostic, InternalRuleContext, Rule } from '../types.js';
@@ -47,24 +43,7 @@ export const envelopeShapeRule: Rule = {
     appliesTo: ['aipm-repo'],
   },
   async check(ctx: InternalRuleContext): Promise<Diagnostic[]> {
-    const configPath = path.join(ctx.pluginDir, AIPM_CONFIG_FILENAME);
     const pluginName = path.basename(ctx.pluginDir);
-    if (!fs.existsSync(configPath)) {
-      // Mirrors validate()'s `envelope-invalid` finding for the identical failure (#91's
-      // discovery path surfaces a plugin-shaped, config-less directory; without this, lint stayed
-      // silent while validate/build both flagged it — #101). loadPluginConfig throws the same
-      // ConfigLoadError message for this case; reproduce it directly here rather than calling
-      // loadPluginConfig only to immediately catch it, since this path never reaches the cache.
-      const message = `No ${AIPM_CONFIG_FILENAME} found in ${ctx.pluginDir}. Every plugin must declare a support envelope (spec §6.1).`;
-      return [
-        findingToDiagnostic(
-          { severity: 'hard', code: 'envelope-invalid', plugin: pluginName, message },
-          RULE_ID,
-          'schema',
-          docsUrlFor(RULE_ID),
-        ),
-      ];
-    }
     try {
       // A cache hit here (already validated by an earlier call in this invocation) means the
       // envelope is known-valid — nothing further to report.
@@ -75,9 +54,18 @@ export const envelopeShapeRule: Rule = {
         const findings = zodEnvelopeIssuesToFindings(err.cause.issues, pluginName);
         return findings.map((f) => findingToDiagnostic(f, RULE_ID, 'schema', docsUrlFor(RULE_ID)));
       }
-      // Import failure (syntax error, etc.) is reported by load-config's own ConfigLoadError
-      // path in validate()'s orchestration; nothing further to add here.
-      return [];
+      // Missing file, import/syntax failure, or an unexpected throw. Reported exactly as
+      // runValidate()'s envelope-load catch reports it — same code, same severity, and the
+      // loader's own message verbatim, so lint and validate cannot drift apart.
+      const message = err instanceof Error ? err.message : String(err);
+      return [
+        findingToDiagnostic(
+          { severity: 'hard', code: 'envelope-invalid', plugin: pluginName, message },
+          RULE_ID,
+          'schema',
+          docsUrlFor(RULE_ID),
+        ),
+      ];
     }
   },
 };

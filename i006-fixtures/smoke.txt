@@ -1,0 +1,4 @@
+Synthetic SARIF I006 source fixture; inert text, not application code.
+The next line anchors an intentionally synthetic finding.
+I006_SMOKE_TARGET = harmless synthetic observation.
+This file exists only for the controlled code-scanning experiment.

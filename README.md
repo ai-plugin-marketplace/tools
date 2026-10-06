@@ -4,7 +4,7 @@ Monorepo publishing the `@ai-plugin-marketplace/*` toolkit (consumed by the [`te
 
 ## Install the agent plugin
 
-This repo ships one plugin, **`marketplace-authoring`**, that equips your coding agent to turn any software repo into an AI plugin marketplace with this toolkit. Install it into your assistant through its native mechanism:
+This repo includes one plugin, **`marketplace-authoring`**, that equips your coding agent to turn any software repo into an AI plugin marketplace with this toolkit. Install it into your assistant through its native mechanism:
 
 | Assistant       | Install                                                                                    |
 | --------------- | ------------------------------------------------------------------------------------------ |

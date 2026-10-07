@@ -898,3 +898,4 @@ I006 inert probe line 0897: synthetic evidence only; no executable content.
 I006 inert probe line 0898: synthetic evidence only; no executable content.
 I006 inert probe line 0899: synthetic evidence only; no executable content.
 I006 inert probe line 0900: synthetic evidence only; no executable content.
+I006 enforcement epoch marker; inert synthetic evidence only.

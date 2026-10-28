@@ -17,6 +17,7 @@ import * as path from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 
 import { runBuild } from './build.js';
+import { sidecarPath } from './sentinel.js';
 import { runValidate } from './validate.js';
 import {
   ALL_SYNTH_TARGETS,
@@ -265,23 +266,42 @@ describeMaybe('runValidate — freshness (§10.5, §10.2)', () => {
     expect(result.passed).toBe(false);
   });
 
-  it('a pure generator-version bump in hooks/claude.json is NOT flagged (§4.3.1)', async () => {
+  it('a pure generator-version bump in the hooks/claude.json sidecar is NOT flagged (§4.3.1)', async () => {
     // Conversely, an artifact that differs from a fresh build ONLY in its stamped version is fresh:
-    // a version bump alone must not mark every committed artifact stale.
+    // a version bump alone must not mark every committed artifact stale. hooks/claude.json carries
+    // its stamp in the `.generated` sidecar (§4.3), so the bump is made there.
     repo = synthPluginRepo(ALL_SYNTH_TARGETS);
     await runBuild(repo.repoRoot);
 
-    const claudeJsonPath = path.join(repo.pluginDir, 'hooks', 'claude.json');
-    const obj = JSON.parse(fs.readFileSync(claudeJsonPath, 'utf-8')) as {
-      _generated: Record<string, unknown>;
-    };
-    // Bump only the stamp to a newer version, preserving canonical formatting.
-    obj._generated['version'] = '999.0.0';
-    fs.writeFileSync(claudeJsonPath, JSON.stringify(obj, null, 2) + '\n', 'utf-8');
+    const sidecar = sidecarPath(path.join(repo.pluginDir, 'hooks', 'claude.json'));
+    const bumped = fs
+      .readFileSync(sidecar, 'utf-8')
+      .replace(/^# version: .*$/m, '# version: 999.0.0');
+    expect(bumped).toContain('# version: 999.0.0');
+    fs.writeFileSync(sidecar, bumped, 'utf-8');
 
     const result = await runValidate(repo.repoRoot, { ci: true });
     const fresh = ofCode(result.findings, 'freshness');
     expect(fresh.some((f) => f.message.includes('claude.json'))).toBe(false);
+  });
+
+  // Migration: older toolkits wrote the sentinel inline as `_generated`. Claude Code warns on that
+  // key, so a hooks/claude.json still carrying it must be reported stale and rewritten by a build.
+  it('flags a hooks/claude.json that still carries an inline _generated sentinel (§4.3)', async () => {
+    repo = synthPluginRepo(ALL_SYNTH_TARGETS);
+    await runBuild(repo.repoRoot);
+
+    const claudeJsonPath = path.join(repo.pluginDir, 'hooks', 'claude.json');
+    const bare = JSON.parse(fs.readFileSync(claudeJsonPath, 'utf-8')) as Record<string, unknown>;
+    const legacy = {
+      _generated: { by: '@ai-plugin-marketplace/cli', source: 'hooks/claude.yaml' },
+      ...bare,
+    };
+    fs.writeFileSync(claudeJsonPath, JSON.stringify(legacy, null, 2) + '\n', 'utf-8');
+
+    const result = await runValidate(repo.repoRoot, { ci: true });
+    const fresh = ofCode(result.findings, 'freshness');
+    expect(fresh.some((f) => f.message.includes('claude.json'))).toBe(true);
   });
 
   it('skipFreshness suppresses the freshness check entirely', async () => {

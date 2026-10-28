@@ -1,12 +1,14 @@
 # ai-plugin-marketplace — Architecture Specification
 
 **Status:** Draft
-**Spec version:** 0.4.4
-**Supersedes:** 0.4.3 (generator-version stamp + downgrade guard)
-**Last updated:** 2026-08-27
+**Spec version:** 0.4.5
+**Supersedes:** 0.4.4 (host-contract checks)
+**Last updated:** 2026-10-28
 **Scope:** Umbrella architecture for the `ai-plugin-marketplace/template` and `ai-plugin-marketplace/tools` repositories and the `@ai-plugin-marketplace/*` npm packages.
 
 > **Note to future readers.** This spec is durable documentation. It describes not only what the system does but _why_ each decision exists, which invariants must hold, and which capabilities are deferred with what hooks reserved so they can be added later without breaking changes. When the design evolves, update this document in the same change that moves the code.
+
+> **What changed from 0.4.4 → 0.4.5.** `hooks/claude.json` moves from the JSON `_generated`-field sentinel to the sidecar carrier (§4.3): the artifact is now exactly the Claude transform output, and its sentinel and version stamp live in `hooks/claude.json.generated`. Claude Code warns on unknown top-level keys in a plugin's hooks file (`hooks.json: unknown key "_generated" ignored`), so the inline field surfaced as a warning in every session of every plugin that authors hooks. A `hooks/claude.json` that still carries an inline `_generated` is stale (§10.5) and is rewritten by the next `aipm build`. See Appendix B, 0.4.5.
 
 > **What changed from 0.4.3 → 0.4.4.** §10.1 gains a fifth validator category — **host-contract checks** — with its first rule, §10.1.5: a Claude manifest `hooks` reference that resolves to the auto-loaded `hooks/hooks.json` is a hard `schema-invalid`, because Claude Code loads that file automatically and errors on the duplicate. See Appendix B, 0.4.4.
 
@@ -262,7 +264,7 @@ The `# version:` line (JSON: `_generated.version`) records the **generation-engi
 }
 ```
 
-**Sidecar variant for strict-schema hosts.** Some host platforms reject unknown top-level fields in their manifests (e.g., Gemini's `gemini-extension.json`, Kiro's `.kiro/agents/*.json`). For these formats, the sentinel is stored in a sidecar file `<artifact>.generated` alongside the artifact rather than inline. The freshness check reads either form.
+**Sidecar variant for strict-schema hosts.** Some host platforms reject or warn on unknown top-level fields in the files they load (e.g., Gemini's `gemini-extension.json`, Kiro's `.kiro/agents/*.json`, and Claude Code's plugin hooks file, `hooks/claude.json`). For these formats, the sentinel is stored in a sidecar file `<artifact>.generated` alongside the artifact rather than inline. The freshness check reads either form.
 
 The freshness check (§10.5) rejects any generated file whose content doesn't match what `aipm build` would produce, whether because the source changed or because the output was hand-edited — **except** for the generator-version stamp: two otherwise-identical artifacts differing only in their stamped `version` are NOT stale (a version bump alone must not flip every artifact to stale; version safety is enforced by the build guard in §4.3.1, not by freshness).
 
@@ -878,3 +880,4 @@ How do authors test their plugins? A `@ai-plugin-marketplace/testing` package (o
 | 0.4.2   | 2026-07-15 | Reintroduced `'shared'` to `GeneratedFile.target` (now `GeneratedFileTarget = TargetId \| 'shared'`), 0.4.0 having dropped it as unused. Two build-internal artifacts genuinely have no single owning target — the payload adapter (and its sidecar), emitted for any plugin authoring hooks regardless of envelope, and the generated-root sidecar manifest, which spans every emitted single-artifact-host/registry owner — and had each been attributed to an arbitrary, deterministically-chosen single target as a workaround. Both now report `target: 'shared'` honestly instead. Breaking change to the `@public` `GeneratedFile.target` field. |
 | 0.4.3   | 2026-07-18 | Added the generator-version stamp + downgrade guard (§4.3.1): sentinel-carrying artifacts now record the producing `@ai-plugin-marketplace/core` version (`_generated.version` / `# version:` line), and `aipm build` refuses (non-zero exit, or `--force-downgrade`) when the installed toolkit is older than a stamped version — closing the silent-revert failure mode where a stale `node_modules` reverts committed artifacts to an older generator's output. Freshness (§10.5) compares modulo the version stamp so a version bump alone is not "stale". New `BuildOptions.forceDowngrade`.                                                       |
 | 0.4.4   | 2026-08-27 | Added §10.1 category 5, **host-contract checks**, and its first rule §10.1.5: Claude Code auto-loads `<pluginDir>/hooks/hooks.json` and hard-errors when the plugin manifest's `hooks` field also names it, so `aipm validate` now emits a hard `schema-invalid` when that field — string, or any string entry of an array — normalizes to `hooks/hooks.json`. §10.2 records host-contract violations as hard. Notes the still-open collision between this auto-load and the shared Codex/Gemini `hooks/hooks.json` artifact (`adapter-system.md` D6).                                                                                                  |
+| 0.4.5   | 2026-10-28 | Moved `hooks/claude.json` from the JSON `_generated`-field sentinel to the sidecar carrier (§4.3): the artifact is the bare Claude transform output and its sentinel and version stamp live in `hooks/claude.json.generated`, because Claude Code warns on unknown top-level keys in a plugin's hooks file. An inline `_generated` left in `hooks/claude.json` by an older toolkit is stale (§10.5). Gemini `hooks/hooks.json` and Cursor `hooks/cursor.json` keep the JSON-field carrier.                                                                                                                                                              |

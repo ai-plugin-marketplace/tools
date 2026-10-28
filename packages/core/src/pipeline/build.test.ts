@@ -129,21 +129,24 @@ describeMaybe('runBuild — in-plugin hook JSON sentinels (§4.3)', () => {
     repo.cleanup();
   });
 
-  it('writes hooks/claude.json with a json-field sentinel that strips to the Claude transform', async () => {
+  it('writes hooks/claude.json bare, with its sentinel in a .generated sidecar', async () => {
     repo = synthPluginRepo(ALL_SYNTH_TARGETS);
     await runBuild(repo.repoRoot);
 
     const claudeJsonPath = path.join(repo.pluginDir, 'hooks', 'claude.json');
     expect(fs.existsSync(claudeJsonPath)).toBe(true);
 
+    // §7.2: the artifact is exactly the mechanical Claude transform output, with no inline
+    // sentinel — Claude Code warns on unknown top-level keys in a hooks file.
     const onDisk = fs.readFileSync(claudeJsonPath, 'utf-8');
-    // §4.3: carries a json-field sentinel naming the author-authored source.
-    expect(hasSentinel(onDisk, 'json-field')).toBe(true);
-    expect(readSentinelSource(onDisk, 'json-field')).toBe('hooks/claude.yaml');
-
-    // §7.2: stripping the sentinel yields exactly the mechanical Claude transform output.
     const yaml = fs.readFileSync(path.join(repo.pluginDir, 'hooks', 'claude.yaml'), 'utf-8');
-    expect(stripSentinel(onDisk, 'json-field')).toBe(convertClaudeHooksYamlToJson(yaml));
+    expect(onDisk).toBe(convertClaudeHooksYamlToJson(yaml));
+    expect(hasSentinel(onDisk, 'json-field')).toBe(false);
+
+    // §4.3: the sidecar carries the sentinel naming the author-authored source.
+    const sidecarOnDisk = fs.readFileSync(sidecarPath(claudeJsonPath), 'utf-8');
+    expect(hasSentinel(sidecarOnDisk, 'sidecar')).toBe(true);
+    expect(readSentinelSource(sidecarOnDisk, 'sidecar')).toBe('hooks/claude.yaml');
   });
 
   it('writes hooks/hooks.json (gemini) with a json-field sentinel that strips to the Gemini transform', async () => {
@@ -375,6 +378,69 @@ describe('computePluginHookArtifacts — cursor branch', () => {
     );
     const onDisk = fs.readFileSync(first?.absPath ?? '', 'utf-8');
     expect(second?.expectedContent).toBe(onDisk);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// computePluginHookArtifacts — Claude hooks JSON carrier (template-independent; §4.3)
+// ---------------------------------------------------------------------------
+
+describe('computePluginHookArtifacts — Claude hooks JSON sidecar carrier (§4.3)', () => {
+  let pluginDir: string | undefined;
+
+  afterEach(() => {
+    if (pluginDir && fs.existsSync(pluginDir)) fs.rmSync(pluginDir, { recursive: true });
+  });
+
+  const YAML =
+    'hooks:\n  PostToolUse:\n    - matcher: Write\n      hooks:\n        - { type: command, command: ./log.sh }\n';
+
+  function writePluginWithHooks(): string {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'aipm-claude-hooks-sidecar-'));
+    fs.mkdirSync(path.join(dir, 'hooks'), { recursive: true });
+    fs.writeFileSync(path.join(dir, 'hooks', 'claude.yaml'), YAML, 'utf-8');
+    return dir;
+  }
+
+  // Regression: Claude Code warns on unknown top-level keys in a hooks file
+  // (`hooks.json: unknown key "_generated" ignored`), so the sentinel must not live inside it.
+  it('emits hooks/claude.json as the bare Claude transform, with no _generated key', () => {
+    pluginDir = writePluginWithHooks();
+    const artifacts = computePluginHookArtifacts(pluginDir, ['claude'], STAMP);
+    const claudeJsonAbs = path.join(pluginDir, 'hooks', 'claude.json');
+    const claudeJson = artifacts.find((a) => a.absPath === claudeJsonAbs);
+
+    expect(claudeJson).toBeDefined();
+    expect(claudeJson?.target).toBe('claude');
+    expect(claudeJson?.sentinelMode).toBe('sidecar');
+    // §7.2: the artifact is exactly the mechanical Claude transform output.
+    expect(claudeJson?.expectedContent).toBe(convertClaudeHooksYamlToJson(YAML));
+    expect(Object.keys(JSON.parse(claudeJson?.expectedContent ?? '{}') as object)).not.toContain(
+      '_generated',
+    );
+  });
+
+  it('emits the sentinel in a hooks/claude.json.generated sidecar naming the source', () => {
+    pluginDir = writePluginWithHooks();
+    const artifacts = computePluginHookArtifacts(pluginDir, ['claude'], STAMP);
+    const claudeJsonAbs = path.join(pluginDir, 'hooks', 'claude.json');
+    const sidecar = artifacts.find((a) => a.absPath === sidecarPath(claudeJsonAbs));
+
+    expect(sidecar).toBeDefined();
+    expect(sidecar?.absPath).toBe(`${claudeJsonAbs}.generated`);
+    expect(sidecar?.target).toBe('claude');
+    expect(sidecar?.sentinelMode).toBe('sidecar');
+    expect(sidecar?.expectedContent).toBe(sidecarContent('hooks/claude.yaml', STAMP));
+    expect(readSentinelSource(sidecar?.expectedContent ?? '', 'sidecar')).toBe('hooks/claude.yaml');
+  });
+
+  it('emits neither hooks/claude.json nor its sidecar when claude is not in the envelope', () => {
+    pluginDir = writePluginWithHooks();
+    const artifacts = computePluginHookArtifacts(pluginDir, ['cursor'], STAMP);
+    const claudeJsonAbs = path.join(pluginDir, 'hooks', 'claude.json');
+
+    expect(artifacts.some((a) => a.absPath === claudeJsonAbs)).toBe(false);
+    expect(artifacts.some((a) => a.absPath === sidecarPath(claudeJsonAbs))).toBe(false);
   });
 });
 

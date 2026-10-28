@@ -357,9 +357,10 @@ function validateHooksFile(pluginDir: string, pluginName: string): Finding[] {
     ];
   }
 
-  // `hooks/claude.json` is a toolkit-generated, JSON-field-sentinel carrier (§4.3): the build
-  // writes a top-level `_generated` marker onto it. The hooks schema is `.strict()`, so we drop
-  // that toolkit-owned key before schema validation — it is not part of the Claude hooks format.
+  // `hooks/claude.json` carries its sentinel in a `.generated` sidecar (§4.3), but toolkits before
+  // spec 0.4.5 wrote a top-level `_generated` marker onto it. The hooks schema is `.strict()`, so we
+  // drop that toolkit-owned key before schema validation — it is not part of the Claude hooks
+  // format, and the freshness check (§10.5) already reports such a file as stale.
   if (typeof raw === 'object' && raw !== null && !Array.isArray(raw) && '_generated' in raw) {
     const { _generated: _ignored, ...rest } = raw as Record<string, unknown>;
     raw = rest;

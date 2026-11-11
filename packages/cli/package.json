@@ -34,7 +34,8 @@
     "@ai-plugin-marketplace/core": "workspace:^"
   },
   "devDependencies": {
-    "@cfworker/json-schema": "^4.1.1"
+    "@cfworker/json-schema": "^4.1.1",
+    "skills": "^1.8.1"
   },
   "publishConfig": {
     "access": "public"

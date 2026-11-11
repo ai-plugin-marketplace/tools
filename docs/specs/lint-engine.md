@@ -259,6 +259,56 @@ Plus four new rules with no legacy `Finding`/`FindingCode` predecessor:
 - `correctness/invalid-matcher` — hook matchers that are not valid regexes.
 - `correctness/duplicate-component-name` — colliding skill/agent/command names within a unit.
 
+Plus four published-surface boundary rules (#118). A repo that publishes plugins usually also
+holds skills meant only for its contributors, in the hosts' project-local folders (for example
+`.claude/skills/`). Those are outside the toolkit's remit: it does not build, register or relocate
+them. But install channels that discover `SKILL.md` files by walking the repository rather than by
+reading a registry (the `skills` CLI) offer them to users anyway. These rules keep the published
+surface's boundary intact without modelling contributor content:
+
+- `correctness/unpublished-skill-installable` — legacy code `unpublished-skill-installable`
+  (introduced with the rule so `validate()` fails on it; see L-D13). Repo-scoped.
+- `correctness/published-skill-internal` — a published skill carries `metadata.internal: true`,
+  which hides it from the `skills` CLI. Default severity `warn`. Repo-scoped.
+- `correctness/plugin-self-containment` — a file reference inside a plugin resolves outside that
+  plugin's directory. An installed plugin is standalone, so the referenced file will not exist for
+  a user. Checked in the same files `correctness/broken-file-ref` scans, for two kinds of
+  reference: the manifest/frontmatter path fields (resolved from the plugin directory), and
+  relative markdown links in the file body (resolved from the containing file; links inside fenced
+  code blocks are ignored). Whether the target exists is `broken-file-ref`'s concern, not this
+  rule's. Per-plugin.
+- `correctness/unpublished-skill-reference` — a published skill, command or agent mentions the
+  `name` of an unpublished skill. A text match, so heuristic: default severity `warn` (L-D7), and
+  its docs page states the false-positive posture (a skill named after a common word). Matches
+  whole names only, and ignores an unpublished name that a published skill also uses.
+  Repo-scoped.
+
+> **L-D13 (normative) — skill classification.** For the boundary rules, every `SKILL.md` under the
+> repo root is in exactly one class, decided in this order:
+>
+> | Class       | Condition                                                                                                                        |
+> | ----------- | -------------------------------------------------------------------------------------------------------------------------------- |
+> | Generated   | under the configured dist root, or listed in the generated-root sidecar (`.aipm/generated-root.json`)                            |
+> | Published   | anywhere inside the directory of a plugin discovered under the configured plugins root (repo-wide, even for single-plugin input) |
+> | Unpublished | anything else                                                                                                                    |
+>
+> When the repo root is a git work tree, enumeration is git's view of it: tracked files plus
+> untracked files git does not ignore. Otherwise it is a filesystem walk that skips
+> `node_modules/`, `.git/` and nested repositories. The rules are a no-op when the repo root is
+> not an aipm repo root (no `aipm.repo.ts` and no plugins root directory), as for a lone plugin
+> directory. An **unpublished** skill MUST carry frontmatter `metadata.internal: true`
+> (the boolean `true`, or the strings `"true"` / `"1"`, matching what the `skills` CLI honors);
+> otherwise `correctness/unpublished-skill-installable` reports it as `error`, with `file` set to
+> the skill and a `hint` that names both resolutions: add the field if the skill is for
+> contributors, or move the skill into a published plugin if it is for users. A **published** skill
+> MUST NOT carry it. **Generated** skills are exempt from both. The toolkit never writes the field
+> into an authored file. There is no configuration that declares contributor skills: the marker and
+> the skill's location are the declaration.
+>
+> `metadata.internal` hides a skill from the `skills` CLI's listing and default install; a user who
+> names the skill explicitly can still install it. It is a discoverability control, not access
+> control, and rule docs MUST say so.
+
 > **L-D11 (normative) — generator-stamp normalization, inherited by the freshness rules.** Every
 > sentinel-carrying generated artifact (`_generated.version` in JSON, `# version:` in inline/
 > sidecar sentinels) records the `@ai-plugin-marketplace/core` version that produced it
@@ -318,41 +368,47 @@ Default severity: `info` (advisory; these are judgment heuristics).
 > severity can vary (e.g. the freshness CI/local escalation, L-D4), the severity actually emitted
 > for a given diagnostic is not always the rule's default — see each row's note.
 
-| `FindingCode`              | `ruleId`                               | `category`    | `defaultSeverity` | Notes                                                                                                                            |
-| -------------------------- | -------------------------------------- | ------------- | ----------------- | -------------------------------------------------------------------------------------------------------------------------------- |
-| `envelope-invalid`         | `schema/envelope-shape`                | `schema`      | `error`           |                                                                                                                                  |
-| `repo-config-invalid`      | _(none — repo-scoped orchestration)_   | —             | —                 | Not yet wrapped as a `Rule`; emitted directly by `validate()`'s top-level dispatch.                                              |
-| `schema-invalid`           | `schema/target-conformance`            | `schema`      | `error`           |                                                                                                                                  |
-| `metadata-dir-isolation`   | `schema/target-conformance`            | `schema`      | `error`           | Open Plugins `.plugin/` metadata-dir isolation; same rule as `schema-invalid`.                                                   |
-| `open-plugins-conformance` | `schema/target-conformance`            | `schema`      | `error`           | Emitted `soft` (advisory) per its own finding; the rule's _default_ is `error`.                                                  |
-| `envelope-adherence`       | `correctness/envelope-adherence`       | `correctness` | `error`           |                                                                                                                                  |
-| `name-consistency`         | `correctness/name-consistency`         | `correctness` | `error`           |                                                                                                                                  |
-| `version-consistency`      | `correctness/version-consistency`      | `correctness` | `error`           | #84.                                                                                                                             |
-| `mcp-key-sync`             | `correctness/mcp-key-sync`             | `correctness` | `error`           |                                                                                                                                  |
-| `marketplace-registration` | `correctness/marketplace-registration` | `correctness` | `error`           |                                                                                                                                  |
-| `default-marketplace-name` | `correctness/default-marketplace-name` | `correctness` | `warn`            |                                                                                                                                  |
-| `frontmatter-invalid`      | `correctness/frontmatter-invalid`      | `correctness` | `error`           |                                                                                                                                  |
-| `freshness`                | `correctness/freshness`                | `correctness` | `error`           | Two rule instances share this id: plugin-scoped (hook JSONs/`dist/**`) and repo-scoped (registries). CI/local severity per L-D4. |
-| `freshness`                | `correctness/root-artifact-freshness`  | `correctness` | `error`           | Third emitter of `freshness`, alongside `single-artifact-host`/`root-artifact-collision` below.                                  |
-| `single-artifact-host`     | `correctness/root-artifact-freshness`  | `correctness` | `error`           | Always `error` (not CI/local-sensitive).                                                                                         |
-| `root-artifact-collision`  | `correctness/root-artifact-freshness`  | `correctness` | `error`           | Always `error` (not CI/local-sensitive).                                                                                         |
+| `FindingCode`                   | `ruleId`                                    | `category`    | `defaultSeverity` | Notes                                                                                                                            |
+| ------------------------------- | ------------------------------------------- | ------------- | ----------------- | -------------------------------------------------------------------------------------------------------------------------------- |
+| `envelope-invalid`              | `schema/envelope-shape`                     | `schema`      | `error`           |                                                                                                                                  |
+| `repo-config-invalid`           | _(none — repo-scoped orchestration)_        | —             | —                 | Not yet wrapped as a `Rule`; emitted directly by `validate()`'s top-level dispatch.                                              |
+| `schema-invalid`                | `schema/target-conformance`                 | `schema`      | `error`           |                                                                                                                                  |
+| `metadata-dir-isolation`        | `schema/target-conformance`                 | `schema`      | `error`           | Open Plugins `.plugin/` metadata-dir isolation; same rule as `schema-invalid`.                                                   |
+| `open-plugins-conformance`      | `schema/target-conformance`                 | `schema`      | `error`           | Emitted `soft` (advisory) per its own finding; the rule's _default_ is `error`.                                                  |
+| `envelope-adherence`            | `correctness/envelope-adherence`            | `correctness` | `error`           |                                                                                                                                  |
+| `name-consistency`              | `correctness/name-consistency`              | `correctness` | `error`           |                                                                                                                                  |
+| `version-consistency`           | `correctness/version-consistency`           | `correctness` | `error`           | #84.                                                                                                                             |
+| `mcp-key-sync`                  | `correctness/mcp-key-sync`                  | `correctness` | `error`           |                                                                                                                                  |
+| `marketplace-registration`      | `correctness/marketplace-registration`      | `correctness` | `error`           |                                                                                                                                  |
+| `default-marketplace-name`      | `correctness/default-marketplace-name`      | `correctness` | `warn`            |                                                                                                                                  |
+| `frontmatter-invalid`           | `correctness/frontmatter-invalid`           | `correctness` | `error`           |                                                                                                                                  |
+| `freshness`                     | `correctness/freshness`                     | `correctness` | `error`           | Two rule instances share this id: plugin-scoped (hook JSONs/`dist/**`) and repo-scoped (registries). CI/local severity per L-D4. |
+| `freshness`                     | `correctness/root-artifact-freshness`       | `correctness` | `error`           | Third emitter of `freshness`, alongside `single-artifact-host`/`root-artifact-collision` below.                                  |
+| `single-artifact-host`          | `correctness/root-artifact-freshness`       | `correctness` | `error`           | Always `error` (not CI/local-sensitive).                                                                                         |
+| `root-artifact-collision`       | `correctness/root-artifact-freshness`       | `correctness` | `error`           | Always `error` (not CI/local-sensitive).                                                                                         |
+| `unpublished-skill-installable` | `correctness/unpublished-skill-installable` | `correctness` | `error`           | #118. Always `hard` in `validate()`; run once per repo alongside the other repo-scoped rules (L-D13).                            |
 
-New (non-legacy) rules — no `FindingCode` predecessor, `legacyCode` unset:
+New (non-legacy) rules — no `FindingCode` predecessor, `legacyCode` unset. These run under
+`lint()` only; `validate()` does not invoke them:
 
-| `ruleId`                               | `category`    | `defaultSeverity` |
-| -------------------------------------- | ------------- | ----------------- |
-| `correctness/broken-file-ref`          | `correctness` | `error`           |
-| `correctness/unknown-hook-event`       | `correctness` | `error`           |
-| `correctness/invalid-matcher`          | `correctness` | `error`           |
-| `correctness/duplicate-component-name` | `correctness` | `error`           |
+| `ruleId`                                  | `category`    | `defaultSeverity` |
+| ----------------------------------------- | ------------- | ----------------- |
+| `correctness/broken-file-ref`             | `correctness` | `error`           |
+| `correctness/unknown-hook-event`          | `correctness` | `error`           |
+| `correctness/invalid-matcher`             | `correctness` | `error`           |
+| `correctness/duplicate-component-name`    | `correctness` | `error`           |
+| `correctness/published-skill-internal`    | `correctness` | `warn`            |
+| `correctness/plugin-self-containment`     | `correctness` | `error`           |
+| `correctness/unpublished-skill-reference` | `correctness` | `warn`            |
 
-This table's rule set matches `ALL_RULES` exactly (16 registered rules: `envelopeShapeRule`,
+This table's rule set matches `ALL_RULES` exactly (20 registered rules: `envelopeShapeRule`,
 `targetSchemaRule`, `envelopeAdherenceRule`, `frontmatterParsesRule`, `pluginFreshnessRule`,
 `brokenFileRefRule`, `unknownHookEventRule`, `invalidMatcherRule`, `duplicateComponentNameRule`,
-`defaultMarketplaceNameRule`, `registryFreshnessRule`, `rootArtifactFreshnessRule`,
-`nameConsistencyRule`, `versionConsistencyRule`, `mcpKeySyncRule`, `marketplaceRegistrationRule`)
-and every entry in the closed `FindingCode` union (15 codes, `repo-config-invalid` explicitly
-called out above as not-yet-rule-wrapped rather than omitted).
+`pluginSelfContainmentRule`, `unpublishedSkillReferenceRule`, `defaultMarketplaceNameRule`,
+`registryFreshnessRule`, `rootArtifactFreshnessRule`, `unpublishedSkillInstallableRule`,
+`publishedSkillInternalRule`, `nameConsistencyRule`, `versionConsistencyRule`, `mcpKeySyncRule`,
+`marketplaceRegistrationRule`) and every entry in the closed `FindingCode` union (16 codes,
+`repo-config-invalid` explicitly called out above as not-yet-rule-wrapped rather than omitted).
 
 ---
 

@@ -64,6 +64,7 @@ import {
   registryFreshnessRule,
   rootArtifactFreshnessRule,
   targetSchemaRule,
+  unpublishedSkillInstallableRule,
   versionConsistencyRule,
 } from '../lint/rules/index.js';
 
@@ -1790,6 +1791,30 @@ export async function runValidate(
       ),
     );
   }
+
+  // ── 8. Published-surface boundary: unpublished skills must be marked internal (#118) ──
+  // Repo-level and independent of registry generation: install channels that scan the repository
+  // for SKILL.md files (the `skills` CLI) ignore registries entirely, so a registry that is
+  // correct says nothing about what those channels offer. The rule classifies skills against the
+  // repo-wide published set and is a no-op when `repoRoot` is not an aipm repo root (a lone plugin
+  // directory has no published surface to guard). Not a freshness check, so it runs regardless of
+  // `skipFreshness`.
+  const boundaryCtx = createRuleContext({
+    pluginDir: repoRoot,
+    repoRoot,
+    distDir,
+    envelope: [],
+    allPluginDirs: pluginDirs,
+    workspace,
+    ci,
+    skipFreshness,
+    configCache,
+  });
+  findings.push(
+    ...(await unpublishedSkillInstallableRule.check(boundaryCtx)).map((d) =>
+      diagnosticToFinding(d, ci),
+    ),
+  );
 
   const passed = !findings.some((f) => f.severity === 'hard');
   return { findings, passed };

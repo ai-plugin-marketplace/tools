@@ -212,6 +212,15 @@ export interface ValidationResult {
  * its declared targets — this says "fine as-is; here is what Open Plugins would additionally want".
  * @see docs/specs/open-plugins-target.md §7
  *
+ * `unpublished-skill-installable` — a `SKILL.md` in the repository is neither inside a published
+ * plugin nor toolkit-generated, and its frontmatter does not carry `metadata.internal: true`.
+ * Install channels that discover skills by scanning the repository rather than reading a registry
+ * (the `skills` CLI) therefore offer it to users alongside the published skills. Always HARD, and
+ * repo-level: `plugin` holds the repo-relative path of the offending `SKILL.md`. The fix is the
+ * author's explicit choice — mark the skill internal, or move it into a published plugin; the
+ * toolkit never edits the file.
+ * @see docs/specs/lint-engine.md L-D13
+ *
  * @public
  */
 export type FindingCode =
@@ -229,7 +238,8 @@ export type FindingCode =
   | 'default-marketplace-name'
   | 'frontmatter-invalid'
   | 'metadata-dir-isolation'
-  | 'open-plugins-conformance';
+  | 'open-plugins-conformance'
+  | 'unpublished-skill-installable';
 
 /**
  * A single validation finding.

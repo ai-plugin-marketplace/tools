@@ -307,7 +307,9 @@ export async function run(argv: readonly string[], opts: RunOptions = {}): Promi
         // only when validate passes — printing it unconditionally would put a "Built N
         // plugin(s)" line ABOVE a hard finding that fails the run, misleading the user into
         // thinking the run succeeded (issue #97).
-        const result = await validate(target);
+        // The published-surface boundary check is left to `aipm validate`: an unmarked contributor
+        // skill elsewhere in the repo is not a reason for a build to fail.
+        const result = await validate(target, { skipPublishedSurfaceBoundary: true });
         if (result.passed) {
           out.write(
             `Built ${String(results.length)} plugin(s), ${String(artifactCount)} artifact(s).\n`,

@@ -6,7 +6,12 @@
  * `SKILL.md` files by walking the repository (the `skills` CLI) offer them to users anyway. This
  * module answers one question for the rules that guard that boundary: for every `SKILL.md` under
  * the repo root, is it **generated** (toolkit output), **published** (inside a discovered plugin),
- * or **unpublished** (anything else)?
+ * **installed** (third-party content the `skills` CLI itself placed there), or **unpublished**
+ * (anything else)?
+ *
+ * The scan is deliberately broader than any one channel's discovery: it considers every `SKILL.md`
+ * in the repository, not only the folders and depths the `skills` CLI happens to search today, so
+ * the answer does not shift when a channel changes its search rules.
  *
  * It deliberately knows nothing about *where* contributor skills live or which host loads them;
  * "unpublished" is defined purely as the complement of what the toolkit publishes or generates.
@@ -23,17 +28,36 @@ import { discoverPlugins } from '../pipeline/discover.js';
 import { hasRepoConfig, loadRepoConfig } from '../pipeline/load-config.js';
 import type { RuleContext } from './types.js';
 
-/** The file name that makes a directory a skill, per the Agent Skills convention. */
+/**
+ * The file name that makes a directory a skill, per the Agent Skills convention. Matched without
+ * regard to case: install channels resolve it case-insensitively (always when reading a remote
+ * repository tree, and on case-insensitive filesystems locally), so `skill.md` is just as
+ * installable as `SKILL.md`.
+ */
 const SKILL_FILENAME = 'SKILL.md';
 
+/** True iff `fileName` names a skill file, ignoring case. */
+function isSkillFileName(fileName: string): boolean {
+  return fileName.toLowerCase() === SKILL_FILENAME.toLowerCase();
+}
+
 /**
- * Directory names never descended into by the filesystem fallback walk: dependency trees and VCS
- * internals hold other projects' skills (or none), never this repo's own authored content.
+ * The lock file the `skills` CLI writes at a project root to record skills it installed there.
+ *
+ * @see https://github.com/vercel-labs/skills (skills-lock.json)
+ */
+const SKILLS_LOCK_FILENAME = 'skills-lock.json';
+
+/**
+ * Directory names whose contents are never this repo's own authored content: dependency trees and
+ * VCS internals hold other projects' skills (or none). Excluded from both enumeration strategies,
+ * so a repository that commits (or simply does not ignore) `node_modules` is treated the same as
+ * one that ignores it.
  */
 const WALK_SKIP_DIRS: ReadonlySet<string> = new Set(['node_modules', '.git']);
 
 /** Which side of the published-surface boundary a `SKILL.md` falls on (L-D13). */
-type SkillClass = 'generated' | 'published' | 'unpublished';
+type SkillClass = 'generated' | 'published' | 'installed' | 'unpublished';
 
 /** One classified `SKILL.md` under the repo root. */
 export interface ClassifiedSkill {
@@ -91,7 +115,7 @@ function listSkillFilesViaGit(repoRoot: string): string[] | undefined {
         '--exclude-standard',
         '-z',
         '--',
-        `:(glob)**/${SKILL_FILENAME}`,
+        `:(glob,icase)**/${SKILL_FILENAME}`,
       ],
       { cwd: repoRoot, encoding: 'utf-8', stdio: ['ignore', 'pipe', 'ignore'], maxBuffer: 1 << 26 },
     );
@@ -101,7 +125,9 @@ function listSkillFilesViaGit(repoRoot: string): string[] | undefined {
   const out: string[] = [];
   for (const rel of stdout.split('\0')) {
     if (rel.length === 0) continue;
-    const abs = path.join(repoRoot, ...rel.split('/'));
+    const segments = rel.split('/');
+    if (segments.some((segment) => WALK_SKIP_DIRS.has(segment))) continue;
+    const abs = path.join(repoRoot, ...segments);
     // A tracked-but-deleted file is still listed by `--cached`; only files present on disk count.
     if (fs.existsSync(abs)) out.push(abs);
   }
@@ -131,7 +157,7 @@ function listSkillFilesViaWalk(repoRoot: string): string[] {
         if (WALK_SKIP_DIRS.has(entry.name)) continue;
         if (fs.existsSync(path.join(abs, '.git'))) continue;
         stack.push(abs);
-      } else if (entry.isFile() && entry.name === SKILL_FILENAME) {
+      } else if ((entry.isFile() || entry.isSymbolicLink()) && isSkillFileName(entry.name)) {
         out.push(abs);
       }
     }
@@ -143,6 +169,41 @@ function listSkillFilesViaWalk(repoRoot: string): string[] {
 function isWithin(parent: string, child: string): boolean {
   const rel = path.relative(parent, child);
   return rel === '' || (rel !== '..' && !rel.startsWith(`..${path.sep}`) && !path.isAbsolute(rel));
+}
+
+/** Resolve symlinks in `p`, or return `undefined` when it cannot be resolved (a dangling link). */
+function realpathOrUndefined(p: string): string | undefined {
+  try {
+    return fs.realpathSync(p);
+  } catch {
+    return undefined;
+  }
+}
+
+/**
+ * Normalize a skill name the way the `skills` CLI does when it compares a discovered skill against
+ * its lock file, so "installed" is decided by the same identity the CLI uses.
+ */
+function normalizeSkillName(name: string): string {
+  return name.toLowerCase().replace(/[\s_]+/g, '-');
+}
+
+/**
+ * The normalized names of skills the `skills` CLI recorded as installed into this repository, read
+ * from the repo-root lock file. Empty when there is no lock file or it is not a lock-shaped object
+ * (the CLI itself treats an invalid lock as "nothing locked").
+ */
+function readInstalledSkillNames(repoRoot: string): ReadonlySet<string> {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(fs.readFileSync(path.join(repoRoot, SKILLS_LOCK_FILENAME), 'utf-8'));
+  } catch {
+    return new Set();
+  }
+  if (!isRecord(parsed) || typeof parsed['version'] !== 'number') return new Set();
+  const skills = parsed['skills'];
+  if (!isRecord(skills)) return new Set();
+  return new Set(Object.keys(skills).map(normalizeSkillName));
 }
 
 /**
@@ -176,33 +237,71 @@ export async function classifyRepoSkills(ctx: RuleContext): Promise<ClassifiedSk
   }
 
   const generatedRootPaths = new Set(readRootManifestPaths(repoRoot));
+  const installedNames = readInstalledSkillNames(repoRoot);
   const skillFiles = listSkillFilesViaGit(repoRoot) ?? listSkillFilesViaWalk(repoRoot);
 
-  const classified: ClassifiedSkill[] = [];
-  for (const absPath of skillFiles) {
-    const relPath = toRepoRel(repoRoot, absPath);
+  // Containment is decided on resolved paths, so a symlinked plugins root, dist root, or skill
+  // file is classified by where the content really lives.
+  const realDistDir = realpathOrUndefined(ctx.distDir) ?? ctx.distDir;
+  const realPluginDirs = pluginDirs.map((dir) => realpathOrUndefined(dir) ?? dir);
+  const realRepoRoot = realpathOrUndefined(repoRoot) ?? repoRoot;
 
-    let skillClass: SkillClass;
-    if (isWithin(ctx.distDir, absPath) || generatedRootPaths.has(relPath)) {
-      skillClass = 'generated';
-    } else if (pluginDirs.some((pluginDir) => isWithin(pluginDir, absPath))) {
-      skillClass = 'published';
-    } else {
-      skillClass = 'unpublished';
-    }
+  // Resolve every entry once. `direct` is true when the entry is the file itself rather than a
+  // symlink to it — i.e. its resolved path is exactly where its repo-relative path says it is.
+  const entries = skillFiles.map((absPath) => {
+    const relPath = toRepoRel(repoRoot, absPath);
+    const realPath = realpathOrUndefined(absPath);
+    const direct = realPath === path.join(realRepoRoot, ...relPath.split('/'));
+    return { absPath, relPath, realPath, direct };
+  });
+  const directRealPaths = new Set(
+    entries.flatMap((entry) =>
+      entry.direct && entry.realPath !== undefined ? [entry.realPath] : [],
+    ),
+  );
+
+  const classified: ClassifiedSkill[] = [];
+  for (const { absPath, relPath, realPath, direct } of entries) {
+    // A dangling symlink has no content for any channel to install.
+    if (realPath === undefined) continue;
+    // An alias (a symlink whose target is itself enumerated) is the same skill reached by a second
+    // path — typically a project-local link to a published skill so contributors get it too. The
+    // target's own entry carries the classification; reporting the alias as well would demand a
+    // marker on a file that is really the published one.
+    if (!direct && directRealPaths.has(realPath)) continue;
 
     const frontmatter = ctx.getDocument(absPath)?.value;
     const record = isRecord(frontmatter) ? frontmatter : {};
     const declaredName = record['name'];
     const metadata = record['metadata'];
+    const dirName = path.basename(path.dirname(absPath));
+    const name =
+      typeof declaredName === 'string' && declaredName.length > 0 ? declaredName : dirName;
+
+    let skillClass: SkillClass;
+    if (isWithin(realDistDir, realPath) || generatedRootPaths.has(relPath)) {
+      skillClass = 'generated';
+    } else if (realPluginDirs.some((pluginDir) => isWithin(pluginDir, realPath))) {
+      skillClass = 'published';
+    } else if (
+      // Mirrors the `skills` CLI's own exclusion: a skill in a host's project-local (dot) folder
+      // whose name or directory the lock file records was installed from elsewhere. The CLI does
+      // not offer it, and its content is vendored, so it is neither this repo's to publish nor to
+      // edit.
+      relPath.startsWith('.') &&
+      (installedNames.has(normalizeSkillName(name)) ||
+        installedNames.has(normalizeSkillName(dirName)))
+    ) {
+      skillClass = 'installed';
+    } else {
+      skillClass = 'unpublished';
+    }
+
     classified.push({
       absPath,
       relPath,
       skillClass,
-      name:
-        typeof declaredName === 'string' && declaredName.length > 0
-          ? declaredName
-          : path.basename(path.dirname(absPath)),
+      name,
       markedInternal: isRecord(metadata) && isInternalMarker(metadata['internal']),
     });
   }

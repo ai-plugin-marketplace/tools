@@ -12,7 +12,9 @@ repository instead of reading a registry (such as `npx skills add`).
 internal if it is for contributors, or move it into a published plugin if it is for users. The
 toolkit never edits the file. **A repo that keeps unmarked skills outside its plugins root (for
 example under `.claude/skills/`) will start failing `aipm validate` until each one is marked or
-moved.**
+moved.** `aipm build` is unaffected and does not fail on this finding. Skills recorded in the
+repo's `skills-lock.json` (installed with the `skills` CLI) and symlinks to published skills are
+exempt.
 
 `aipm lint` reports the same check as `correctness/unpublished-skill-installable`, plus three new
 lint-only rules:
@@ -24,4 +26,5 @@ lint-only rules:
 - `correctness/unpublished-skill-reference` (warn): published content mentions an unpublished
   skill by name.
 
-`FindingCode` gains the `unpublished-skill-installable` member.
+`FindingCode` gains the `unpublished-skill-installable` member, and `ValidateOptions` gains
+`skipPublishedSurfaceBoundary`, which `build` uses for its post-build validation.

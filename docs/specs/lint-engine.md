@@ -273,9 +273,11 @@ surface's boundary intact without modelling contributor content:
 - `correctness/plugin-self-containment` — a file reference inside a plugin resolves outside that
   plugin's directory. An installed plugin is standalone, so the referenced file will not exist for
   a user. Checked in the same files `correctness/broken-file-ref` scans, for two kinds of
-  reference: the manifest/frontmatter path fields (resolved from the plugin directory), and
-  relative markdown links in the file body (resolved from the containing file; links inside fenced
-  code blocks are ignored). Whether the target exists is `broken-file-ref`'s concern, not this
+  reference: `./`- or `../`-relative values in the manifest/frontmatter path fields (resolved from
+  the plugin directory; absolute strings are not references, since those fields also hold inline
+  hook command lines), and relative markdown links in the file body (resolved from the containing
+  file; links inside fenced, indented or inline code, or inside HTML comments, are ignored). `\`
+  separators are treated as `/`. Whether the target exists is `broken-file-ref`'s concern, not this
   rule's. Per-plugin.
 - `correctness/unpublished-skill-reference` — a published skill, command or agent mentions the
   `name` of an unpublished skill. A text match, so heuristic: default severity `warn` (L-D7), and
@@ -283,27 +285,50 @@ surface's boundary intact without modelling contributor content:
   whole names only, and ignores an unpublished name that a published skill also uses.
   Repo-scoped.
 
-> **L-D13 (normative) — skill classification.** For the boundary rules, every `SKILL.md` under the
-> repo root is in exactly one class, decided in this order:
+> **L-D13 (normative) — skill classification.** For the boundary rules, every skill file under
+> the repo root is in exactly one class, decided in this order:
 >
-> | Class       | Condition                                                                                                                        |
-> | ----------- | -------------------------------------------------------------------------------------------------------------------------------- |
-> | Generated   | under the configured dist root, or listed in the generated-root sidecar (`.aipm/generated-root.json`)                            |
-> | Published   | anywhere inside the directory of a plugin discovered under the configured plugins root (repo-wide, even for single-plugin input) |
-> | Unpublished | anything else                                                                                                                    |
+> | Class       | Condition                                                                                                                                                   |
+> | ----------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------- |
+> | Generated   | under the configured dist root, or listed in the generated-root sidecar (`.aipm/generated-root.json`)                                                       |
+> | Published   | anywhere inside the directory of a plugin discovered under the configured plugins root (repo-wide, even for single-plugin input)                            |
+> | Installed   | in a project-local dot-folder (first path segment starts with `.`), and its name or directory name is a key of `skills` in the repo-root `skills-lock.json` |
+> | Unpublished | anything else                                                                                                                                               |
 >
-> When the repo root is a git work tree, enumeration is git's view of it: tracked files plus
-> untracked files git does not ignore. Otherwise it is a filesystem walk that skips
-> `node_modules/`, `.git/` and nested repositories. The rules are a no-op when the repo root is
-> not an aipm repo root (no `aipm.repo.ts` and no plugins root directory), as for a lone plugin
-> directory. An **unpublished** skill MUST carry frontmatter `metadata.internal: true`
-> (the boolean `true`, or the strings `"true"` / `"1"`, matching what the `skills` CLI honors);
-> otherwise `correctness/unpublished-skill-installable` reports it as `error`, with `file` set to
-> the skill and a `hint` that names both resolutions: add the field if the skill is for
-> contributors, or move the skill into a published plugin if it is for users. A **published** skill
-> MUST NOT carry it. **Generated** skills are exempt from both. The toolkit never writes the field
+> - **What counts as a skill file.** A file named `SKILL.md`, compared without regard to case:
+>   install channels resolve the name case-insensitively, so `skill.md` is equally installable.
+> - **Enumeration.** When the repo root is a git work tree, git's view of it: tracked files plus
+>   untracked files git does not ignore. Otherwise a filesystem walk that skips nested
+>   repositories. Both skip any path with a `node_modules` or `.git` segment.
+> - **Deliberately broader than any one channel.** Every skill file in the repository is
+>   classified, including ones a given channel would not currently offer (beyond its search depth,
+>   or missing a `name`). The rule does not mirror one CLI version's search limits.
+> - **Symlinks.** Containment is decided on resolved paths. A symlink whose target is itself an
+>   enumerated skill file is an alias of that skill and is not classified separately; a dangling
+>   symlink is ignored.
+> - **Installed skills.** The `skills` CLI records what it installs into a project in
+>   `skills-lock.json` and does not offer those skills from the repository. They are third-party
+>   content, so they are exempt rather than marked. Lock keys and skill names are compared after
+>   lower-casing and replacing runs of whitespace or `_` with `-`, as the CLI does. A lock file
+>   that is missing or is not an object with a numeric `version` and an object `skills` records
+>   nothing.
+> - **Not an aipm repo root.** The rules are a no-op when the repo root has neither an
+>   `aipm.repo.ts` nor a plugins root directory, as for a lone plugin directory.
+>
+> An **unpublished** skill MUST carry frontmatter `metadata.internal: true` (the boolean `true`, or
+> the strings `"true"` / `"1"`, matching what the `skills` CLI honors); otherwise
+> `correctness/unpublished-skill-installable` reports it as `error`, with `file` set to the skill
+> and a `hint` that names both resolutions: add the field if the skill is for contributors, or move
+> the skill into a published plugin if it is for users. A **published** skill MUST NOT carry it.
+> **Generated** and **installed** skills are exempt from both. The toolkit never writes the field
 > into an authored file. There is no configuration that declares contributor skills: the marker and
 > the skill's location are the declaration.
+>
+> In `validate()`, the resulting `unpublished-skill-installable` finding is repo-level: its
+> `plugin` is unset and its `message` begins with the skill's repo-relative path.
+> `ValidateOptions.skipPublishedSurfaceBoundary` suppresses the check; `build`'s post-build
+> validation sets it, so `aipm build` does not fail over a contributor file. `aipm validate` is the
+> step that enforces the boundary.
 >
 > `metadata.internal` hides a skill from the `skills` CLI's listing and default install; a user who
 > names the skill explicitly can still install it. It is a discoverability control, not access

@@ -317,6 +317,7 @@ export function validate(targetPath: string, opts?: ValidateOptions): Promise<Va
 // @public
 export interface ValidateOptions {
     skipFreshness?: boolean;
+    skipPublishedSurfaceBoundary?: boolean;
 }
 
 // @public

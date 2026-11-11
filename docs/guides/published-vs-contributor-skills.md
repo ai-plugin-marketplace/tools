@@ -52,10 +52,24 @@ toolkit, and is not marked internal:
 [.claude/skills/release-runbook/SKILL.md] unpublished-skill-installable (hard): ...
 ```
 
+`aipm build` does not fail on this; enforcing the boundary is `aipm validate`'s job.
+
 The fix is a choice only you can make. If the skill is for contributors, mark it internal. If it
 is for users, move it into a published plugin. `aipm` never edits the file for you. Don't move a
 contributor skill into the plugins root, or mark a user-facing skill internal, only to clear the
 finding.
+
+Three details of how that check decides:
+
+- **It looks at every skill file in the repo**, not only the folders and depths the `skills` CLI
+  searches today, and it matches `SKILL.md` in any letter case. A `SKILL.md` kept as a test
+  fixture or a docs example needs the marker too. That is deliberate: the check shouldn't start
+  missing files because an install channel changes where it looks.
+- **Skills you installed with the `skills` CLI are exempt.** Anything in a host's dot-folder that
+  your repo's `skills-lock.json` records is third-party content, and the `skills` CLI doesn't
+  offer it from your repo. Don't edit those files to add the marker.
+- **A symlink to a published skill is fine.** Linking a published skill into `.claude/skills/` so
+  contributors get it too is treated as the same skill, not a second, unpublished one.
 
 `aipm lint` adds three related rules:
 

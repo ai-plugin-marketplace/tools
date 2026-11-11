@@ -11,11 +11,12 @@
  *
  * Two kinds of reference are checked, in the same files `correctness/broken-file-ref` scans:
  *
- * - **Manifest/frontmatter path fields** (`hooks`/`commands`/`agents`/`skills`), resolved relative
- *   to the plugin directory — the convention every target schema uses.
+ * - **Manifest/frontmatter path fields** (`hooks`/`commands`/`agents`/`skills`) whose value is a
+ *   `./` or `../` relative path, resolved relative to the plugin directory — the convention every
+ *   target schema uses.
  * - **Markdown links** in the body of a skill, agent, command or power file, resolved relative to
- *   the file that contains them. Fenced code blocks are skipped: a link there is sample text, not
- *   a reference the host or the model will follow.
+ *   the file that contains them. Code (fenced, indented or inline) and HTML comments are skipped:
+ *   a link there is sample text, not a reference the host or the model will follow.
  *
  * Whether the target exists is not this rule's concern (that is `broken-file-ref`); only whether it
  * lies inside the plugin.
@@ -47,33 +48,80 @@ const LINK_DEFINITION_RE = /^[ \t]{0,3}\[[^\]\n]+\]:[ \t]*(<[^>\n]*>|\S+)/gm;
 /** An opening or closing code-fence line: up to three spaces, then three or more ` or ~. */
 const FENCE_LINE_RE = /^ {0,3}(`{3,}|~{3,})/;
 
-/**
- * Replace the contents of fenced code blocks with spaces, preserving every newline and the text's
- * total length so offsets into the result still index the original text. A fence closes on a line
- * that starts with the same character repeated at least as many times as the opening fence; an
- * unclosed fence runs to the end of the text (CommonMark behavior).
- */
-function blankFencedBlocks(text: string): string {
-  const lines = text.split('\n');
-  let open: { char: string; length: number } | undefined;
-  for (let i = 0; i < lines.length; i++) {
-    const line = lines[i] ?? '';
-    const fence = FENCE_LINE_RE.exec(line)?.[1];
-    if (open === undefined) {
-      if (fence !== undefined) open = { char: fence.charAt(0), length: fence.length };
-      continue;
-    }
-    lines[i] = line.replace(/[^\r]/g, ' ');
-    if (fence !== undefined && fence.startsWith(open.char) && fence.length >= open.length) {
-      open = undefined;
-    }
-  }
-  return lines.join('\n');
+/** An HTML comment, possibly spanning lines. */
+const HTML_COMMENT_RE = /<!--[\s\S]*?-->/g;
+
+/** An inline code span: a run of backticks, content, then a run of the same length. */
+const INLINE_CODE_RE = /(`+)(?!`)[\s\S]*?(?<!`)\1(?!`)/g;
+
+/** A line indented as a code block: four or more spaces, or a tab. */
+const INDENTED_LINE_RE = /^(?: {4,}|\t)\S/;
+
+/** Replace every character except line breaks with a space, preserving length and line structure. */
+function blank(text: string): string {
+  return text.replace(/[^\r\n]/g, ' ');
 }
 
-/** A relative-path-shaped manifest value: one that names a location by `.`/`..`/absolute path. */
+/**
+ * Blank out every region of a markdown text whose contents are literal text rather than markup a
+ * reader or host would follow as a link: fenced code blocks, indented code blocks, HTML comments
+ * and inline code spans. Every newline and the text's total length are preserved, so offsets into
+ * the result still index the original text.
+ *
+ * A fence closes on a line that starts with the same character repeated at least as many times as
+ * the opening fence; an unclosed fence runs to the end of the text (CommonMark behavior). An
+ * indented code block is recognized conservatively — an indented line directly after a blank line
+ * (or at the start of the text), and the indented lines that follow it — so an indented list
+ * continuation, which follows a non-blank line, is still scanned.
+ */
+function blankLiteralRegions(text: string): string {
+  const lines = text.split('\n');
+  let fence: { char: string; length: number } | undefined;
+  let inIndentedBlock = false;
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i] ?? '';
+    const fenceMarker = FENCE_LINE_RE.exec(line)?.[1];
+    if (fence !== undefined) {
+      lines[i] = blank(line);
+      if (
+        fenceMarker !== undefined &&
+        fenceMarker.startsWith(fence.char) &&
+        fenceMarker.length >= fence.length
+      ) {
+        fence = undefined;
+      }
+      continue;
+    }
+    if (fenceMarker !== undefined) {
+      fence = { char: fenceMarker.charAt(0), length: fenceMarker.length };
+      inIndentedBlock = false;
+      continue;
+    }
+    const previousBlank = i === 0 || (lines[i - 1] ?? '').trim().length === 0;
+    if (INDENTED_LINE_RE.test(line) && (inIndentedBlock || previousBlank)) {
+      inIndentedBlock = true;
+      lines[i] = blank(line);
+      continue;
+    }
+    if (line.trim().length > 0) inIndentedBlock = false;
+  }
+  return lines.join('\n').replace(HTML_COMMENT_RE, blank).replace(INLINE_CODE_RE, blank);
+}
+
+/**
+ * A relative-path-shaped manifest value: one that names a location by `./` or `../` (with either
+ * separator, since a manifest authored on Windows may use `\\`). Absolute strings are deliberately
+ * not treated as references: the path-bearing fields also hold inline hook definitions, whose
+ * `command` values routinely start with an absolute interpreter path (`/usr/bin/env bash …`) and
+ * are shell command lines, not files the plugin ships.
+ */
 function isPathShapedRef(value: string): boolean {
-  return value.startsWith('./') || value.startsWith('../') || path.isAbsolute(value);
+  return /^\.\.?[\\/]/.test(value);
+}
+
+/** Convert `\\` separators to `/` so a Windows-style relative path resolves the same everywhere. */
+function toPosixSeparators(ref: string): string {
+  return ref.replace(/\\/g, '/');
 }
 
 /** True iff `child` is `parent` itself or lies inside it. */
@@ -94,7 +142,7 @@ interface BodyLink {
  * file references and are skipped. Any `#fragment` or `?query` suffix is dropped.
  */
 function collectBodyLinks(text: string): BodyLink[] {
-  const scannable = blankFencedBlocks(text);
+  const scannable = blankLiteralRegions(text);
   const links: BodyLink[] = [];
   for (const re of [INLINE_LINK_RE, LINK_DEFINITION_RE]) {
     re.lastIndex = 0;
@@ -152,7 +200,8 @@ export const pluginSelfContainmentRule: Rule = {
         const refs: FoundRef[] = [];
         collectTopLevelRefs(doc.value, refs, isPathShapedRef);
         for (const { path: refPath, ref } of refs) {
-          if (isWithin(ctx.pluginDir, path.resolve(ctx.pluginDir, ref))) continue;
+          if (isWithin(ctx.pluginDir, path.resolve(ctx.pluginDir, toPosixSeparators(ref))))
+            continue;
           diagnostics.push(
             diagnosticFor(rel, ref, `at '${refPath.join('.')}'`, rangeForPath(doc, refPath)),
           );
@@ -164,7 +213,8 @@ export const pluginSelfContainmentRule: Rule = {
         // a markdown file without frontmatter has no document, so fall back to the raw text.
         const text = doc?.text ?? fs.readFileSync(absPath, 'utf-8');
         for (const { target, offset } of collectBodyLinks(text)) {
-          if (isWithin(ctx.pluginDir, path.resolve(path.dirname(absPath), target))) continue;
+          const resolved = path.resolve(path.dirname(absPath), toPosixSeparators(target));
+          if (isWithin(ctx.pluginDir, resolved)) continue;
           diagnostics.push(
             diagnosticFor(rel, target, 'in a markdown link', {
               start: offsetToPosition(text, offset),

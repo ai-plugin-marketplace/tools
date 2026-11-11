@@ -155,6 +155,16 @@ export interface GeneratedFile {
 export interface ValidateOptions {
   /** When true, skip the freshness check (§10.5). Default: false. */
   skipFreshness?: boolean;
+  /**
+   * When true, skip the published-surface boundary check (`unpublished-skill-installable`).
+   * Default: false.
+   *
+   * That check is about files *outside* the published plugins — skills an install channel could
+   * offer that the repo never meant to ship. It says nothing about whether the plugins themselves
+   * are valid or were generated correctly, so `build`'s own post-build validation sets this:
+   * building is not the step that should fail over an unrelated contributor file. `validate` is.
+   */
+  skipPublishedSurfaceBoundary?: boolean;
 }
 
 /**
@@ -216,9 +226,10 @@ export interface ValidationResult {
  * plugin nor toolkit-generated, and its frontmatter does not carry `metadata.internal: true`.
  * Install channels that discover skills by scanning the repository rather than reading a registry
  * (the `skills` CLI) therefore offer it to users alongside the published skills. Always HARD, and
- * repo-level: `plugin` holds the repo-relative path of the offending `SKILL.md`. The fix is the
- * author's explicit choice — mark the skill internal, or move it into a published plugin; the
- * toolkit never edits the file.
+ * repo-level: `plugin` is unset (the skill belongs to no plugin) and `message` begins with the
+ * repo-relative path of the offending `SKILL.md`. The fix is the author's explicit choice — mark
+ * the skill internal, or move it into a published plugin; the toolkit never edits the file. Not
+ * emitted by `build`'s post-build validation (see `ValidateOptions.skipPublishedSurfaceBoundary`).
  * @see docs/specs/lint-engine.md L-D13
  *
  * @public

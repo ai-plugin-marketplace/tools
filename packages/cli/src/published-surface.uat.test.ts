@@ -58,9 +58,11 @@ function runAipm(args: string[], cwd: string): CliResult {
 }
 
 /**
- * The skill names the `skills` CLI offers for `repo`, as a user running
- * `npx skills add <repo> --list` would see them. Names are the indented, description-less lines
- * of its "Available Skills" block; ANSI styling is stripped first.
+ * Every skill name the `skills` CLI offers for `repo`, as a user running
+ * `npx skills add <repo> --list` would see them, sorted. In its "Available Skills" block each
+ * name sits on its own line indented four spaces after the gutter (descriptions are indented
+ * six), so the whole offered set is read rather than probing for expected names — an unexpected
+ * extra skill fails the assertion. ANSI styling is stripped first.
  */
 function listOfferedSkills(repo: string): string[] {
   const result = spawnSync(process.execPath, [SKILLS_BIN_PATH, 'add', repo, '--list'], {
@@ -71,9 +73,8 @@ function listOfferedSkills(repo: string): string[] {
   expect(result.status, `skills CLI failed:\n${result.stdout}\n${result.stderr}`).toBe(0);
   // eslint-disable-next-line no-control-regex -- stripping ANSI escape sequences from CLI output
   const plain = `${result.stdout}\n${result.stderr}`.replace(/\u001b\[[0-9;?]*[A-Za-z]/g, '');
-  return [PUBLISHED_SKILL, CONTRIBUTOR_SKILL].filter((name) =>
-    new RegExp(`^│\\s+${name}\\s*$`, 'm').test(plain),
-  );
+  const block = plain.slice(plain.indexOf('Available Skills'));
+  return [...block.matchAll(/^│ {4}(\S+)[ \t]*$/gm)].map((match) => match[1] ?? '').sort();
 }
 
 function skillMd(name: string, description: string, extraFrontmatter = ''): string {
@@ -89,6 +90,9 @@ beforeAll(() => {
   const parent = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'aipm-surface-uat-')));
   repo = path.join(parent, 'repo');
   expect(runAipm(['init', repo], parent).code).toBe(0);
+  // A real marketplace repo is a git repository; this also exercises the rule's git-based
+  // enumeration against the real `skills` CLI.
+  execFileSync('git', ['init', '-q'], { cwd: repo });
   expect(runAipm(['scaffold', PUBLISHED_SKILL], repo).code).toBe(0);
   // The published plugin's one user-facing skill.
   const publishedSkillPath = path.join(
@@ -131,15 +135,24 @@ describe('published-surface boundary (#118)', () => {
     });
 
     it('the skills CLI offers the contributor skill to users (the leak)', () => {
-      expect(listOfferedSkills(repo)).toEqual([PUBLISHED_SKILL, CONTRIBUTOR_SKILL]);
+      expect(listOfferedSkills(repo)).toEqual([CONTRIBUTOR_SKILL, PUBLISHED_SKILL].sort());
     });
 
     it('aipm validate fails, naming the file and the fix', () => {
       const result = runAipm(['validate'], repo);
       expect(result.code).toBe(1);
       expect(result.stdout).toContain('unpublished-skill-installable');
-      expect(result.stdout).toContain(CONTRIBUTOR_SKILL_REL);
+      // Named exactly once: the finding is repo-level, so there is no `[plugin]` scope prefix
+      // repeating the path the message already starts with.
+      expect(result.stdout.split(CONTRIBUTOR_SKILL_REL)).toHaveLength(3);
       expect(result.stdout).toContain('internal: true');
+    });
+
+    it("aipm build still succeeds: the boundary is validate's concern, not build's", () => {
+      const result = runAipm(['build'], repo);
+      expect(result.code, result.stdout + result.stderr).toBe(0);
+      expect(result.stdout).toContain('Built 1 plugin(s)');
+      expect(result.stdout).not.toContain('unpublished-skill-installable');
     });
 
     it('aipm lint reports the same rule as an error', () => {

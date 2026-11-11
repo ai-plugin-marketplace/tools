@@ -1797,24 +1797,29 @@ export async function runValidate(
   // for SKILL.md files (the `skills` CLI) ignore registries entirely, so a registry that is
   // correct says nothing about what those channels offer. The rule classifies skills against the
   // repo-wide published set and is a no-op when `repoRoot` is not an aipm repo root (a lone plugin
-  // directory has no published surface to guard). Not a freshness check, so it runs regardless of
-  // `skipFreshness`.
-  const boundaryCtx = createRuleContext({
-    pluginDir: repoRoot,
-    repoRoot,
-    distDir,
-    envelope: [],
-    allPluginDirs: pluginDirs,
-    workspace,
-    ci,
-    skipFreshness,
-    configCache,
-  });
-  findings.push(
-    ...(await unpublishedSkillInstallableRule.check(boundaryCtx)).map((d) =>
-      diagnosticToFinding(d, ci),
-    ),
-  );
+  // directory has no published surface to guard). Not a freshness check, so it is independent of
+  // `skipFreshness`; `build` opts out through its own option, because a contributor file outside
+  // the plugins says nothing about whether the build output is valid.
+  if (!(opts?.skipPublishedSurfaceBoundary ?? false)) {
+    const boundaryCtx = createRuleContext({
+      pluginDir: repoRoot,
+      repoRoot,
+      distDir,
+      envelope: [],
+      allPluginDirs: pluginDirs,
+      workspace,
+      ci,
+      skipFreshness,
+      configCache,
+    });
+    for (const diagnostic of await unpublishedSkillInstallableRule.check(boundaryCtx)) {
+      // `Finding.plugin` means "the plugin this finding is about". An unpublished skill belongs to
+      // no plugin, so the field is left unset rather than carrying the diagnostic's file path; the
+      // message already names the file.
+      const { plugin: _notAPlugin, ...repoLevelFinding } = diagnosticToFinding(diagnostic, ci);
+      findings.push(repoLevelFinding);
+    }
+  }
 
   const passed = !findings.some((f) => f.severity === 'hard');
   return { findings, passed };

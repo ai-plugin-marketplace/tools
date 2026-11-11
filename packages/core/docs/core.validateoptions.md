@@ -54,5 +54,26 @@ _(Optional)_ When true, skip the freshness check (§10.5). Default: false.
 
 
 </td></tr>
+<tr><td>
+
+[skipPublishedSurfaceBoundary?](./core.validateoptions.skippublishedsurfaceboundary.md)
+
+
+</td><td>
+
+
+</td><td>
+
+boolean
+
+
+</td><td>
+
+_(Optional)_ When true, skip the published-surface boundary check (`unpublished-skill-installable`<!-- -->). Default: false.
+
+That check is about files \*outside\* the published plugins — skills an install channel could offer that the repo never meant to ship. It says nothing about whether the plugins themselves are valid or were generated correctly, so `build`<!-- -->'s own post-build validation sets this: building is not the step that should fail over an unrelated contributor file. `validate` is.
+
+
+</td></tr>
 </tbody></table>
 

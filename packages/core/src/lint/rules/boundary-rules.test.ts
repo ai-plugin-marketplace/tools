@@ -186,6 +186,94 @@ describe('correctness/unpublished-skill-installable', () => {
     expect(diagnostics.map((d) => d.file)).toEqual(['.claude/skills/release/SKILL.md']);
   });
 
+  it('skips node_modules under git even when the repository does not ignore it', async () => {
+    execFileSync('git', ['init', '-q'], { cwd: repoRoot });
+    writePublishedPlugin('user-plugin');
+    write('node_modules/some-pkg/skills/vendored/SKILL.md', skill('vendored'));
+
+    expect(await unpublishedSkillInstallableRule.check(repoCtx())).toEqual([]);
+  });
+
+  it.each([['without git'], ['under git']])(
+    'flags a lower-case skill.md, which install channels resolve case-insensitively (%s)',
+    async (mode) => {
+      if (mode === 'under git') execFileSync('git', ['init', '-q'], { cwd: repoRoot });
+      writePublishedPlugin('user-plugin');
+      write('.claude/skills/lower/skill.md', skill('lower'));
+
+      const diagnostics = await unpublishedSkillInstallableRule.check(repoCtx());
+      expect(diagnostics.map((d) => d.file)).toEqual(['.claude/skills/lower/skill.md']);
+    },
+  );
+
+  it('does not report a project-local symlink to a published skill', async () => {
+    // A contributor-folder alias of a published skill is the same skill reached by a second path.
+    // Reporting it would tell the author to mark the *published* file internal through the link.
+    writePublishedPlugin('user-plugin');
+    const link = path.join(repoRoot, '.claude', 'skills', 'user-plugin', 'SKILL.md');
+    fs.mkdirSync(path.dirname(link), { recursive: true });
+    fs.symlinkSync(
+      path.join(repoRoot, 'plugins', 'user-plugin', 'skills', 'user-plugin', 'SKILL.md'),
+      link,
+    );
+
+    expect(await unpublishedSkillInstallableRule.check(repoCtx())).toEqual([]);
+    expect(await publishedSkillInternalRule.check(repoCtx())).toEqual([]);
+  });
+
+  it('still reports a symlink whose target is outside every published plugin', async () => {
+    writePublishedPlugin('user-plugin');
+    write('internal-docs/release/SKILL.md', skill('release', 'metadata:\n  internal: true\n'));
+    write('shared/notes.md', skill('notes'));
+    const link = path.join(repoRoot, '.claude', 'skills', 'notes', 'SKILL.md');
+    fs.mkdirSync(path.dirname(link), { recursive: true });
+    fs.symlinkSync(path.join(repoRoot, 'shared', 'notes.md'), link);
+
+    const diagnostics = await unpublishedSkillInstallableRule.check(repoCtx());
+    expect(diagnostics.map((d) => d.file)).toEqual(['.claude/skills/notes/SKILL.md']);
+  });
+
+  describe('skills installed by the skills CLI (skills-lock.json)', () => {
+    it('exempts a project-local skill the lock file records', async () => {
+      writePublishedPlugin('user-plugin');
+      write('skills-lock.json', { version: 3, skills: { 'tp-lint': { source: 'acme/skills' } } });
+      write('.claude/skills/tp-lint/SKILL.md', skill('tp-lint'));
+
+      expect(await unpublishedSkillInstallableRule.check(repoCtx())).toEqual([]);
+    });
+
+    it('matches the lock entry by directory name and by normalized skill name', async () => {
+      writePublishedPlugin('user-plugin');
+      write('skills-lock.json', { version: 3, skills: { 'tp-lint': {}, 'code-review': {} } });
+      // Directory name matches; frontmatter name differs.
+      write('.claude/skills/tp-lint/SKILL.md', skill('Third Party Lint'));
+      // Frontmatter name normalizes (lower-case, spaces/underscores to hyphens) to the lock key.
+      write('.agents/skills/cr/SKILL.md', skill('Code_Review'));
+
+      expect(await unpublishedSkillInstallableRule.check(repoCtx())).toEqual([]);
+    });
+
+    it('does not exempt a skill outside a project-local (dot) folder', async () => {
+      writePublishedPlugin('user-plugin');
+      write('skills-lock.json', { version: 3, skills: { 'tp-lint': {} } });
+      write('tools/tp-lint/SKILL.md', skill('tp-lint'));
+
+      const diagnostics = await unpublishedSkillInstallableRule.check(repoCtx());
+      expect(diagnostics.map((d) => d.file)).toEqual(['tools/tp-lint/SKILL.md']);
+    });
+
+    it.each([
+      ['a skill the lock file does not record', { version: 3, skills: { other: {} } }],
+      ['a lock file that is not lock-shaped', { skills: ['tp-lint'] }],
+    ])('does not exempt %s', async (_label, lock) => {
+      writePublishedPlugin('user-plugin');
+      write('skills-lock.json', lock);
+      write('.claude/skills/tp-lint/SKILL.md', skill('tp-lint'));
+
+      expect(await unpublishedSkillInstallableRule.check(repoCtx())).toHaveLength(1);
+    });
+  });
+
   it('is a no-op when the directory is not an aipm repo root', async () => {
     // No plugins root and no aipm.repo.ts: there is no published surface to classify against.
     write('.claude/skills/release/SKILL.md', skill('release'));
@@ -202,7 +290,13 @@ describe('correctness/unpublished-skill-installable', () => {
     expect(leak).toHaveLength(1);
     expect(leak[0]?.severity).toBe('hard');
     expect(leak[0]?.message).toContain('.claude/skills/release/SKILL.md');
+    // `Finding.plugin` names a plugin; an unpublished skill belongs to none.
+    expect(leak[0]?.plugin).toBeUndefined();
     expect(before.passed).toBe(false);
+
+    // `build`'s post-build validation opts out: a contributor file is not a build failure.
+    const asBuild = await runValidate(repoRoot, { skipPublishedSurfaceBoundary: true });
+    expect(asBuild.findings.filter((f) => f.code === 'unpublished-skill-installable')).toEqual([]);
 
     write('.claude/skills/release/SKILL.md', skill('release', 'metadata:\n  internal: true\n'));
     const after = await runValidate(repoRoot);
@@ -304,6 +398,47 @@ See [the reference](./reference.md#section), [the agent](../../agents/a.md),
     expect(diagnostics.map((d) => d.message)).toEqual([
       expect.stringContaining("'../../../docs/guide.md'"),
     ]);
+  });
+
+  it('flags a Windows-style relative path that climbs out of the plugin', async () => {
+    write('plugins/p/.claude-plugin/plugin.json', { name: 'p', agents: '..\\shared\\agents' });
+
+    const diagnostics = await pluginSelfContainmentRule.check(pluginCtx('p'));
+    expect(diagnostics).toHaveLength(1);
+    expect(diagnostics[0]?.file).toBe('.claude-plugin/plugin.json');
+  });
+
+  it('does not treat an inline hook command with an absolute path as a file reference', async () => {
+    write('plugins/p/.claude-plugin/plugin.json', {
+      name: 'p',
+      hooks: {
+        PreToolUse: [
+          { matcher: 'Bash', hooks: [{ type: 'command', command: '/usr/bin/env bash -c true' }] },
+        ],
+      },
+    });
+
+    expect(await pluginSelfContainmentRule.check(pluginCtx('p'))).toEqual([]);
+  });
+
+  it.each([
+    ['an inline code span', 'Write links like `[a](../../../outside.md)` in prose.\n'],
+    ['an indented code block', 'Example:\n\n    [a](../../../outside.md)\n'],
+    ['an HTML comment', '<!-- see [a](../../../outside.md) -->\n'],
+    ['a multi-line HTML comment', '<!--\n[a](../../../outside.md)\n-->\n'],
+  ])('ignores a link inside %s', async (_label, body) => {
+    write('plugins/p/skills/p/SKILL.md', skill('p', '', body));
+
+    expect(await pluginSelfContainmentRule.check(pluginCtx('p'))).toEqual([]);
+  });
+
+  it('still flags a link in an indented list continuation, which is not a code block', async () => {
+    write(
+      'plugins/p/skills/p/SKILL.md',
+      skill('p', '', '- First step\n    see [the guide](../../../outside.md)\n'),
+    );
+
+    expect(await pluginSelfContainmentRule.check(pluginCtx('p'))).toHaveLength(1);
   });
 
   it('ignores links inside fenced code blocks', async () => {

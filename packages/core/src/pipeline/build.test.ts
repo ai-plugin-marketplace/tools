@@ -21,11 +21,15 @@ import * as path from 'node:path';
 
 import { afterEach, describe, expect, it } from 'vitest';
 
-import { PAYLOAD_ADAPTER_FILENAME, PAYLOAD_ADAPTER_SOURCE } from '../hooks/payload-adapter.js';
-import { convertClaudeHooksYamlToJson } from '../targets/claude/transform.js';
-import { convertClaudeHooksYamlToCursorJson } from '../targets/cursor/transform.js';
-import { CURSOR_SHIM_FILENAME, CURSOR_SHIM_RUNNER_SOURCE } from '../targets/cursor/shim-runner.js';
-import { convertClaudeHooksYamlToGeminiJson } from '../targets/gemini/transform.js';
+import {
+  CURSOR_SHIM_FILENAME,
+  CURSOR_SHIM_RUNNER_SOURCE,
+  PAYLOAD_ADAPTER_FILENAME,
+  PAYLOAD_ADAPTER_SOURCE,
+  convertClaudeHooksYamlToCursorJson,
+  convertClaudeHooksYamlToGeminiJson,
+  convertClaudeHooksYamlToJson,
+} from '@ai-plugin-marketplace/normalizer';
 import { computePluginHookArtifacts, runBuild } from './build.js';
 import { GeneratorDowngradeError, getGeneratorVersion } from './generator-version.js';
 import {
@@ -44,7 +48,11 @@ import {
   synthPluginRepo,
 } from '../test-support/synth-plugin.js';
 import type { SynthRepo } from '../test-support/synth-plugin.js';
-import { TEMPLATE_REPO_AVAILABLE } from '../test-support/template-repo.js';
+import {
+  AIPM_REQUIRE_TEMPLATE,
+  TEMPLATE_REPO_AVAILABLE,
+  shouldSkipTemplateRepoSuite,
+} from '../test-support/template-repo.js';
 
 /**
  * Explicit generator-version stamp (§4.3.1) used where a test computes an artifact AND its expected
@@ -53,7 +61,14 @@ import { TEMPLATE_REPO_AVAILABLE } from '../test-support/template-repo.js';
  */
 const STAMP = '9.9.9';
 
-const describeMaybe = TEMPLATE_REPO_AVAILABLE ? describe : describe.skip;
+// Skips locally when no template checkout is present; under AIPM_REQUIRE_TEMPLATE (CI) the suites run
+// regardless, so a missing checkout fails instead of silently dropping coverage.
+const describeMaybe = describe.skipIf(
+  shouldSkipTemplateRepoSuite({
+    available: TEMPLATE_REPO_AVAILABLE,
+    required: AIPM_REQUIRE_TEMPLATE,
+  }),
+);
 
 // ---------------------------------------------------------------------------
 // Helpers

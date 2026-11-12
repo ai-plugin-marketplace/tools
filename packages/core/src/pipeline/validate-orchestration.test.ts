@@ -25,9 +25,20 @@ import {
 } from '../test-support/synth-plugin.js';
 import type { SynthRepo } from '../test-support/synth-plugin.js';
 import type { Finding, FindingCode } from './types.js';
-import { TEMPLATE_REPO_AVAILABLE } from '../test-support/template-repo.js';
+import {
+  AIPM_REQUIRE_TEMPLATE,
+  TEMPLATE_REPO_AVAILABLE,
+  shouldSkipTemplateRepoSuite,
+} from '../test-support/template-repo.js';
 
-const describeMaybe = TEMPLATE_REPO_AVAILABLE ? describe : describe.skip;
+// Skips locally when no template checkout is present; under AIPM_REQUIRE_TEMPLATE (CI) the suites run
+// regardless, so a missing checkout fails instead of silently dropping coverage.
+const describeMaybe = describe.skipIf(
+  shouldSkipTemplateRepoSuite({
+    available: TEMPLATE_REPO_AVAILABLE,
+    required: AIPM_REQUIRE_TEMPLATE,
+  }),
+);
 
 /** Codes present in a finding list. */
 function codes(findings: Finding[]): FindingCode[] {

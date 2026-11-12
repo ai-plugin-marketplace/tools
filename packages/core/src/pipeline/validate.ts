@@ -14,13 +14,15 @@ import { parse as parseYaml } from 'yaml';
 import { z } from 'zod';
 import { defineConfig } from '../config.js';
 import type { AipmConfigInput } from '../config.js';
-import { validateClaudePlugin } from '../targets/claude/validate.js';
-import { validateCodexPlugin } from '../targets/codex/validate.js';
-import { validateCursorPlugin } from '../targets/cursor/validate.js';
-import { validateGeminiPlugin } from '../targets/gemini/validate.js';
-import { validateKiroPlugin } from '../targets/kiro/validate.js';
-import { validateOpenPluginsPlugin } from '../targets/open-plugins/validate.js';
-import { validateVercelPlugin } from '../targets/vercel/validate.js';
+import {
+  validateClaudePlugin,
+  validateCodexPlugin,
+  validateCursorPlugin,
+  validateGeminiPlugin,
+  validateKiroPlugin,
+  validateOpenPluginsPlugin,
+  validateVercelPlugin,
+} from '@ai-plugin-marketplace/normalizer';
 import {
   collectFilesRelative,
   collectRegistryPlugins,

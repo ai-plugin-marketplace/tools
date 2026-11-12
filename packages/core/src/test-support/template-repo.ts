@@ -61,13 +61,13 @@ export const TEMPLATE_REPO_CANDIDATES: readonly string[] = [
  * template checkout, relative to the template checkout root (i.e. each entry already includes
  * the `plugins/skill-evaluator/` prefix). This is deliberately the set the bundlers must emit
  * (`gemini-extension.json`/`GEMINI.md` for Gemini, `POWER.md`/`mcp.json` for Kiro — see e.g.
- * `targets/gemini/bundle.test.ts`/`targets/kiro/bundle.test.ts` "emitted paths" assertions), not
+ * the Gemini and Kiro bundler suites in `@ai-plugin-marketplace/normalizer`), not
  * merely "has a `plugins/` directory".
  *
  * `README.md`/`LICENSE` are deliberately EXCLUDED from this list (issue #89): the template repo
  * (commit d2d9923, "adopt generated registries and repo-root Gemini/Kiro emission") moved them
  * from per-plugin source to the repo root, where they are canonical, author-owned, SHARED
- * artifacts the bundlers never copy (see `targets/gemini/bundle.ts`, `targets/kiro/bundle.ts`).
+ * artifacts the bundlers never copy (see the Gemini and Kiro bundlers in `@ai-plugin-marketplace/normalizer`).
  * Requiring them here would make every current (post-d2d9923) checkout look permanently
  * incomplete.
  *

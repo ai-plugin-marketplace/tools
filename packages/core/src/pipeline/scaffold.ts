@@ -28,15 +28,17 @@
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 
-import { scaffoldClaudeFiles } from '../targets/claude/scaffold.js';
-import { scaffoldCodexFiles } from '../targets/codex/scaffold.js';
-import { scaffoldCursorFiles } from '../targets/cursor/scaffold.js';
-import { scaffoldGeminiFiles } from '../targets/gemini/scaffold.js';
-import { scaffoldKiroFiles } from '../targets/kiro/scaffold.js';
-import { scaffoldOpenPluginsFiles } from '../targets/open-plugins/scaffold.js';
-import { scaffoldVercelFiles } from '../targets/vercel/scaffold.js';
-import type { ScaffoldedFile, TargetScaffoldOptions } from '../targets/scaffold-kit.js';
-import { INITIAL_PLUGIN_VERSION } from '../targets/scaffold-kit.js';
+import {
+  INITIAL_PLUGIN_VERSION,
+  scaffoldClaudeFiles,
+  scaffoldCodexFiles,
+  scaffoldCursorFiles,
+  scaffoldGeminiFiles,
+  scaffoldKiroFiles,
+  scaffoldOpenPluginsFiles,
+  scaffoldVercelFiles,
+} from '@ai-plugin-marketplace/normalizer';
+import type { ScaffoldedFile, TargetScaffoldOptions } from '@ai-plugin-marketplace/normalizer';
 import { DEFAULT_SCAFFOLD_TARGETS, TARGET_IDS } from './types.js';
 import type { AddTargetOutcome, ScaffoldOptions, SupportReport, TargetId } from './types.js';
 import { TARGET_MIN_REQUIRED } from './validate.js';

@@ -3,9 +3,8 @@
  *
  * `runBuild` loads each plugin's envelope, dispatches to the per-target build steps, writes the
  * generated artifacts, and (per §5.4) runs validation before returning. The pipeline holds no
- * target-specific transformation logic — it dispatches to the per-target internal modules under
- * `targets/<id>/` (§7.2). Cross-target imports between `targets/<X>` and `targets/<Y>` are
- * forbidden, but the pipeline is permitted to orchestrate all of them.
+ * target-specific transformation logic — it dispatches to the per-target functions exported by
+ * `@ai-plugin-marketplace/normalizer` (§7.2) and orchestrates all of them.
  *
  * **Sentinel scope (§4.3).** Only the in-plugin-dir generated hook JSONs (`hooks/claude.json`,
  * `hooks/hooks.json`, `hooks/cursor.json`) carry a `_generated` JSON sentinel. The `dist/**` bundle trees are
@@ -20,16 +19,18 @@ import * as os from 'node:os';
 import * as path from 'node:path';
 import { performance } from 'node:perf_hooks';
 
-import { PAYLOAD_ADAPTER_FILENAME, PAYLOAD_ADAPTER_SOURCE } from '../hooks/payload-adapter.js';
-import { parseClaudeHooksYaml } from '../targets/claude/transform.js';
 import {
+  CURSOR_SHIM_FILENAME,
+  CURSOR_SHIM_RUNNER_SOURCE,
+  PAYLOAD_ADAPTER_FILENAME,
+  PAYLOAD_ADAPTER_SOURCE,
+  bundleGeminiPlugin,
+  bundleKiroPlugin,
   convertClaudeHooksYamlToCursorJson,
+  convertClaudeHooksYamlToGeminiJson,
   cursorDocHasGatingHook,
-} from '../targets/cursor/transform.js';
-import { CURSOR_SHIM_FILENAME, CURSOR_SHIM_RUNNER_SOURCE } from '../targets/cursor/shim-runner.js';
-import { convertClaudeHooksYamlToGeminiJson } from '../targets/gemini/transform.js';
-import { bundleGeminiPlugin } from '../targets/gemini/bundle.js';
-import { bundleKiroPlugin } from '../targets/kiro/bundle.js';
+  parseClaudeHooksYaml,
+} from '@ai-plugin-marketplace/normalizer';
 
 import type { AipmWorkspace } from '../config.js';
 

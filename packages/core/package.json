@@ -31,6 +31,7 @@
     "clean": "rimraf dist *.tsbuildinfo temp"
   },
   "dependencies": {
+    "@ai-plugin-marketplace/normalizer": "^0.1.0",
     "jiti": "^2.7.0",
     "jsonc-parser": "^3.2.0",
     "semver": "^7.7.4",

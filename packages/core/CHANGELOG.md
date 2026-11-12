@@ -1,5 +1,56 @@
 # @ai-plugin-marketplace/core
 
+## 0.11.0
+
+### Minor Changes
+
+- [#121](https://github.com/ai-plugin-marketplace/tools/pull/121) [`3d92a42`](https://github.com/ai-plugin-marketplace/tools/commit/3d92a42a8bfe9b7e3f275b3c59deaa5f73bb9701) Thanks [@mike-north](https://github.com/mike-north)! - Catch contributor-only skills that leak to users through install channels that scan the
+  repository instead of reading a registry (such as `npx skills add`).
+
+  `aipm validate` now fails with a new hard finding, `unpublished-skill-installable`, when a
+  `SKILL.md` is neither inside a published plugin nor toolkit-generated and its frontmatter lacks
+  `metadata.internal: true`. The finding names the file and the choice to make: mark the skill
+  internal if it is for contributors, or move it into a published plugin if it is for users. The
+  toolkit never edits the file. **A repo that keeps unmarked skills outside its plugins root (for
+  example under `.claude/skills/`) will start failing `aipm validate` until each one is marked or
+  moved.** `aipm build` is unaffected and does not fail on this finding. Skills recorded in the
+  repo's `skills-lock.json` (installed with the `skills` CLI) and symlinks to published skills are
+  exempt.
+
+  `aipm lint` reports the same check as `correctness/unpublished-skill-installable`, plus three new
+  lint-only rules:
+  - `correctness/published-skill-internal` (warn): a published skill is marked internal and so is
+    hidden from `skills` CLI users.
+  - `correctness/plugin-self-containment` (error): a manifest path or markdown link in a plugin
+    resolves outside the plugin's directory, so it will be missing once the plugin is installed.
+  - `correctness/unpublished-skill-reference` (warn): published content mentions an unpublished
+    skill by name.
+
+  `FindingCode` gains the `unpublished-skill-installable` member, and `ValidateOptions` gains
+  `skipPublishedSurfaceBoundary`, which `build` uses for its post-build validation.
+
+### Patch Changes
+
+- [#109](https://github.com/ai-plugin-marketplace/tools/pull/109) [`37bb067`](https://github.com/ai-plugin-marketplace/tools/commit/37bb067b1f0312a58b8499693cae8663073991c8) Thanks [@mike-north](https://github.com/mike-north)! - Fix `aipm lint` staying silent for a plugin whose `aipm.config.ts` cannot be resolved — cases
+  `aipm validate` (hard `envelope-invalid`) and `aipm build` (thrown `ConfigLoadError`) already
+  caught. The `schema/envelope-shape` rule now fires for every envelope-load failure, not only a
+  schema violation: a plugin-shaped directory missing `aipm.config.ts`, and a config file that is
+  present but cannot be imported (syntax error, no usable default export). Both emit the same
+  `envelope-invalid`-backed, `error`-severity diagnostic `validate` reports for the identical tree,
+  carrying the config loader's own message verbatim, so the three surfaces agree instead of `lint`
+  reporting a clean bill of health for a broken plugin.
+
+- [#111](https://github.com/ai-plugin-marketplace/tools/pull/111) [`39b08b6`](https://github.com/ai-plugin-marketplace/tools/commit/39b08b6e5347a262ecf56e002dbfc912082241f9) Thanks [@mike-north](https://github.com/mike-north)! - Stop copying `README.md`/`LICENSE` into Gemini CLI and Kiro bundle output (`bundleGeminiPlugin`,
+  `bundleKiroPlugin`, and the repo-root single-artifact-host emission built on them).
+
+  The `ai-plugin-marketplace/template` repo moved `README.md`/`LICENSE` from per-plugin source to
+  the repo root, where they are canonical, author-owned files backing the single emitted Gemini
+  extension / Kiro power — never a per-plugin generated copy. The bundlers previously still tried to
+  copy a plugin's own `README.md`/`LICENSE` (when present) into `dist/gemini/<plugin>/`,
+  `dist/kiro/<plugin>/`, and the repo-root artifact set, which diverged from the template's actual
+  output and, for repo-root emission, could trip the `root-artifact-collision` guard against the
+  repo's real root `README.md`/`LICENSE`.
+
 ## 0.10.0
 
 ### Minor Changes

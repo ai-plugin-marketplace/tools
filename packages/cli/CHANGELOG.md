@@ -1,5 +1,39 @@
 # @ai-plugin-marketplace/cli
 
+## 0.8.0
+
+### Minor Changes
+
+- [#121](https://github.com/ai-plugin-marketplace/tools/pull/121) [`3d92a42`](https://github.com/ai-plugin-marketplace/tools/commit/3d92a42a8bfe9b7e3f275b3c59deaa5f73bb9701) Thanks [@mike-north](https://github.com/mike-north)! - Catch contributor-only skills that leak to users through install channels that scan the
+  repository instead of reading a registry (such as `npx skills add`).
+
+  `aipm validate` now fails with a new hard finding, `unpublished-skill-installable`, when a
+  `SKILL.md` is neither inside a published plugin nor toolkit-generated and its frontmatter lacks
+  `metadata.internal: true`. The finding names the file and the choice to make: mark the skill
+  internal if it is for contributors, or move it into a published plugin if it is for users. The
+  toolkit never edits the file. **A repo that keeps unmarked skills outside its plugins root (for
+  example under `.claude/skills/`) will start failing `aipm validate` until each one is marked or
+  moved.** `aipm build` is unaffected and does not fail on this finding. Skills recorded in the
+  repo's `skills-lock.json` (installed with the `skills` CLI) and symlinks to published skills are
+  exempt.
+
+  `aipm lint` reports the same check as `correctness/unpublished-skill-installable`, plus three new
+  lint-only rules:
+  - `correctness/published-skill-internal` (warn): a published skill is marked internal and so is
+    hidden from `skills` CLI users.
+  - `correctness/plugin-self-containment` (error): a manifest path or markdown link in a plugin
+    resolves outside the plugin's directory, so it will be missing once the plugin is installed.
+  - `correctness/unpublished-skill-reference` (warn): published content mentions an unpublished
+    skill by name.
+
+  `FindingCode` gains the `unpublished-skill-installable` member, and `ValidateOptions` gains
+  `skipPublishedSurfaceBoundary`, which `build` uses for its post-build validation.
+
+### Patch Changes
+
+- Updated dependencies [[`37bb067`](https://github.com/ai-plugin-marketplace/tools/commit/37bb067b1f0312a58b8499693cae8663073991c8), [`39b08b6`](https://github.com/ai-plugin-marketplace/tools/commit/39b08b6e5347a262ecf56e002dbfc912082241f9), [`3d92a42`](https://github.com/ai-plugin-marketplace/tools/commit/3d92a42a8bfe9b7e3f275b3c59deaa5f73bb9701)]:
+  - @ai-plugin-marketplace/core@0.11.0
+
 ## 0.7.0
 
 ### Minor Changes

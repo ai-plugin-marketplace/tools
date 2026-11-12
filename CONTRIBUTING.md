@@ -26,11 +26,16 @@ before each commit. If the hook fails, fix the reported issues then re-stage and
 
 ## Adding a new target
 
-1. Create `packages/core/src/targets/<id>/` with `schemas.ts`, `transform.ts`, `validate.ts`,
-   `scaffold.ts`, and (if it produces a standalone bundle) `bundle.ts`.
-2. Add `<id>` to `TARGET_IDS` in `packages/core/src/pipeline/types.ts` and `TargetId` union.
-3. Wire into the pipeline orchestrators (`build.ts`, `validate.ts`, `scaffold.ts`).
-4. Add the target's cross-import isolation rule to `eslint.config.mjs`.
+Host-specific code lives in [`@ai-plugin-marketplace/normalizer`](https://github.com/ai-plugin-marketplace/normalizer),
+which `core` depends on. A new target lands there first.
+
+1. In the normalizer repository, create `src/targets/<id>/` with `schemas.ts`, `transform.ts`,
+   `validate.ts`, `scaffold.ts`, and (if it produces a standalone bundle) `bundle.ts`; export what
+   the pipeline needs from `src/index.ts`; add the target to the cross-import isolation rule in
+   its `eslint.config.mjs`; release it.
+2. Here, raise the `@ai-plugin-marketplace/normalizer` range in `packages/core/package.json`.
+3. Add `<id>` to `TARGET_IDS` in `packages/core/src/pipeline/types.ts` and `TargetId` union.
+4. Wire into the pipeline orchestrators (`build.ts`, `validate.ts`, `scaffold.ts`).
 5. Run `pnpm run check` — green is the exit criterion.
 
 See [`docs/specs/architecture.md`](./docs/specs/architecture.md) §12.4 and §12.5 for the internal

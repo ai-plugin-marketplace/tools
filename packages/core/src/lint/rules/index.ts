@@ -20,7 +20,13 @@ import {
   rootArtifactFreshnessRule,
 } from './legacy-freshness.js';
 import { targetSchemaRule } from './legacy-schema.js';
+import { pluginSelfContainmentRule } from './plugin-self-containment.js';
+import {
+  publishedSkillInternalRule,
+  unpublishedSkillInstallableRule,
+} from './skill-internal-marker.js';
 import { unknownHookEventRule } from './unknown-hook-event.js';
+import { unpublishedSkillReferenceRule } from './unpublished-skill-reference.js';
 
 // Re-exported for `pipeline/validate.ts`'s direct-rule-invocation wiring; the four new §3.2
 // rules (brokenFileRefRule et al.) are consumed only via `PER_PLUGIN_RULES` (below) and directly
@@ -37,6 +43,7 @@ export {
   registryFreshnessRule,
   rootArtifactFreshnessRule,
   targetSchemaRule,
+  unpublishedSkillInstallableRule,
   versionConsistencyRule,
 };
 
@@ -64,6 +71,7 @@ export const PER_PLUGIN_RULES: readonly Rule[] = [
   unknownHookEventRule,
   invalidMatcherRule,
   duplicateComponentNameRule,
+  pluginSelfContainmentRule,
 ];
 
 /** Rules scoped to the whole repo, run once (not per plugin). */
@@ -71,6 +79,9 @@ export const REPO_SCOPED_RULES: readonly Rule[] = [
   defaultMarketplaceNameRule,
   registryFreshnessRule,
   rootArtifactFreshnessRule,
+  unpublishedSkillInstallableRule,
+  publishedSkillInternalRule,
+  unpublishedSkillReferenceRule,
 ];
 
 /**

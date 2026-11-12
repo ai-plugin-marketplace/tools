@@ -1101,7 +1101,12 @@ export async function runBuild(targetPath: string, opts?: BuildOptions): Promise
 
   // §5.4: build runs validate before returning success. Skip freshness here — we just wrote the
   // artifacts, so they are fresh by construction; running it would be redundant work.
-  const validation = await runValidate(targetPath, { skipFreshness: true });
+  // The published-surface boundary check is skipped too: it concerns contributor files outside the
+  // plugins, which is `validate`'s business, not a reason for a build to fail.
+  const validation = await runValidate(targetPath, {
+    skipFreshness: true,
+    skipPublishedSurfaceBoundary: true,
+  });
   if (opts?.failFast && !validation.passed) {
     const hardFindings = validation.findings.filter((f) => f.severity === 'hard');
     const summary = hardFindings

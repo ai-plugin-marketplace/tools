@@ -58,6 +58,13 @@ export default defineRepoConfig({ pluginsRoot: 'agent-plugins', distDir: 'agent-
 
 `aipm scaffold` / `build` / `validate` then operate against the relocated root. Full step-by-step: [**Embedding a marketplace in an existing software repo**](./docs/guides/embedded-marketplace.md).
 
+## Published vs. contributor skills
+
+`aipm` publishes the plugins under your plugins root. Skills meant only for the repo's own
+contributors (for example under `.claude/skills/`) stay where the agent host loads them, and
+`aipm validate` checks that they don't leak to users through install channels that scan the
+repository. See [**Published vs. contributor skills**](./docs/guides/published-vs-contributor-skills.md).
+
 ## Authoring hook handlers
 
 Any plugin that authors `hooks/claude.yaml` also gets a generated `hooks/payload-adapter`: a static

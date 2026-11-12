@@ -26,7 +26,7 @@ import { docsUrlFor } from './docs-url.js';
 const RULE_ID = 'correctness/broken-file-ref';
 
 /** A file-ref-shaped string value found while walking a parsed document, with its JSON/YAML path. */
-interface FoundRef {
+export interface FoundRef {
   path: (string | number)[];
   ref: string;
 }
@@ -39,37 +39,56 @@ interface FoundRef {
  */
 const PATH_BEARING_KEYS: ReadonlySet<string> = new Set(['hooks', 'commands', 'agents', 'skills']);
 
-/** Recursively collect every `./`-prefixed string value within an already-scoped subtree. */
-function collectRefs(value: unknown, pathSoFar: (string | number)[], out: FoundRef[]): void {
+/** The reference shape this rule checks: the `./`-prefixed form every target schema uses. */
+function isDotSlashRef(value: string): boolean {
+  return value.startsWith('./');
+}
+
+/** Recursively collect every string value accepted by `isRef` within an already-scoped subtree. */
+function collectRefs(
+  value: unknown,
+  pathSoFar: (string | number)[],
+  out: FoundRef[],
+  isRef: (value: string) => boolean,
+): void {
   if (typeof value === 'string') {
-    if (value.startsWith('./')) out.push({ path: pathSoFar, ref: value });
+    if (isRef(value)) out.push({ path: pathSoFar, ref: value });
     return;
   }
   if (Array.isArray(value)) {
     value.forEach((v, i) => {
-      collectRefs(v, [...pathSoFar, i], out);
+      collectRefs(v, [...pathSoFar, i], out, isRef);
     });
     return;
   }
   if (value !== null && typeof value === 'object') {
-    for (const [k, v] of Object.entries(value)) collectRefs(v, [...pathSoFar, k], out);
+    for (const [k, v] of Object.entries(value)) collectRefs(v, [...pathSoFar, k], out, isRef);
   }
 }
 
 /**
- * Collect `./`-prefixed refs only from {@link PATH_BEARING_KEYS} top-level fields of a parsed
- * manifest/frontmatter value — never from prose fields like `description`.
+ * Collect refs only from {@link PATH_BEARING_KEYS} top-level fields of a parsed
+ * manifest/frontmatter value — never from prose fields like `description`. `isRef` decides which
+ * string values count as a reference; it defaults to this rule's `./`-prefixed shape. Shared with
+ * `correctness/plugin-self-containment`, which inspects the same fields for a wider set of shapes.
  */
-function collectTopLevelRefs(value: unknown, out: FoundRef[]): void {
+export function collectTopLevelRefs(
+  value: unknown,
+  out: FoundRef[],
+  isRef: (value: string) => boolean = isDotSlashRef,
+): void {
   if (value === null || typeof value !== 'object' || Array.isArray(value)) return;
   for (const [key, v] of Object.entries(value)) {
     if (!PATH_BEARING_KEYS.has(key)) continue;
-    collectRefs(v, [key], out);
+    collectRefs(v, [key], out, isRef);
   }
 }
 
-/** Candidate manifest/frontmatter files this rule scans, relative to the plugin directory. */
-function candidateRelPaths(pluginDir: string): string[] {
+/**
+ * Candidate manifest/frontmatter files a plugin may author, relative to the plugin directory.
+ * The reference sites `correctness/broken-file-ref` and `correctness/plugin-self-containment` scan.
+ */
+export function candidateRelPaths(pluginDir: string): string[] {
   const rel: string[] = [
     '.claude-plugin/plugin.json',
     '.codex-plugin/plugin.json',

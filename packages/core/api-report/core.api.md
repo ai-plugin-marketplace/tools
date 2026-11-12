@@ -127,7 +127,7 @@ export interface Finding {
 }
 
 // @public
-export type FindingCode = 'envelope-invalid' | 'repo-config-invalid' | 'envelope-adherence' | 'schema-invalid' | 'name-consistency' | 'version-consistency' | 'mcp-key-sync' | 'marketplace-registration' | 'freshness' | 'single-artifact-host' | 'root-artifact-collision' | 'default-marketplace-name' | 'frontmatter-invalid' | 'metadata-dir-isolation' | 'open-plugins-conformance';
+export type FindingCode = 'envelope-invalid' | 'repo-config-invalid' | 'envelope-adherence' | 'schema-invalid' | 'name-consistency' | 'version-consistency' | 'mcp-key-sync' | 'marketplace-registration' | 'freshness' | 'single-artifact-host' | 'root-artifact-collision' | 'default-marketplace-name' | 'frontmatter-invalid' | 'metadata-dir-isolation' | 'open-plugins-conformance' | 'unpublished-skill-installable';
 
 // @public
 export interface Fix {
@@ -317,6 +317,7 @@ export function validate(targetPath: string, opts?: ValidateOptions): Promise<Va
 // @public
 export interface ValidateOptions {
     skipFreshness?: boolean;
+    skipPublishedSurfaceBoundary?: boolean;
 }
 
 // @public

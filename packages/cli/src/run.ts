@@ -37,6 +37,7 @@ import {
 } from '@ai-plugin-marketplace/core';
 import type {
   AddTargetOutcome,
+  BuildResult,
   Diagnostic,
   Finding,
   RefreshOutcome,
@@ -168,6 +169,39 @@ function reportValidation(result: ValidationResult, out: NodeJS.WritableStream):
     out.write(result.findings.length === 0 ? 'OK — no findings.\n' : 'OK — no hard findings.\n');
   }
   return result.passed;
+}
+
+/** A path as the user would type it: relative to the working directory when it is inside it. */
+function displayPath(absPath: string): string {
+  const rel = path.relative(process.cwd(), absPath);
+  return rel === '' || rel.startsWith('..') || path.isAbsolute(rel) ? absPath : rel;
+}
+
+/**
+ * Write the per-target outcome report of a build: for each plugin whose form differs from its
+ * authored source on at least one target (or could not be built for one), one line per target
+ * saying where that target's form of the plugin is, followed by one indented line per authored
+ * feature saying how the target delivers it (`native`, `projection` or `unavailable`, with any
+ * departures from the author's intent in brackets).
+ *
+ * A plugin whose source is every target's form is not listed: nothing about its output differs
+ * from the directory the author wrote. The findings that explain a departure or a failure are
+ * written with the validation findings, not here.
+ */
+function reportHostOutcomes(results: readonly BuildResult[], out: NodeJS.WritableStream): void {
+  for (const result of results) {
+    if (result.hosts.every((host) => host.status === 'source')) continue;
+    for (const host of result.hosts) {
+      const where = host.dir !== undefined ? displayPath(host.dir) : 'not built';
+      out.write(`[${result.plugin}] ${host.target}: ${where}\n`);
+      for (const outcome of host.outcomes) {
+        const fidelity = outcome.fidelity.length > 0 ? ` [${outcome.fidelity.join(', ')}]` : '';
+        out.write(
+          `    ${outcome.feature} '${outcome.subject}': ${outcome.implementation}${fidelity}\n`,
+        );
+      }
+    }
+  }
 }
 
 function reportSupport(report: SupportReport, out: NodeJS.WritableStream): void {
@@ -315,6 +349,9 @@ export async function run(argv: readonly string[], opts: RunOptions = {}): Promi
             `Built ${String(results.length)} plugin(s), ${String(artifactCount)} artifact(s).\n`,
           );
         }
+        // Written whether or not validation passed: when a target could not be built, this is
+        // where the user sees which targets were and which were not.
+        reportHostOutcomes(results, out);
         const passed = reportValidation(result, out);
         return passed ? 0 : 1;
       }

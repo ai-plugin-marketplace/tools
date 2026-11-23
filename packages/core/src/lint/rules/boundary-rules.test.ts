@@ -503,7 +503,7 @@ describe('rule registry (§3.6)', () => {
         'correctness/unpublished-skill-reference',
       ]),
     );
-    // §3.6: the rule table matches ALL_RULES exactly — 20 registered rules.
-    expect(registeredRuleIds()).toHaveLength(20);
+    // §3.6: the rule table matches ALL_RULES exactly — 21 registered rules.
+    expect(registeredRuleIds()).toHaveLength(21);
   });
 });

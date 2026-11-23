@@ -75,6 +75,7 @@ export interface BuildOptions {
 export interface BuildResult {
     artifacts: GeneratedFile[];
     durationMs: number;
+    hosts: HostBuildReport[];
     plugin: string;
     pluginDir: string;
 }
@@ -114,6 +115,14 @@ export type DiscoveryMode = 'aipm-repo' | 'claude-plugin' | 'open-plugins' | 'sk
 
 // @public
 export type Document = JsonDocument | YamlDocument | FrontmatterDocument;
+
+// @public
+export interface FeatureOutcome {
+    feature: string;
+    fidelity: ('stricter' | 'weaker' | 'late' | 'widened' | 'omitted')[];
+    implementation: 'native' | 'projection' | 'unavailable';
+    subject: string;
+}
 
 // @public
 export interface Finding {
@@ -158,6 +167,15 @@ export interface GeneratedFile {
 
 // @public
 export type GeneratedFileTarget = TargetId | 'shared';
+
+// @public
+export interface HostBuildReport {
+    dir?: string;
+    host?: string;
+    outcomes: FeatureOutcome[];
+    status: 'source' | 'projected' | 'failed';
+    target: TargetId;
+}
 
 // @public
 export function init(targetDir: string, opts?: InitOptions): Promise<InitOutcome>;

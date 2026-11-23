@@ -383,6 +383,11 @@ Default severity: `info` (advisory; these are judgment heuristics).
 - `portability/untranslatable-feature` — authored features that do not survive translation to a
   declared target (grounded in `adapter-system.md` §4.2.1 assertability tables; e.g. a hook
   event a target cannot express). Fires only for targets in the plugin's envelope.
+- `portability/host-projection` — how each authored feature that is stated once and delivered per
+  target (a skill's `audience`) reaches every target in the plugin's envelope. It reports the
+  findings of the same projection the build writes from, so a finding here is the reason a skill
+  was left out of, or renamed on, a target, or the reason a target (or the whole plugin) was not
+  built. Deterministic, and run by `validate()` as well as `lint()`; see §3.6 for its codes.
 
 > **L-D7 (normative).** Every heuristic rule (security, agent-ux) documents its false-positive
 > posture on its docs page and defaults to a non-blocking severity. Only deterministic rules
@@ -398,33 +403,35 @@ Default severity: `info` (advisory; these are judgment heuristics).
 > severity can vary (e.g. the freshness CI/local escalation, L-D4), the severity actually emitted
 > for a given diagnostic is not always the rule's default — see each row's note.
 
-| `FindingCode`                   | `ruleId`                                    | `category`    | `defaultSeverity` | Notes                                                                                                                            |
-| ------------------------------- | ------------------------------------------- | ------------- | ----------------- | -------------------------------------------------------------------------------------------------------------------------------- |
-| `envelope-invalid`              | `schema/envelope-shape`                     | `schema`      | `error`           |                                                                                                                                  |
-| `repo-config-invalid`           | _(none — repo-scoped orchestration)_        | —             | —                 | Not yet wrapped as a `Rule`; emitted directly by `validate()`'s top-level dispatch.                                              |
-| `schema-invalid`                | `schema/target-conformance`                 | `schema`      | `error`           |                                                                                                                                  |
-| `metadata-dir-isolation`        | `schema/target-conformance`                 | `schema`      | `error`           | Reserved; no longer emitted. Agent Plugins 1.0.0 keeps the manifest at the plugin root and has no metadata directory.            |
-| `open-plugins-conformance`      | `schema/target-conformance`                 | `schema`      | `error`           | Emitted `soft` (advisory) per its own finding; the rule's _default_ is `error`.                                                  |
-| `envelope-adherence`            | `correctness/envelope-adherence`            | `correctness` | `error`           |                                                                                                                                  |
-| `name-consistency`              | `correctness/name-consistency`              | `correctness` | `error`           |                                                                                                                                  |
-| `version-consistency`           | `correctness/version-consistency`           | `correctness` | `error`           | #84.                                                                                                                             |
-| `mcp-key-sync`                  | `correctness/mcp-key-sync`                  | `correctness` | `error`           |                                                                                                                                  |
-| `marketplace-registration`      | `correctness/marketplace-registration`      | `correctness` | `error`           |                                                                                                                                  |
-| `default-marketplace-name`      | `correctness/default-marketplace-name`      | `correctness` | `warn`            |                                                                                                                                  |
-| `frontmatter-invalid`           | `correctness/frontmatter-invalid`           | `correctness` | `error`           |                                                                                                                                  |
-| `freshness`                     | `correctness/freshness`                     | `correctness` | `error`           | Two rule instances share this id: plugin-scoped (hook JSONs/`dist/**`) and repo-scoped (registries). CI/local severity per L-D4. |
-| `freshness`                     | `correctness/root-artifact-freshness`       | `correctness` | `error`           | Third emitter of `freshness`, alongside `single-artifact-host`/`root-artifact-collision` below.                                  |
-| `single-artifact-host`          | `correctness/root-artifact-freshness`       | `correctness` | `error`           | Always `error` (not CI/local-sensitive).                                                                                         |
-| `root-artifact-collision`       | `correctness/root-artifact-freshness`       | `correctness` | `error`           | Always `error` (not CI/local-sensitive).                                                                                         |
-| `unpublished-skill-installable` | `correctness/unpublished-skill-installable` | `correctness` | `error`           | #118. Always `hard` in `validate()`; run once per repo alongside the other repo-scoped rules (L-D13).                            |
-
-The normalizer's skill-audience and source-reading codes (`skill-audience-invalid`,
-`skill-audience-omitted`, `skill-audience-widened`, `skill-audience-reduced`,
-`skill-audience-unenforced`, `skill-audience-conflict`, `skill-audience-prefix-invalid`,
-`skill-name-duplicate`, `skill-location-unsupported`, `source-unreadable`, `native-form-refuted`,
-`projection-not-implemented`) are members of the union
-so that every `@ai-plugin-marketplace/normalizer` finding is assignable to it. They come from the
-normalizer's host projection, which the toolkit does not invoke yet, so no rule owns them.
+| `FindingCode`                   | `ruleId`                                    | `category`    | `defaultSeverity` | Notes                                                                                                                                                                                                                                              |
+| ------------------------------- | ------------------------------------------- | ------------- | ----------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `envelope-invalid`              | `schema/envelope-shape`                     | `schema`      | `error`           |                                                                                                                                                                                                                                                    |
+| `repo-config-invalid`           | _(none — repo-scoped orchestration)_        | —             | —                 | Not yet wrapped as a `Rule`; emitted directly by `validate()`'s top-level dispatch.                                                                                                                                                                |
+| `schema-invalid`                | `schema/target-conformance`                 | `schema`      | `error`           |                                                                                                                                                                                                                                                    |
+| `metadata-dir-isolation`        | `schema/target-conformance`                 | `schema`      | `error`           | Reserved; no longer emitted. Agent Plugins 1.0.0 keeps the manifest at the plugin root and has no metadata directory.                                                                                                                              |
+| `open-plugins-conformance`      | `schema/target-conformance`                 | `schema`      | `error`           | Emitted `soft` (advisory) per its own finding; the rule's _default_ is `error`.                                                                                                                                                                    |
+| `envelope-adherence`            | `correctness/envelope-adherence`            | `correctness` | `error`           |                                                                                                                                                                                                                                                    |
+| `name-consistency`              | `correctness/name-consistency`              | `correctness` | `error`           |                                                                                                                                                                                                                                                    |
+| `version-consistency`           | `correctness/version-consistency`           | `correctness` | `error`           | #84.                                                                                                                                                                                                                                               |
+| `mcp-key-sync`                  | `correctness/mcp-key-sync`                  | `correctness` | `error`           |                                                                                                                                                                                                                                                    |
+| `marketplace-registration`      | `correctness/marketplace-registration`      | `correctness` | `error`           |                                                                                                                                                                                                                                                    |
+| `default-marketplace-name`      | `correctness/default-marketplace-name`      | `correctness` | `warn`            |                                                                                                                                                                                                                                                    |
+| `frontmatter-invalid`           | `correctness/frontmatter-invalid`           | `correctness` | `error`           |                                                                                                                                                                                                                                                    |
+| `freshness`                     | `correctness/freshness`                     | `correctness` | `error`           | Two rule instances share this id: plugin-scoped (hook JSONs/`dist/**`) and repo-scoped (registries). CI/local severity per L-D4.                                                                                                                   |
+| `freshness`                     | `correctness/root-artifact-freshness`       | `correctness` | `error`           | Third emitter of `freshness`, alongside `single-artifact-host`/`root-artifact-collision` below.                                                                                                                                                    |
+| `single-artifact-host`          | `correctness/root-artifact-freshness`       | `correctness` | `error`           | Always `error` (not CI/local-sensitive).                                                                                                                                                                                                           |
+| `root-artifact-collision`       | `correctness/root-artifact-freshness`       | `correctness` | `error`           | Always `error` (not CI/local-sensitive).                                                                                                                                                                                                           |
+| `unpublished-skill-installable` | `correctness/unpublished-skill-installable` | `correctness` | `error`           | #118. Always `hard` in `validate()`; run once per repo alongside the other repo-scoped rules (L-D13).                                                                                                                                              |
+| `skill-audience-invalid`        | `portability/host-projection`               | `portability` | `error`           | Reported by `@ai-plugin-marketplace/normalizer` when it projects a skill's `audience` onto each declared target; severity is each finding's own. A `hard` finding about the source fails the plugin's build, one about a target fails that target. |
+| `skill-audience-omitted`        | `portability/host-projection`               | `portability` | `error`           | As `skill-audience-invalid`.                                                                                                                                                                                                                       |
+| `skill-audience-widened`        | `portability/host-projection`               | `portability` | `error`           | As `skill-audience-invalid`.                                                                                                                                                                                                                       |
+| `skill-audience-reduced`        | `portability/host-projection`               | `portability` | `error`           | As `skill-audience-invalid`.                                                                                                                                                                                                                       |
+| `skill-audience-unenforced`     | `portability/host-projection`               | `portability` | `error`           | As `skill-audience-invalid`.                                                                                                                                                                                                                       |
+| `skill-audience-conflict`       | `portability/host-projection`               | `portability` | `error`           | As `skill-audience-invalid`.                                                                                                                                                                                                                       |
+| `skill-audience-prefix-invalid` | `portability/host-projection`               | `portability` | `error`           | As `skill-audience-invalid`.                                                                                                                                                                                                                       |
+| `skill-name-duplicate`          | `portability/host-projection`               | `portability` | `error`           | As `skill-audience-invalid`.                                                                                                                                                                                                                       |
+| `skill-location-unsupported`    | `portability/host-projection`               | `portability` | `error`           | As `skill-audience-invalid`.                                                                                                                                                                                                                       |
+| `source-unreadable`             | `portability/host-projection`               | `portability` | `error`           | As `skill-audience-invalid`.                                                                                                                                                                                                                       |
 
 New (non-legacy) rules — no `FindingCode` predecessor, `legacyCode` unset. These run under
 `lint()` only; `validate()` does not invoke them:
@@ -439,15 +446,14 @@ New (non-legacy) rules — no `FindingCode` predecessor, `legacyCode` unset. The
 | `correctness/plugin-self-containment`     | `correctness` | `error`           |
 | `correctness/unpublished-skill-reference` | `correctness` | `warn`            |
 
-This table's rule set matches `ALL_RULES` exactly (20 registered rules: `envelopeShapeRule`,
-`targetSchemaRule`, `envelopeAdherenceRule`, `frontmatterParsesRule`, `pluginFreshnessRule`,
+This table's rule set matches `ALL_RULES` exactly (21 registered rules: `envelopeShapeRule`,
+`targetSchemaRule`, `envelopeAdherenceRule`, `frontmatterParsesRule`, `hostProjectionRule`, `pluginFreshnessRule`,
 `brokenFileRefRule`, `unknownHookEventRule`, `invalidMatcherRule`, `duplicateComponentNameRule`,
 `pluginSelfContainmentRule`, `unpublishedSkillReferenceRule`, `defaultMarketplaceNameRule`,
 `registryFreshnessRule`, `rootArtifactFreshnessRule`, `unpublishedSkillInstallableRule`,
 `publishedSkillInternalRule`, `nameConsistencyRule`, `versionConsistencyRule`, `mcpKeySyncRule`,
-`marketplaceRegistrationRule`) and every entry in the closed `FindingCode` union (26 codes: `repo-config-invalid` explicitly called
-out above as not-yet-rule-wrapped, and the ten normalizer projection codes listed above as
-unowned, rather than omitted).
+`marketplaceRegistrationRule`) and every entry in the closed `FindingCode` union (26 codes,
+`repo-config-invalid` explicitly called out above as not-yet-rule-wrapped rather than omitted).
 
 ---
 

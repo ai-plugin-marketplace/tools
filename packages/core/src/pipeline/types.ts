@@ -108,8 +108,71 @@ export interface BuildResult {
   pluginDir: string;
   /** Every file the build produced or verified as up-to-date. */
   artifacts: GeneratedFile[];
+  /**
+   * How the plugin reached each target of its envelope, in envelope order: where the target's form
+   * of the plugin is, and how each authored feature is delivered there.
+   */
+  hosts: HostBuildReport[];
   /** Wall-clock time in milliseconds. */
   durationMs: number;
+}
+
+/**
+ * How one authored feature of a plugin is delivered on one target: the per-feature, per-host
+ * outcome the unified content model defines.
+ *
+ * `implementation` says how the target delivers the feature: `native` (the host has it),
+ * `projection` (a substitute built from what the host offers) or `unavailable` (nothing in the
+ * target's output delivers it). `fidelity` lists every way the delivered form departs from what
+ * the author stated; an empty list means it is honoured in full, and `unavailable` always carries
+ * exactly `omitted`. The findings that explain a departure are reported with the build's other
+ * findings.
+ *
+ * @public
+ */
+export interface FeatureOutcome {
+  /** The feature reported on, for example `skills.audience`. */
+  feature: string;
+  /** The authored item the feature belongs to, for example a skill's name. */
+  subject: string;
+  /** How the target delivers the feature. */
+  implementation: 'native' | 'projection' | 'unavailable';
+  /** Every departure from the author's intent; empty means none. */
+  fidelity: ('stricter' | 'weaker' | 'late' | 'widened' | 'omitted')[];
+}
+
+/**
+ * What a build produced for one target of a plugin's envelope.
+ *
+ * `status` says where the target's form of the plugin comes from:
+ *
+ * - `source` — the authored plugin directory is already the target's form (or, for a target that
+ *   is always bundled, its bundle needed no change). Nothing is generated for the target beyond
+ *   what the build has always written.
+ * - `projected` — the target's form differs from the authored source, so the build generated it:
+ *   a tree of its own under the dist root, or the target's bundle with the differences applied.
+ * - `failed` — the target's form could not be built (a `hard` finding names the reason). Nothing
+ *   is emitted for the target, and no registry lists the plugin for it.
+ *
+ * @public
+ */
+export interface HostBuildReport {
+  /** The target. */
+  target: TargetId;
+  /**
+   * The unified content model's name for the target's host (for example `claude-code`). Absent for
+   * a target the model does not cover yet; such a target reports no outcomes.
+   */
+  host?: string;
+  /** Where the target's form comes from; see the interface description. */
+  status: 'source' | 'projected' | 'failed';
+  /**
+   * Absolute path of the directory holding the target's form of the plugin: the plugin directory
+   * itself, or a generated directory under the dist root. Absent when `status` is `failed`.
+   */
+  dir?: string;
+  /** One outcome per authored feature and subject on this target. */
+  outcomes: FeatureOutcome[];
 }
 
 /**
@@ -233,11 +296,12 @@ export interface ValidationResult {
  * `skill-audience-reduced`, `skill-audience-unenforced`, `skill-audience-conflict`,
  * `skill-audience-prefix-invalid`, `skill-name-duplicate`, `skill-location-unsupported`,
  * `source-unreadable`, `native-form-refuted`, `projection-not-implemented` — codes defined by
- * `@ai-plugin-marketplace/normalizer` for a skill's audience declaration and how it is carried to
- * each host (including a host form the capability grid records as failing its evaluation, and a
- * projection the grid calls for that the normalizer cannot build yet), and for authored source a
- * build cannot read safely. They are listed here so every normalizer finding is assignable to this type; their
- * meaning and severity are the normalizer's (see its `FindingCode`).
+ * `@ai-plugin-marketplace/normalizer` for a skill's audience declaration (`audience` and
+ * `audience-fallback` in `SKILL.md`) and its projection onto each target. They cover authored source
+ * a build cannot read safely, a native form the capability grid records as failing evaluation, and
+ * a projection the grid calls for that the normalizer cannot build yet. The normalizer defines
+ * their meaning and severity. A `hard` source finding fails every target for the plugin, while a
+ * `hard` target finding fails only that target.
  *
  * @public
  */

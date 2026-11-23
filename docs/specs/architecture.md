@@ -327,6 +327,23 @@ Emit PluginBuild artifacts (write generated files into plugin dir + dist/)
 
 The **transform step** is a single named seam. In v0.1.0 it performs only mechanical transformations (§7). In a future release, a JSX renderer slots into this seam (§12.4).
 
+#### 5.2.1 Per-target output
+
+For most plugins the authored directory is already what a target installs, and the registries list it. Some authored features are stated once and delivered differently per target; the first is a skill's `audience` (`audience` / `audience-fallback` in `SKILL.md` frontmatter), which no target may receive as written. For each plugin the build asks `@ai-plugin-marketplace/normalizer` (`projectPluginForHosts`) what each declared target's form is, as an ordered list of file changes against the authored source, and places the result as follows:
+
+| Target's form                                               | Where it lives                                                                   | Registry `source`        |
+| ----------------------------------------------------------- | -------------------------------------------------------------------------------- | ------------------------ |
+| Needs no change                                             | The authored plugin directory, as before                                         | `./plugins/<name>`       |
+| Needs changes (Claude, Codex, Cursor, Open Plugins, Vercel) | `dist/<target>/<name>/`: a copy of the plugin directory with the changes applied | `./dist/<target>/<name>` |
+| Gemini, Kiro (always bundled)                               | `dist/<target>/<name>/` and the repo root: the bundle, with any changes applied  | n/a                      |
+| Could not be built                                          | Nowhere: nothing is emitted, and a tree from an earlier build is removed         | Not listed               |
+
+A plugin that states no audience has no changes for any target, so its output is exactly what it was before this step existed. The copy leaves out `node_modules` and `.git`. The authored directory is never modified.
+
+Findings from the projection are reported by validation under `portability/host-projection`. A `hard` finding about the source fails every target of that plugin; a `hard` finding about one target fails that target only. Sibling plugins are unaffected. The per-feature outcome of each target (`BuildResult.hosts`) is printed by `aipm build` for every plugin whose form differs from its source on some target.
+
+The layout is decided in one function (`placeHostForm` in `packages/core/src/pipeline/host-forms.ts`), and the same computed result feeds the build, registry generation, the repo-root artifacts and the freshness check (§10.5).
+
 ### 5.3 Validate phase
 
 Invoked by `aipm validate` (or as a subphase of `aipm build`). Inspects on-disk state (sources and generated outputs) and returns findings. Does not modify the filesystem.

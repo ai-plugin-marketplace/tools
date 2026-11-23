@@ -3,6 +3,7 @@
 import type { Rule } from '../types.js';
 import { brokenFileRefRule } from './broken-file-ref.js';
 import { duplicateComponentNameRule } from './duplicate-component-name.js';
+import { hostProjectionRule } from './host-projection.js';
 import { invalidMatcherRule } from './invalid-matcher.js';
 import {
   defaultMarketplaceNameRule,
@@ -36,6 +37,7 @@ export {
   envelopeAdherenceRule,
   envelopeShapeRule,
   frontmatterParsesRule,
+  hostProjectionRule,
   marketplaceRegistrationRule,
   mcpKeySyncRule,
   nameConsistencyRule,
@@ -66,6 +68,7 @@ export {
 export const PER_PLUGIN_RULES: readonly Rule[] = [
   envelopeAdherenceRule,
   frontmatterParsesRule,
+  hostProjectionRule,
   pluginFreshnessRule,
   brokenFileRefRule,
   unknownHookEventRule,

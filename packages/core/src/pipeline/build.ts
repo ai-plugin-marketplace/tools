@@ -11,7 +11,12 @@
  * wholly-generated and stay sentinel-less so they remain byte-identical to the committed
  * template oracle; freshness for those is a whole-tree regeneration compare (§10.5).
  *
- * @see docs/specs/architecture.md §5.2 (build phase), §5.4 (phase invariants), §7.2, §10.5
+ * **Per-target output (§5.2.1).** Where each target's form of a plugin lives, and which targets
+ * failed, is decided by `host-forms.ts`; this module writes what that decides and derives the
+ * registries and repo-root artifacts from the same result.
+ *
+ * @see docs/specs/architecture.md §5.2 (build phase), §5.2.1 (per-target output), §5.4 (phase
+ *   invariants), §7.2, §10.5
  */
 
 import * as fs from 'node:fs';
@@ -36,11 +41,26 @@ import type { AipmWorkspace } from '../config.js';
 
 import { discoverPlugins } from './discover.js';
 import {
+  applyHostFileChanges,
+  computePluginHostForms,
+  hostDistDir,
+  hostFormDir,
+  hostFormFor,
+  isBundledTarget,
+  writeHostTree,
+} from './host-forms.js';
+import type { PluginHostForms } from './host-forms.js';
+import {
   assertGeneratorNotDowngraded,
   getGeneratorVersion,
   type StampedArtifact,
 } from './generator-version.js';
-import { createConfigCache, loadPluginConfig, loadWorkspaceConfig } from './load-config.js';
+import {
+  createConfigCache,
+  loadPluginConfig,
+  loadRepoConfig,
+  loadWorkspaceConfig,
+} from './load-config.js';
 import type { ConfigCache } from './load-config.js';
 import { applyJsonSentinel, readSentinelVersion, sidecarContent, sidecarPath } from './sentinel.js';
 import type { SentinelMode } from './sentinel.js';
@@ -51,8 +71,10 @@ import type {
   Finding,
   GeneratedFile,
   GeneratedFileTarget,
+  HostBuildReport,
   TargetId,
 } from './types.js';
+import { TARGET_IDS } from './types.js';
 
 // ---------------------------------------------------------------------------
 // Shared generation primitives (consumed by build AND freshness — §10.5)
@@ -241,53 +263,119 @@ export function computePluginHookArtifacts(
 }
 
 /**
- * The set of `dist/**` bundle trees a plugin's envelope produces. Each entry names the absolute
- * destination directory and a `regenerate` closure that rebuilds the tree into an arbitrary
- * directory — used both to emit the real bundle (build) and to regenerate into a temp dir for
- * the byte-parity freshness compare (§10.5). Bundles are sentinel-less by design.
+ * A generated tree under `dist/` that holds one target's form of a plugin. Each entry names the
+ * absolute destination directory and a `regenerate` closure that rebuilds the tree into an
+ * arbitrary directory — used both to emit the real tree (build) and to regenerate into a temp dir
+ * for the byte-parity freshness compare (§10.5). The trees are sentinel-less by design.
+ *
+ * Two kinds of tree share this shape: the bundle a bundled target (Gemini, Kiro) always gets, and
+ * the tree any other target gets once its form differs from the authored source (see
+ * `host-forms.ts`).
  */
 export interface DistBundle {
   target: TargetId;
   /** Absolute destination directory under `dist/`. */
   destDir: string;
-  /** Rebuild the bundle into `into` (clears `into` first, per the bundlers' contract). */
+  /** Rebuild the tree into `into` (clears `into` first). */
   regenerate: (into: string) => void;
 }
 
+/** A target whose form is always produced by a bundler (see `isBundledTarget`). */
+type BundledTarget = 'gemini' | 'kiro';
+
 /**
- * Compute the `dist/**` bundles a plugin's envelope produces, **without writing**. Shared by
- * build (calls `regenerate(destDir)`) and freshness (calls `regenerate(tempDir)` then compares).
+ * Bundle a bundled target's form of a plugin into `into`: run the target's bundler (which clears
+ * `into` first), then apply the target's host changes to the result. The bundlers copy the parts
+ * of the plugin that host changes address to the same relative paths, so the changes apply to the
+ * bundle as they would to a copy of the source.
+ */
+function bundleHostForm(
+  target: BundledTarget,
+  pluginDir: string,
+  into: string,
+  forms: PluginHostForms,
+): void {
+  if (target === 'gemini') {
+    bundleGeminiPlugin(pluginDir, into);
+  } else {
+    bundleKiroPlugin(pluginDir, into);
+  }
+  applyHostFileChanges(into, hostFormFor(forms, target)?.changes ?? []);
+}
+
+/**
+ * Compute the generated `dist/**` trees a plugin's envelope produces, **without writing**. Shared
+ * by build (calls `regenerate(destDir)`) and freshness (calls `regenerate(tempDir)` then compares).
+ *
+ * One tree per target whose form is generated: a bundled target's bundle, and the own tree of any
+ * other target whose form differs from the authored source. A failed target produces no tree.
+ * Trees are returned in envelope order.
+ *
+ * @param forms - The plugin's host forms; computed from `pluginDir` and `envelope` when omitted.
+ *   Pass the value already in hand so the plugin is projected once.
  */
 export function computeDistBundles(
   pluginDir: string,
   distDir: string,
   envelope: readonly TargetId[],
+  forms: PluginHostForms = computePluginHostForms(pluginDir, envelope),
 ): DistBundle[] {
   const pluginName = path.basename(pluginDir);
-  const envelopeSet = new Set(envelope);
   const bundles: DistBundle[] = [];
 
-  if (envelopeSet.has('gemini')) {
-    bundles.push({
-      target: 'gemini',
-      destDir: path.join(distDir, 'gemini', pluginName),
-      regenerate: (into) => {
-        bundleGeminiPlugin(pluginDir, into);
-      },
-    });
-  }
-
-  if (envelopeSet.has('kiro')) {
-    bundles.push({
-      target: 'kiro',
-      destDir: path.join(distDir, 'kiro', pluginName),
-      regenerate: (into) => {
-        bundleKiroPlugin(pluginDir, into);
-      },
-    });
+  for (const form of forms.hosts) {
+    const { target } = form;
+    const destDir = hostDistDir(distDir, target, pluginName);
+    if (form.placement === 'bundle' && (target === 'gemini' || target === 'kiro')) {
+      bundles.push({
+        target,
+        destDir,
+        regenerate: (into) => {
+          bundleHostForm(target, pluginDir, into, forms);
+        },
+      });
+    } else if (form.placement === 'tree') {
+      bundles.push({
+        target,
+        destDir,
+        regenerate: (into) => {
+          writeHostTree(pluginDir, into, form.changes, distDir);
+        },
+      });
+    }
   }
 
   return bundles;
+}
+
+/**
+ * The `dist/<target>/<plugin>` directories that exist on disk but that a build of this plugin
+ * would remove, because the plugin no longer produces a tree there.
+ *
+ * A target that is not bundled gets a tree only while its form differs from the source, so its
+ * directory is orphaned as soon as it does not (or the target leaves the envelope, or fails). A
+ * bundled target's directory is orphaned only when the target is declared and failed; one left
+ * behind by a target dropped from the envelope is not this function's concern.
+ *
+ * Shared by build (which removes them) and freshness (which reports them).
+ */
+export function computeOrphanedDistDirs(
+  pluginDir: string,
+  distDir: string,
+  envelope: readonly TargetId[],
+  bundles: readonly DistBundle[],
+): { target: TargetId; dir: string }[] {
+  const pluginName = path.basename(pluginDir);
+  const produced = new Set(bundles.map((b) => b.target));
+  const declared = new Set(envelope);
+  const orphans: { target: TargetId; dir: string }[] = [];
+  for (const target of TARGET_IDS) {
+    if (produced.has(target)) continue;
+    if (isBundledTarget(target) && !declared.has(target)) continue;
+    const dir = hostDistDir(distDir, target, pluginName);
+    if (fs.existsSync(dir)) orphans.push({ target, dir });
+  }
+  return orphans;
 }
 
 // TODO(spec §4.3): sidecar sentinels for strict-schema dist artifacts (Gemini
@@ -312,6 +400,17 @@ export interface RegistryPluginInfo {
    * `source.path` for Codex). Honors a relocated `pluginsRoot`.
    */
   source: string;
+  /**
+   * Per-target replacement for {@link RegistryPluginInfo.source}, in the same form, for each
+   * target whose form of the plugin is a generated tree rather than the plugin directory. A target
+   * absent from this map installs from `source`.
+   */
+  targetSources?: Partial<Record<TargetId, string>>;
+  /**
+   * Declared targets whose form of the plugin could not be built. The plugin is left out of such a
+   * target's registry and repo-root artifact: listing it would publish a form that was not built.
+   */
+  failedTargets?: readonly TargetId[];
   /** The plugin's declared support envelope (`config.targets`). */
   envelope: readonly TargetId[];
   /** Optional one-line description from `aipm.config.ts`; maps to the entry `description`/`tags` host. */
@@ -397,6 +496,9 @@ function serializeRegistry(obj: unknown): string {
   return `${JSON.stringify(obj, null, 2)}\n`;
 }
 
+/** One registry entry's input: a plugin, with `source` already resolved for the registry's target. */
+type RegistryMember = Pick<RegistryPluginInfo, 'name' | 'source' | 'description' | 'keywords'>;
+
 /**
  * Build a Claude/Cursor (string-source) registry object from the workspace metadata and the
  * plugins whose envelope includes `target`. Entry shape:
@@ -405,7 +507,7 @@ function serializeRegistry(obj: unknown): string {
  */
 function buildStringSourceRegistry(
   workspace: AipmWorkspace,
-  plugins: readonly RegistryPluginInfo[],
+  plugins: readonly RegistryMember[],
 ): Record<string, unknown> {
   const { marketplace } = workspace;
   const registry: Record<string, unknown> = { name: marketplace.name };
@@ -432,7 +534,7 @@ function buildStringSourceRegistry(
  */
 function buildCodexRegistry(
   workspace: AipmWorkspace,
-  plugins: readonly RegistryPluginInfo[],
+  plugins: readonly RegistryMember[],
 ): Record<string, unknown> {
   const { marketplace } = workspace;
   return {
@@ -456,7 +558,7 @@ function buildCodexRegistry(
  */
 function buildOpenPluginsRegistry(
   workspace: AipmWorkspace,
-  plugins: readonly RegistryPluginInfo[],
+  plugins: readonly RegistryMember[],
 ): Record<string, unknown> {
   const { marketplace } = workspace;
   const registry: Record<string, unknown> = { name: marketplace.name };
@@ -483,6 +585,10 @@ function buildOpenPluginsRegistry(
  * exactly the plugins whose envelope includes that target, in the order given (callers pass plugins
  * sorted by discovery). Registries are sentinel-less.
  *
+ * An entry's `source` is the directory that holds that target's form of the plugin: the plugin
+ * directory, or the target's generated tree when one exists (`targetSources`). A plugin whose form
+ * for the target could not be built (`failedTargets`) is not listed.
+ *
  * The repo-root Open Plugins registry is byte-computed here like any other, but its WRITING is
  * routed through the collision-guarded generated-root sidecar path (OP-D5/VT-4) by the callers.
  *
@@ -498,8 +604,10 @@ export function computeRegistryArtifacts(
   const artifacts: RegistryArtifact[] = [];
 
   for (const target of REGISTRY_TARGETS) {
-    const members = plugins.filter((p) => p.envelope.includes(target));
-    if (members.length === 0) continue; // no plugin declares this target → no registry file
+    const members = plugins
+      .filter((p) => p.envelope.includes(target) && !(p.failedTargets ?? []).includes(target))
+      .map((p): RegistryMember => ({ ...p, source: p.targetSources?.[target] ?? p.source }));
+    if (members.length === 0) continue; // no plugin is built for this target → no registry file
 
     const obj =
       target === 'codex'
@@ -520,8 +628,9 @@ export function computeRegistryArtifacts(
 
 /**
  * Assemble the {@link RegistryPluginInfo} for every discovered plugin under `repoRoot`, loading
- * each plugin's `aipm.config.ts` for its envelope, description, and keywords. Shared by `runBuild`
- * and the freshness check so both feed `computeRegistryArtifacts` identical input.
+ * each plugin's `aipm.config.ts` for its envelope, description, and keywords, and computing its
+ * host forms for the per-target sources and failed targets. Shared by `runBuild` and the freshness
+ * check so both feed `computeRegistryArtifacts` identical input.
  *
  * @param repoRoot - Absolute repo root (the base for the `./`-prefixed `source`).
  * @param pluginDirs - Absolute plugin directories (already discovery-sorted).
@@ -532,13 +641,28 @@ export async function collectRegistryPlugins(
   cache?: ConfigCache,
 ): Promise<RegistryPluginInfo[]> {
   const infos: RegistryPluginInfo[] = [];
+  const distDir = path.join(repoRoot, (await loadRepoConfig(repoRoot)).distDir);
+  const repoRelative = (dir: string): string =>
+    `./${path.relative(repoRoot, dir).split(path.sep).join('/')}`;
   for (const pluginDir of pluginDirs) {
     const config = await loadPluginConfig(pluginDir, cache);
-    const source = `./${path.relative(repoRoot, pluginDir).split(path.sep).join('/')}`;
+    const forms = computePluginHostForms(pluginDir, config.targets);
+    const targetSources: Partial<Record<TargetId, string>> = {};
+    const failedTargets: TargetId[] = [];
+    for (const form of forms.hosts) {
+      if (form.failed) failedTargets.push(form.target);
+      if (form.placement === 'tree') {
+        targetSources[form.target] = repoRelative(
+          hostDistDir(distDir, form.target, path.basename(pluginDir)),
+        );
+      }
+    }
     infos.push({
       name: path.basename(pluginDir),
-      source,
+      source: repoRelative(pluginDir),
       envelope: config.targets,
+      ...(Object.keys(targetSources).length > 0 ? { targetSources } : {}),
+      ...(failedTargets.length > 0 ? { failedTargets } : {}),
       ...(config.description !== undefined ? { description: config.description } : {}),
       ...(config.keywords !== undefined ? { keywords: config.keywords } : {}),
     });
@@ -575,13 +699,13 @@ export function rootManifestPath(repoRoot: string): string {
  * at a throwaway temp directory — never the repo root or any real dir. Mirrors the
  * `regenerate`/temp pattern used by {@link computeDistBundles}.
  */
-function bundleHostToTemp(host: SingleArtifactHost, pluginDir: string): string {
+function bundleHostToTemp(
+  host: SingleArtifactHost,
+  pluginDir: string,
+  forms: PluginHostForms,
+): string {
   const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), `aipm-root-${host}-`));
-  if (host === 'gemini') {
-    bundleGeminiPlugin(pluginDir, tempDir);
-  } else {
-    bundleKiroPlugin(pluginDir, tempDir);
-  }
+  bundleHostForm(host, pluginDir, tempDir, forms);
   return tempDir;
 }
 
@@ -683,6 +807,10 @@ function singleArtifactHostFinding(
  * are independent: a repo where plugin A declares `gemini` and plugin B declares `kiro` emits both
  * (a root `gemini-extension.json` and a root `POWER.md` — distinct files).
  *
+ * The root artifact is the host's form of the plugin: the bundle with the plugin's host changes
+ * applied, exactly as under `dist/`. A declarer whose form for the host could not be built emits
+ * nothing for it (the finding that failed it is reported with the plugin's other findings).
+ *
  * @param repoRoot - Absolute repo root (where the artifacts live). Accepted for signature
  *   parallelism with {@link computeRegistryArtifacts}; the bundlers read only the plugin dir.
  * @param plugins - Discovered plugins with name/source/envelope (the registry plugin infos already
@@ -718,10 +846,12 @@ export function computeRootArtifacts(
     if (declarer === undefined) continue; // unreachable (length === 1), satisfies noUncheckedIndexedAccess
     // `source` is `./<rel>` POSIX from the repo root; resolve to the absolute plugin dir.
     const pluginDir = path.resolve(repoRoot, declarer.source);
+    const forms = computePluginHostForms(pluginDir, declarer.envelope);
+    if (hostFormFor(forms, host)?.failed === true) continue; // not built → no root artifact
 
     let tempDir: string | undefined;
     try {
-      tempDir = bundleHostToTemp(host, pluginDir);
+      tempDir = bundleHostToTemp(host, pluginDir, forms);
       for (const rel of collectFilesRelative(tempDir)) {
         // Tracked set is POSIX-separated (stable across platforms; the freshness oracle and
         // sidecar compare against this exact form).
@@ -860,8 +990,14 @@ function writeFileEnsuringDir(absPath: string, content: string): void {
 }
 
 /**
- * Build a single plugin: load envelope, emit in-plugin hook JSONs and dist bundles, and return
- * the `BuildResult` (without running validation — the caller orchestrates §5.4 validation once).
+ * Build a single plugin: load envelope, emit in-plugin hook JSONs and the generated dist trees,
+ * and return the `BuildResult` (without running validation — the caller orchestrates §5.4
+ * validation once).
+ *
+ * The plugin's host forms decide what is generated under `dist/`. A target whose form could not be
+ * built gets no tree, and a tree left by an earlier build that the plugin no longer produces is
+ * removed. The findings behind a failed target are not returned here: validation reports them, as
+ * it does every other finding.
  */
 async function buildOnePlugin(
   pluginDir: string,
@@ -875,6 +1011,9 @@ async function buildOnePlugin(
   const envelope = config.targets;
 
   const artifacts: GeneratedFile[] = [];
+
+  // Computed once, before anything is written, and shared by every step below.
+  const forms = computePluginHostForms(pluginDir, envelope);
 
   // ── In-plugin-dir generated hook JSONs (sentinel-carrying) ────────────────
   for (const hookArtifact of computePluginHookArtifacts(pluginDir, envelope)) {
@@ -892,8 +1031,10 @@ async function buildOnePlugin(
     });
   }
 
-  // ── dist/** bundle trees (sentinel-less, byte-parity with oracle) ──────────
-  for (const bundle of computeDistBundles(pluginDir, distDir, envelope)) {
+  // ── dist/** trees (sentinel-less, byte-parity with oracle) ─────────────────
+  // Written after the in-plugin hook files, so a target's own tree copies them as just generated.
+  const bundles = computeDistBundles(pluginDir, distDir, envelope, forms);
+  for (const bundle of bundles) {
     bundle.regenerate(bundle.destDir);
     for (const rel of collectFilesRelative(bundle.destDir)) {
       artifacts.push({
@@ -904,13 +1045,26 @@ async function buildOnePlugin(
     }
   }
 
-  // codex / vercel emit no mechanical build output — nothing to do. (cursor's hooks/cursor.json
-  // is emitted above via computePluginHookArtifacts; it has no dist bundle.)
+  for (const orphan of computeOrphanedDistDirs(pluginDir, distDir, envelope, bundles)) {
+    fs.rmSync(orphan.dir, { recursive: true });
+  }
+
+  const hosts = forms.hosts.map((form): HostBuildReport => {
+    const dir = hostFormDir(pluginDir, distDir, form);
+    return {
+      target: form.target,
+      ...(form.host !== undefined ? { host: form.host } : {}),
+      status: form.failed ? 'failed' : form.changes.length > 0 ? 'projected' : 'source',
+      ...(dir !== undefined ? { dir } : {}),
+      outcomes: form.outcomes,
+    };
+  });
 
   return {
     plugin: pluginName,
     pluginDir,
     artifacts,
+    hosts,
     durationMs: performance.now() - start,
   };
 }

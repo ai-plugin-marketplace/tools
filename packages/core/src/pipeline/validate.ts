@@ -27,6 +27,7 @@ import {
   collectFilesRelative,
   collectRegistryPlugins,
   computeDistBundles,
+  computeOrphanedDistDirs,
   computePluginHookArtifacts,
   computeRegistryArtifacts,
   computeRootArtifacts,
@@ -59,6 +60,7 @@ import {
   defaultMarketplaceNameRule,
   envelopeAdherenceRule,
   frontmatterParsesRule,
+  hostProjectionRule,
   marketplaceRegistrationRule,
   mcpKeySyncRule,
   nameConsistencyRule,
@@ -1261,8 +1263,10 @@ function freshnessFinding(
  * 1. **In-plugin hook JSONs** (`hooks/claude.json`, `hooks/hooks.json`) — recompute the expected
  *    bytes (transform + `_generated` sentinel) and compare to disk. A missing file, an absent or
  *    altered sentinel, or any byte difference (e.g. a hand-edit) is stale.
- * 2. **`dist/**` bundle trees** — regenerate into a temp dir and byte-compare the whole tree
- *    (file set + contents). Any divergence names the offending path.
+ * 2. **`dist/**` trees** (a bundled target's bundle, or the own tree of a target whose form
+ *    differs from the source) — regenerate into a temp dir and byte-compare the whole tree (file
+ *    set + contents). Any divergence names the offending path. A tree on disk that the plugin no
+ *    longer produces is stale too.
  *
  * Generation logic is shared with `runBuild` via `computePluginHookArtifacts` / `computeDistBundles`
  * so build output and the freshness oracle cannot drift.
@@ -1326,8 +1330,35 @@ export function checkFreshness(
     }
   }
 
-  // ── dist/** bundle trees (byte-parity via regeneration) ───────────────────
-  for (const bundle of computeDistBundles(pluginDir, distDir, envelope)) {
+  // ── dist/** trees (byte-parity via regeneration) ──────────────────────────
+  let bundles: ReturnType<typeof computeDistBundles>;
+  try {
+    bundles = computeDistBundles(pluginDir, distDir, envelope);
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    findings.push(
+      freshnessFinding(
+        ci,
+        pluginName,
+        `Unable to compute expected dist output: ${message}`,
+        `fix the plugin source and run \`aipm build\`.`,
+      ),
+    );
+    return findings;
+  }
+
+  for (const orphan of computeOrphanedDistDirs(pluginDir, distDir, envelope, bundles)) {
+    findings.push(
+      freshnessFinding(
+        ci,
+        pluginName,
+        `Generated directory 'dist/${path.relative(distDir, orphan.dir).split(path.sep).join('/')}' is stale — \`aipm build\` no longer produces a ${orphan.target} tree for this plugin.`,
+        `run \`aipm build\` to remove it.`,
+      ),
+    );
+  }
+
+  for (const bundle of bundles) {
     let tempDir: string | undefined;
     try {
       tempDir = regenerateBundleToTemp(bundle);
@@ -1768,6 +1799,11 @@ export async function runValidate(
     findings.push(
       ...(await frontmatterParsesRule.check(ctx)).map((d) => diagnosticToFinding(d, ci)),
     );
+
+    // ── 3c. Host projection ─────────────────────────────────────────────────
+    // How the plugin's authored features reach each declared target. A hard finding here is what
+    // failed the plugin (source) or one target (host) in the build.
+    findings.push(...(await hostProjectionRule.check(ctx)).map((d) => diagnosticToFinding(d, ci)));
 
     // ── 4. Cross-target consistency (§10.1 step 4: multi-target only; §10.3: schema blocks) ──
     if (envelope.length > 1 && !hasBlockingSchemaError) {

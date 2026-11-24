@@ -30,18 +30,24 @@ const BIN_PATH = path.join(CLI_DIR, 'dist', 'bin.js');
 
 const MANIFEST = `${JSON.stringify({ name: 'demo', version: '0.0.1', description: 'A demo plugin.' }, null, 2)}\n`;
 
-function skillMd(name: string, audience: 'user' | 'agent'): string {
-  return `---\nname: ${name}\ndescription: Use when testing the ${name} skill.\naudience: ${audience}\n---\n\n# ${name}\n`;
+function skillMd(name: string, audience?: string): string {
+  const key = audience === undefined ? '' : `audience: ${audience}\n`;
+  return `---\nname: ${name}\ndescription: Use when testing the ${name} skill.\n${key}---\n\n# ${name}\n`;
 }
 
-/** The authored repo: a workspace and one plugin for Claude Code, Codex and Vercel Skills. */
-const REPO_FILES: Record<string, string> = {
+/** A workspace and one plugin for Claude Code, Codex and Vercel Skills, with no skill yet. */
+const BASE_FILES: Record<string, string> = {
   'aipm.workspace.ts':
     "import { defineWorkspace } from '@ai-plugin-marketplace/core';\n\nexport default defineWorkspace({ marketplace: { name: 'audience-uat-marketplace' } });\n",
   'plugins/demo/aipm.config.ts':
     "import { defineConfig } from '@ai-plugin-marketplace/core';\n\nexport default defineConfig({ version: '0.0.1', targets: ['claude', 'codex', 'vercel'] });\n",
   'plugins/demo/.claude-plugin/plugin.json': MANIFEST,
   'plugins/demo/.codex-plugin/plugin.json': MANIFEST,
+};
+
+/** The authored repo of the main scenario: a user-only and an agent-only skill. */
+const REPO_FILES: Record<string, string> = {
+  ...BASE_FILES,
   'plugins/demo/skills/for-user/SKILL.md': skillMd('for-user', 'user'),
   'plugins/demo/skills/for-agent/SKILL.md': skillMd('for-agent', 'agent'),
 };
@@ -53,23 +59,36 @@ function read(...rel: string[]): string {
   return fs.readFileSync(path.join(repo, ...rel), 'utf-8');
 }
 
+const tempRepos: string[] = [];
+
+/** Write `files` into a fresh temp repo and return its path. */
+function writeRepo(files: Record<string, string>): string {
+  const dir = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'aipm-audience-uat-')));
+  tempRepos.push(dir);
+  for (const [rel, content] of Object.entries(files)) {
+    const abs = path.join(dir, ...rel.split('/'));
+    fs.mkdirSync(path.dirname(abs), { recursive: true });
+    fs.writeFileSync(abs, content);
+  }
+  return dir;
+}
+
+/** Run `aipm build` in `cwd` as a user would. */
+function aipmBuild(cwd: string): { code: number; stdout: string; stderr: string } {
+  const result = spawnSync(process.execPath, [BIN_PATH, 'build'], { cwd, encoding: 'utf-8' });
+  return { code: result.status ?? -1, stdout: result.stdout, stderr: result.stderr };
+}
+
 beforeAll(() => {
   // Real build, so the subprocess runs the same compiled artifact a real install would.
   execFileSync('pnpm', ['exec', 'tsc', '--build'], { cwd: CLI_DIR, stdio: 'inherit' });
 
-  repo = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'aipm-audience-uat-')));
-  for (const [rel, content] of Object.entries(REPO_FILES)) {
-    const abs = path.join(repo, ...rel.split('/'));
-    fs.mkdirSync(path.dirname(abs), { recursive: true });
-    fs.writeFileSync(abs, content);
-  }
-
-  const result = spawnSync(process.execPath, [BIN_PATH, 'build'], { cwd: repo, encoding: 'utf-8' });
-  build = { code: result.status ?? -1, stdout: result.stdout, stderr: result.stderr };
+  repo = writeRepo(REPO_FILES);
+  build = aipmBuild(repo);
 }, 180_000);
 
 afterAll(() => {
-  fs.rmSync(repo, { recursive: true, force: true });
+  for (const dir of tempRepos) fs.rmSync(dir, { recursive: true, force: true });
 });
 
 describe('aipm build of a plugin whose skills state an audience', () => {
@@ -170,5 +189,49 @@ describe('aipm build of a plugin whose skills state an audience', () => {
     });
     expect(result.status, result.stdout + result.stderr).toBe(0);
     expect(result.stdout).not.toContain('freshness');
+  });
+});
+
+describe('aipm build when a target cannot be built', () => {
+  it('reports the target as not built, with no outcome lines under it', () => {
+    // §5.1: the `agent-only-` name is taken, so the prefix fallback fails the build for Codex.
+    const failed = aipmBuild(
+      writeRepo({
+        ...BASE_FILES,
+        'plugins/demo/skills/foo/SKILL.md':
+          '---\nname: foo\ndescription: Use when testing the foo skill.\naudience: agent\naudience-fallback: widen\n---\n\n# foo\n',
+        'plugins/demo/skills/agent-only-foo/SKILL.md': skillMd('agent-only-foo'),
+      }),
+    );
+    expect(failed.code, failed.stdout + failed.stderr).toBe(1);
+
+    const lines = failed.stdout.split('\n');
+    const codex = lines.indexOf('[demo] codex: not built');
+    expect(codex).toBeGreaterThanOrEqual(0);
+    // The next line is the next target, not an outcome of a form that does not exist.
+    expect(lines[codex + 1]).toBe('[demo] vercel: plugins/demo');
+    // Claude Code was built, and its outcomes are listed.
+    const claude = lines.indexOf('[demo] claude: dist/claude/demo');
+    expect(lines.slice(claude + 1, codex)).toContain("    skills.audience 'foo': native");
+    expect(failed.stdout).toContain('skill-audience-prefix-invalid (hard)');
+  });
+
+  it('says that Vercel still installs the authored source when the whole plugin fails', () => {
+    // §5.1: `audience` is user, agent or both; anything else fails the plugin for every target.
+    const failed = aipmBuild(
+      writeRepo({
+        ...BASE_FILES,
+        'plugins/demo/skills/broken/SKILL.md': skillMd('broken', 'everyone'),
+      }),
+    );
+    expect(failed.code, failed.stdout + failed.stderr).toBe(1);
+
+    const lines = failed.stdout.split('\n');
+    expect(lines).toContain('[demo] claude: not built');
+    expect(lines).toContain('[demo] codex: not built');
+    expect(lines).toContain(
+      '[demo] vercel: not built (the authored source is still installed; it cannot be withheld)',
+    );
+    expect(lines.filter((line) => line.startsWith('    skills.audience'))).toStrictEqual([]);
   });
 });

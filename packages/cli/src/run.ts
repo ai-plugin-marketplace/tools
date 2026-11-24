@@ -184,17 +184,27 @@ function displayPath(absPath: string): string {
  * feature saying how the target delivers it (`native`, `projection` or `unavailable`, with any
  * departures from the author's intent in brackets).
  *
- * A plugin whose source is every target's form is not listed: nothing about its output differs
- * from the directory the author wrote. The findings that explain a departure or a failure are
- * written with the validation findings, not here.
+ * A target that could not be built is reported as `not built`, with no feature lines: there is no
+ * form for them to describe. Where such a target installs the authored source regardless (Vercel
+ * Skills), the line says so, since the build cannot withhold the plugin from it.
+ *
+ * A plugin every target installs as authored (or as its unchanged bundle) is not listed: nothing
+ * about its output differs from the directory the author wrote. The findings that explain a
+ * departure or a failure are written with the validation findings, not here.
  */
-function reportHostOutcomes(results: readonly BuildResult[], out: NodeJS.WritableStream): void {
+function reportTargetOutcomes(results: readonly BuildResult[], out: NodeJS.WritableStream): void {
   for (const result of results) {
-    if (result.hosts.every((host) => host.status === 'source')) continue;
-    for (const host of result.hosts) {
-      const where = host.dir !== undefined ? displayPath(host.dir) : 'not built';
-      out.write(`[${result.plugin}] ${host.target}: ${where}\n`);
-      for (const outcome of host.outcomes) {
+    if (result.targets.every((t) => t.status === 'authored' || t.status === 'bundled')) continue;
+    for (const report of result.targets) {
+      const where =
+        report.dir !== undefined
+          ? displayPath(report.dir)
+          : report.installsAuthoredSource
+            ? 'not built (the authored source is still installed; it cannot be withheld)'
+            : 'not built';
+      out.write(`[${result.plugin}] ${report.target}: ${where}\n`);
+      if (report.status === 'failed') continue;
+      for (const outcome of report.outcomes) {
         const fidelity = outcome.fidelity.length > 0 ? ` [${outcome.fidelity.join(', ')}]` : '';
         out.write(
           `    ${outcome.feature} '${outcome.subject}': ${outcome.implementation}${fidelity}\n`,
@@ -351,7 +361,7 @@ export async function run(argv: readonly string[], opts: RunOptions = {}): Promi
         }
         // Written whether or not validation passed: when a target could not be built, this is
         // where the user sees which targets were and which were not.
-        reportHostOutcomes(results, out);
+        reportTargetOutcomes(results, out);
         const passed = reportValidation(result, out);
         return passed ? 0 : 1;
       }

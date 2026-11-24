@@ -10,7 +10,7 @@
  */
 
 import * as path from 'node:path';
-import { claudeHookEventSchema } from '../../targets/claude/schemas.js';
+import { claudeHookEventSchema } from '@ai-plugin-marketplace/normalizer';
 import { rangeForPath } from '../document.js';
 import type { Diagnostic, Rule, RuleContext } from '../types.js';
 import { docsUrlFor } from './docs-url.js';

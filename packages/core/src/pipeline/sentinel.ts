@@ -23,7 +23,7 @@
  * @see docs/specs/architecture.md §5.2 (build phase — consumer of the apply helpers)
  */
 
-import type { ClaudeHooksFile } from '../targets/claude/schemas.js';
+import type { ClaudeHooksFile } from '@ai-plugin-marketplace/normalizer';
 
 /**
  * Canonical generator identity string embedded in every sentinel. Centralized here so the

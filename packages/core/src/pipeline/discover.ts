@@ -75,7 +75,7 @@ const PLUGIN_SHAPE_MANIFESTS = [
   '.cursor-plugin/plugin.json',
   'gemini-extension.json',
   'POWER.md',
-  '.plugin/plugin.json',
+  'plugin.json',
 ];
 
 /**

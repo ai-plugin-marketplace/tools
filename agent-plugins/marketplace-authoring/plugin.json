@@ -1,5 +1,5 @@
 {
-  "schemaVersion": "0.1.0",
+  "$schema": "https://agent-plugins.org/schemas/1.0.0/plugin.schema.json",
   "name": "marketplace-authoring",
   "version": "0.1.0",
   "description": "Turn a software repo into an AI plugin marketplace with the aipm toolkit: scaffold, author, build, and validate agent plugins across Claude Code, Cursor, Codex, Gemini, and Kiro."

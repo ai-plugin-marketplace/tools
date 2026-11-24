@@ -1,10 +1,10 @@
 # ai-plugin-marketplace — The `open-plugins` Target Specification
 
 **Status:** Draft (design-authoritative; implementation PRs follow this document)
-**Spec version:** 0.1.0
-**Open Plugins spec version:** 1.0.0 ([open-plugins.com](https://open-plugins.com))
+**Spec version:** 0.2.0
+**Open Plugins spec version:** Agent Plugins 1.0.0 ([agent-plugins.org](https://agent-plugins.org/specification.md)); see §0
 **Host behavior verified:** 2026-07-07 (Claude Code 2.1.202, Cursor current)
-**Last updated:** 2026-07-07
+**Last updated:** 2026-11-23
 **Scope:** Adds Open Plugins v1.0.0 as a 7th host target (`open-plugins`) to
 `@ai-plugin-marketplace/core` and `@ai-plugin-marketplace/cli`. Companion to `architecture.md`
 (§2 principles, §6 envelope, §8.1 public API, §12 seams) and `embedded-marketplaces-and-codex-target.md`
@@ -18,6 +18,51 @@
 > document in the same change that moves the code. The environment-variable and registry-probe
 > decisions (§3, §11) rest on host behavior observed on a specific date; re-verify before flipping
 > them (§10).
+
+---
+
+## 0. Revision 0.2.0 — Agent Plugins 1.0.0 package layout
+
+The Open Plugins format is now published as **Agent Plugins 1.0.0**
+([specification](https://agent-plugins.org/specification.md),
+[tagged source](https://github.com/agentplugins/agent-plugins-spec/blob/v1.0.0/spec/1.0.0.md)). Its
+package layout differs from the pre-1.0 pages this document was first written against, and the
+host schemas, validator and scaffold that implement it live in `@ai-plugin-marketplace/normalizer`.
+Where this section and later sections disagree, this section wins.
+
+> **OP-D12 (normative).** The `open-plugins` target follows the Agent Plugins 1.0.0 layout:
+>
+> - The manifest is the plugin root's **`plugin.json`** (§5.1), not `.plugin/plugin.json`. It MUST
+>   carry `"$schema": "https://agent-plugins.org/schemas/1.0.0/plugin.schema.json"` (§5.2); the
+>   scaffold writes that value instead of `schemaVersion`. `TARGET_MIN_REQUIRED`,
+>   `TARGET_OWNED_ARTIFACTS`, name/version consistency, and discovery's plugin-shape markers all
+>   use root `plugin.json`. The broken-file-ref and self-containment candidates exclude it, because
+>   the manifest has no path-bearing fields (next bullet).
+> - A plugin that declares `open-plugins` but still has only `.plugin/plugin.json` gets the hard
+>   missing-manifest `envelope-adherence` finding with a hint to move the file. Any leftover
+>   `.plugin/` directory is a soft `envelope-adherence` finding, since no target reads it.
+> - Component locations are fixed (`skills/`, `mcp.json`) and are never declared by manifest
+>   fields (§6). Unknown manifest fields, including the former component-path fields and `logo`,
+>   are ignored with a soft `schema-invalid`.
+> - MCP configuration is the plugin root's **`mcp.json`** with its own `$schema`
+>   (`https://agent-plugins.org/schemas/1.0.0/mcp.schema.json`) and an explicit transport `type`
+>   per server (§7.2). Kiro also reads root `mcp.json`, so the file is a shared artifact of `kiro`
+>   and `open-plugins`; `.mcp.json` is no longer an `open-plugins` artifact. When `.mcp.json`
+>   exists, `open-plugins` is in the envelope, no native target that reads `.mcp.json` is, and there
+>   is no root `mcp.json`, the `envelope-adherence` hint says to move the file to `mcp.json` and add
+>   `$schema` and per-server `type`.
+> - There is no metadata directory, so the isolation rule of §2.1/§6.1 no longer exists.
+>   `metadata-dir-isolation` stays in `FindingCode` as a reserved code and is not emitted. Of the
+>   §7 advisories on native targets, only the name-grammar advisory remains: the metadata-dir and
+>   non-`./` component-path advisories are removed, since Agent Plugins has neither a metadata
+>   directory nor component-path fields.
+
+Known gap: Kiro's `mcp.json` schema is strict and rejects the `$schema` and `type` keys Agent
+Plugins requires, so one root `mcp.json` cannot currently satisfy both `kiro` and `open-plugins`. An Agent
+Plugins-shaped file fails Kiro's schema (hard `schema-invalid`); a Kiro-shaped file passes with
+only a soft `schema-invalid`, and Open Plugins hosts then load no MCP servers. Until the Kiro schema
+or a per-target projection resolves this, a plugin with MCP servers declares one of the two
+targets. Author-facing guidance says so.
 
 ---
 
@@ -86,7 +131,7 @@ versus _emission_:
 Every claim below is a **normative** requirement of Open Plugins v1.0.0, cited to its source page.
 These are the requirements §6 maps onto `FindingCode`s.
 
-### 2.1 Manifest — `.plugin/plugin.json`
+### 2.1 Manifest — `.plugin/plugin.json` (superseded by §0)
 
 - The manifest is **OPTIONAL for consumption**: a directory with conventional component folders is a
   valid plugin with no manifest at all
@@ -217,7 +262,7 @@ Open Plugins makes the manifest optional and its grammar permissive. The toolkit
 authors to a **stricter** profile, because the toolkit needs a stable anchor for name-consistency,
 envelope adherence, and scaffolding.
 
-### 4.1 The manifest is REQUIRED by the toolkit
+### 4.1 The manifest is REQUIRED by the toolkit (superseded by §0)
 
 > **OP-D6 (normative).** When `open-plugins` is in a plugin's envelope, the toolkit **requires**
 > `.plugin/plugin.json` (added to `TARGET_MIN_REQUIRED`, `packages/core/src/pipeline/validate.ts:85`,
@@ -246,7 +291,7 @@ There are two name grammars in play, and they are intentionally different:
 > generate. Cursor's installed runtime regex `^[a-z0-9]([a-z0-9.-]*[a-z0-9])?$` equals the spec
 > grammar (empirical §5.2), confirming the spec grammar is the right validation width.
 
-### 4.3 Manifest field mapping
+### 4.3 Manifest field mapping (superseded by §0)
 
 The `.plugin/plugin.json` the scaffolder emits mirrors the Codex/Cursor scaffold (`scaffold.ts` in
 each target module): `{ schemaVersion, name, version, description? }` at minimum, with the
@@ -286,19 +331,19 @@ Each Open Plugins normative MUST (§2) maps to a `FindingCode` and severity. Fin
 inside the `open-plugins` target** (i.e. when `open-plugins` is in the envelope) are hard; the same
 rules applied to _other_ targets are soft advisories (§7).
 
-| Open Plugins requirement (§2)                                                | `FindingCode`                | Severity (in `open-plugins` target) | Reuse / new |
-| ---------------------------------------------------------------------------- | ---------------------------- | ----------------------------------- | ----------- |
-| Manifest `name` present and grammar-valid (§2.1)                             | `schema-invalid`             | hard                                | reuse       |
-| Component paths `./`-relative, no `..` (§2.1)                                | `schema-invalid`             | hard                                | reuse       |
-| Metadata dir contains **only** `plugin.json` (§2.1)                          | **`metadata-dir-isolation`** | hard                                | **new**     |
-| `marketplace.json` has `name` + `plugins[]` ≥ 1 (§2.4)                       | `marketplace-registration`   | hard                                | reuse       |
-| Marketplace entry `source` `./`-relative, points at the plugin (§2.4)        | `marketplace-registration`   | hard                                | reuse       |
-| Repo-root `marketplace.json` must not clobber foreign file (§3.3)            | `root-artifact-collision`    | hard                                | reuse       |
-| `name` consistent across `.plugin/plugin.json` and vendor manifests          | `name-consistency`           | hard                                | reuse       |
-| Generated registry/manifest is fresh (`architecture.md` §10.5)               | `freshness`                  | hard in CI / soft local             | reuse       |
-| No artifact for `open-plugins` outside the envelope (`architecture.md` §6.2) | `envelope-adherence`         | hard                                | reuse       |
+| Open Plugins requirement (§2)                                                | `FindingCode`              | Severity (in `open-plugins` target) | Reuse / new |
+| ---------------------------------------------------------------------------- | -------------------------- | ----------------------------------- | ----------- |
+| Manifest `name` present and grammar-valid (§2.1)                             | `schema-invalid`           | hard                                | reuse       |
+| ~~Component paths `./`-relative, no `..`~~ (removed, §0)                     | `schema-invalid`           | not emitted                         | —           |
+| ~~Metadata dir contains only `plugin.json`~~ (removed, §0)                   | `metadata-dir-isolation`   | not emitted                         | reserved    |
+| `marketplace.json` has `name` + `plugins[]` ≥ 1 (§2.4)                       | `marketplace-registration` | hard                                | reuse       |
+| Marketplace entry `source` `./`-relative, points at the plugin (§2.4)        | `marketplace-registration` | hard                                | reuse       |
+| Repo-root `marketplace.json` must not clobber foreign file (§3.3)            | `root-artifact-collision`  | hard                                | reuse       |
+| `name` consistent across root `plugin.json` and vendor manifests (§0)        | `name-consistency`         | hard                                | reuse       |
+| Generated registry/manifest is fresh (`architecture.md` §10.5)               | `freshness`                | hard in CI / soft local             | reuse       |
+| No artifact for `open-plugins` outside the envelope (`architecture.md` §6.2) | `envelope-adherence`       | hard                                | reuse       |
 
-### 6.1 The one new finding code: `metadata-dir-isolation`
+### 6.1 The one new finding code: `metadata-dir-isolation` (superseded by §0: reserved, not emitted)
 
 > **OP-D9 (normative).** Add `metadata-dir-isolation` to the `FindingCode` union
 > (`packages/core/src/pipeline/types.ts:145`). It is **hard**, and fires only for the `open-plugins`

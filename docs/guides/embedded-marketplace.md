@@ -22,7 +22,7 @@ export default defineRepoConfig({
 
 Both paths are **repo-root-relative** and must stay within the repo (no absolute paths, no `..`) — host platforms resolve a plugin's `source` relative to the repo root, so an escaping root would be unrepresentable. An invalid `aipm.repo.ts` surfaces as a `repo-config-invalid` validation finding rather than a crash.
 
-What stays fixed are the things host platforms read by exact name: the per-target plugin manifests (`.claude-plugin/plugin.json`, `.codex-plugin/plugin.json`, `.plugin/plugin.json`, …) and the marketplace registries at the repo root (`.claude-plugin/marketplace.json`, `.cursor-plugin/marketplace.json`, `.agents/plugins/marketplace.json`, and the repo-root `marketplace.json` that Open Plugins hosts read). `aipm.repo.ts` moves only _where your plugin sources live on disk_; the registry `source` entries are rewritten to point at the relocated root automatically.
+What stays fixed are the things host platforms read by exact name: the per-target plugin manifests (`.claude-plugin/plugin.json`, `.codex-plugin/plugin.json`, the Open Plugins root `plugin.json`, …) and the marketplace registries at the repo root (`.claude-plugin/marketplace.json`, `.cursor-plugin/marketplace.json`, `.agents/plugins/marketplace.json`, and the repo-root `marketplace.json` that Open Plugins hosts read). `aipm.repo.ts` moves only _where your plugin sources live on disk_; the registry `source` entries are rewritten to point at the relocated root automatically.
 
 ## Steps
 
@@ -66,13 +66,23 @@ import { defineConfig } from '@ai-plugin-marketplace/core';
 
 export default defineConfig({
   version: '0.1.0',
-  targets: ['claude', 'codex'], // claude | codex | cursor | gemini | kiro | vercel
+  targets: ['claude', 'codex'], // claude | codex | cursor | gemini | kiro | open-plugins | vercel
 });
 ```
 
 ### 4. Author your plugin
 
-Fill in the conventional locations inside the plugin folder — `skills/<name>/SKILL.md`, `commands/`, `agents/`, `hooks/`, `.mcp.json`, and each target's manifest. These keep their conventional names _inside_ the (relocated) plugin folder, so they read naturally to agents authoring them. See the [`template`](https://github.com/ai-plugin-marketplace/template) repo for a worked plugin.
+Fill in the conventional locations inside the plugin folder — `skills/<name>/SKILL.md`, `commands/`, `agents/`, `hooks/`, MCP configuration, and each target's manifest. Where MCP configuration goes depends on the target:
+
+| Target                | MCP configuration                                                                                                                                           |
+| --------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Claude, Cursor, Codex | `.mcp.json`                                                                                                                                                 |
+| Open Plugins          | root `mcp.json` with `"$schema": "https://agent-plugins.org/schemas/1.0.0/mcp.schema.json"` and a `type` on each server; the manifest is root `plugin.json` |
+| Kiro                  | root `mcp.json` in Kiro's shape, with no `$schema` and no per-server `type`                                                                                 |
+
+Because Kiro and Open Plugins need different shapes of the same root `mcp.json`, a plugin with MCP servers can't declare both targets yet; choose one of them for that plugin.
+
+These keep their conventional names _inside_ the (relocated) plugin folder, so they read naturally to agents authoring them. See the [`template`](https://github.com/ai-plugin-marketplace/template) repo for a worked plugin.
 
 ### 5. Add marketplace metadata
 

@@ -1,12 +1,14 @@
 # ai-plugin-marketplace — Architecture Specification
 
 **Status:** Draft
-**Spec version:** 0.4.4
-**Supersedes:** 0.4.3 (generator-version stamp + downgrade guard)
-**Last updated:** 2026-08-27
-**Scope:** Umbrella architecture for the `ai-plugin-marketplace/template` and `ai-plugin-marketplace/tools` repositories and the `@ai-plugin-marketplace/*` npm packages.
+**Spec version:** 0.5.0
+**Supersedes:** 0.4.4 (host-contract checks)
+**Last updated:** 2026-11-11
+**Scope:** Umbrella architecture for the `ai-plugin-marketplace/template`, `ai-plugin-marketplace/tools` and `ai-plugin-marketplace/normalizer` repositories and the `@ai-plugin-marketplace/*` npm packages.
 
 > **Note to future readers.** This spec is durable documentation. It describes not only what the system does but _why_ each decision exists, which invariants must hold, and which capabilities are deferred with what hooks reserved so they can be added later without breaking changes. When the design evolves, update this document in the same change that moves the code.
+
+> **What changed from 0.4.4 → 0.5.0.** Host normalization — the per-target schemas, validators, hook transforms, scaffolds, bundlers, the hook payload adapter and the Cursor controller shim — moved out of `core` into its own package, `@ai-plugin-marketplace/normalizer`, published from the `ai-plugin-marketplace/normalizer` repository (§3.1, §3.4, §8.3). `core` keeps marketplace structure (discovery, registries, dist bundles, repo-root artifacts, freshness, `init`/`scaffold`) and consumes the normalizer through its public API. Generated output is unchanged. Sections that name `core/src/targets/` now name the normalizer's `src/targets/`; other specs in this directory written before the move still cite the old paths.
 
 > **What changed from 0.4.3 → 0.4.4.** §10.1 gains a fifth validator category — **host-contract checks** — with its first rule, §10.1.5: a Claude manifest `hooks` reference that resolves to the auto-loaded `hooks/hooks.json` is a hard `schema-invalid`, because Claude Code loads that file automatically and errors on the duplicate. See Appendix B, 0.4.4.
 
@@ -106,13 +108,16 @@ A future release will introduce TSX authoring with typed host components renderi
 
 ## 3. Repository topology
 
-### 3.1 Two repositories, one system
+### 3.1 Three repositories, one system
 
 ```
 github.com/ai-plugin-marketplace/
 ├── template/       # GitHub template repo — plugin authors fork this
-└── tools/          # pnpm monorepo — publishes @ai-plugin-marketplace/*
+├── tools/          # pnpm monorepo — publishes @ai-plugin-marketplace/core and /cli
+└── normalizer/     # publishes @ai-plugin-marketplace/normalizer
 ```
+
+The split between `tools` and `normalizer` follows what each knows. The normalizer knows agent hosts: what each accepts and how to carry one authored source to each host's native form. It works on a plugin's own content and has no knowledge of plugins roots, registries or marketplaces. `tools` knows marketplace structure and is one consumer of the normalizer.
 
 ### 3.2 `ai-plugin-marketplace/template` contents
 
@@ -146,13 +151,8 @@ tools/
 ├── packages/
 │   ├── core/                  # @ai-plugin-marketplace/core
 │   │   └── src/
-│   │       ├── targets/       # Per-target internal modules (see §12.4)
-│   │       │   ├── claude/
-│   │       │   ├── cursor/
-│   │       │   ├── gemini/
-│   │       │   ├── kiro/
-│   │       │   └── vercel/
 │   │       ├── pipeline/      # Build pipeline with named transform step
+│   │       ├── lint/          # Lint engine and rules
 │   │       ├── config.ts      # defineConfig, AipmConfig schema
 │   │       └── index.ts       # Public exports
 │   └── cli/                   # @ai-plugin-marketplace/cli
@@ -164,6 +164,27 @@ tools/
 └── README.md
 ```
 
+### 3.3.1 `ai-plugin-marketplace/normalizer` contents
+
+```
+normalizer/
+├── src/
+│   ├── targets/               # Per-target modules (see §12.4, §12.5)
+│   │   ├── claude/
+│   │   ├── codex/
+│   │   ├── cursor/
+│   │   ├── gemini/
+│   │   ├── kiro/
+│   │   ├── open-plugins/
+│   │   └── vercel/
+│   ├── hooks/                 # Hook payload adapter
+│   ├── findings.ts            # Finding type reported by host validators
+│   └── index.ts               # Public exports
+├── api-report/
+├── package.json
+└── README.md
+```
+
 ### 3.4 Dependency direction
 
 ```
@@ -171,12 +192,14 @@ template → @ai-plugin-marketplace/cli
                          ↓
             @ai-plugin-marketplace/core
                          ↓
+         @ai-plugin-marketplace/normalizer
+                         ↓
                   zod, yaml
 ```
 
-**Invariant.** Dependencies flow one direction. A reverse edge indicates a design error. When future packages are extracted (§12.4), they become intermediate layers; the `template → cli → core` spine stays constant.
+**Invariant.** Dependencies flow one direction. A reverse edge indicates a design error. When future packages are extracted (§12.4), they become intermediate layers; the `template → cli → core → normalizer` spine stays constant. The normalizer never imports `core`.
 
-**Invariant.** Per-target modules under `core/src/targets/` must not import each other. This is enforced in CI (see §13 Phase A exit criterion) and is what makes the future per-target package extraction a mechanical `git mv` rather than a rewrite.
+**Invariant.** Per-target modules under the normalizer's `src/targets/` must not import each other. This is enforced by a lint rule in the normalizer's CI and is what makes a future per-target package extraction a mechanical `git mv` rather than a rewrite.
 
 ---
 
@@ -372,16 +395,16 @@ A transformation is mechanical iff it is a **pure function driven by a committed
 
 ### 7.2 Transformations shipped in v0.1.0
 
-| Transformation                                                         | Target      | Lookup / logic lives in                         |
-| ---------------------------------------------------------------------- | ----------- | ----------------------------------------------- |
-| `Read`/`Edit`/`Grep`/… → `read_file`/`replace`/`search_file_content`/… | Gemini CLI  | `core/src/targets/gemini/tool-names.ts`         |
-| `Read`/`Edit`/`Grep`/… → `read`/`write`/`grep`/…                       | Kiro        | `core/src/targets/kiro/tool-names.ts`           |
-| `hooks/claude.yaml` → `hooks/claude.json`                              | Claude Code | `core/src/targets/claude/hooks.ts` (structural) |
-| Agent `.md` → `.kiro/agents/<name>.json`                               | Kiro        | `core/src/targets/kiro/agents.ts`               |
-| Plugin dir → `dist/gemini/<plugin>/`                                   | Gemini CLI  | `core/src/targets/gemini/bundle.ts`             |
-| Plugin dir → `dist/kiro/<plugin>/`                                     | Kiro        | `core/src/targets/kiro/bundle.ts`               |
+| Transformation                                                         | Target      | Lookup / logic lives in                       |
+| ---------------------------------------------------------------------- | ----------- | --------------------------------------------- |
+| `Read`/`Edit`/`Grep`/… → `read_file`/`replace`/`search_file_content`/… | Gemini CLI  | `normalizer: src/targets/gemini/transform.ts` |
+| `Read`/`Edit`/`Grep`/… → `read`/`write`/`grep`/…                       | Kiro        | `normalizer: src/targets/kiro/transform.ts`   |
+| `hooks/claude.yaml` → `hooks/claude.json`                              | Claude Code | `normalizer: src/targets/claude/transform.ts` |
+| Agent `.md` → `.kiro/agents/<name>.json`                               | Kiro        | `normalizer: src/targets/kiro/transform.ts`   |
+| Plugin dir → `dist/gemini/<plugin>/`                                   | Gemini CLI  | `normalizer: src/targets/gemini/bundle.ts`    |
+| Plugin dir → `dist/kiro/<plugin>/`                                     | Kiro        | `normalizer: src/targets/kiro/bundle.ts`      |
 
-All of these live in per-target internal modules. The pipeline dispatches to them; it holds no target-specific logic.
+All of these live in per-target modules in `@ai-plugin-marketplace/normalizer`. The pipeline dispatches to them; it holds no target-specific logic.
 
 ### 7.3 Explicitly not mechanical
 
@@ -400,7 +423,7 @@ Once this line is crossed, every new target adds quadratic translation complexit
 
 ### 8.1 `@ai-plugin-marketplace/core`
 
-**Purpose.** Build pipeline, validation, scaffolding, migrate (no-op today; real in a future release), and `defineConfig`. Per-target schemas and transformations live as internal modules under `core/src/targets/` and are not public exports.
+**Purpose.** Build pipeline, validation, scaffolding, migrate (no-op today; real in a future release), and `defineConfig`. Per-target schemas and transformations live in `@ai-plugin-marketplace/normalizer`, which `core` depends on; `core` does not re-export them.
 
 **Public exports.**
 
@@ -477,8 +500,22 @@ export type FindingCode =
   | 'root-artifact-collision' // a generated repo-root path is occupied by a non-toolkit file
   | 'default-marketplace-name' // marketplace name/owner is still a template placeholder (always soft)
   | 'frontmatter-invalid' // a skill/agent/command/POWER.md frontmatter is not strict YAML
-  | 'metadata-dir-isolation' // the Open Plugins `.plugin/` dir holds more than plugin.json (hard, open-plugins target)
-  | 'open-plugins-conformance'; // soft advisory: native plugin is not Open-Plugins-portable (arrives with the conformance PR)
+  | 'metadata-dir-isolation' // reserved, no longer emitted: Agent Plugins 1.0.0 has no `.plugin/` metadata dir
+  | 'open-plugins-conformance' // soft advisory: native plugin name is not Open-Plugins-portable
+  | 'unpublished-skill-installable' // a repo SKILL.md outside any published plugin is installable (hard)
+  // Normalizer codes, listed so every normalizer finding is assignable (see its FindingCode):
+  | 'skill-audience-invalid'
+  | 'skill-audience-omitted'
+  | 'skill-audience-widened'
+  | 'skill-audience-reduced'
+  | 'skill-audience-unenforced'
+  | 'skill-audience-conflict'
+  | 'skill-audience-prefix-invalid'
+  | 'skill-name-duplicate'
+  | 'skill-location-unsupported'
+  | 'source-unreadable'
+  | 'native-form-refuted'
+  | 'projection-not-implemented';
 
 export interface Finding {
   severity: 'hard' | 'soft';
@@ -622,7 +659,7 @@ so manifest.hooks should only reference additional hook files.
 
 The rule is deliberately about the _reference_, not the file: a plugin may legitimately carry `hooks/hooks.json` as the shared Codex/Gemini artifact (`adapter-system.md` D6) with no manifest reference at all, and that alone draws no finding here. The broader collision — Claude Code auto-loading a Gemini-format `hooks/hooks.json`, or double-loading Codex's copy of Claude's content — is a separate, unresolved design question tracked outside this section.
 
-Implemented in `packages/core/src/targets/claude/validate.ts`; regression coverage in `validate.test.ts`.
+Implemented in `@ai-plugin-marketplace/normalizer` (`src/targets/claude/validate.ts`); regression coverage in `validate.test.ts`.
 
 Reference: [Claude Code plugins reference](https://code.claude.com/docs/en/plugins-reference) — Hooks component location, "`hooks/hooks.json` in plugin root, or inline in plugin.json".
 
@@ -745,9 +782,9 @@ Reserved in v0.1.0 (§4.2); plugins containing `.tsx` files fail validation. Whe
 
 ### 12.4 Named `transform` step + per-target folder layout
 
-The v0.1.0 build pipeline (§5.2) has a single named transform step; target-specific code lives in per-target folders under `core/src/targets/` (§3.3). When TSX renderers arrive, they plug into the transform step without reshaping the pipeline. When per-target packages are extracted (§8.3), each extraction is a `git mv` of a folder into a new package — not a redesign.
+The v0.1.0 build pipeline (§5.2) has a single named transform step; target-specific code lives in per-target folders under the normalizer's `src/targets/` (§3.3.1). When TSX renderers arrive, they plug into the transform step without reshaping the pipeline. When per-target packages are extracted (§8.3), each extraction is a `git mv` of a folder into a new package — not a redesign.
 
-**This seam is enforced by CI.** Per-target folders may not import each other (§3.4 invariant). A cross-target-import lint check runs in CI. Without this check, the "cheap `git mv`" claim would be aspirational.
+**This seam is enforced by CI.** Per-target folders may not import each other (§3.4 invariant). A cross-target-import lint check runs in the normalizer's CI. Without this check, the "cheap `git mv`" claim would be aspirational.
 
 **Retrofit cost without this seam:** moderate — adding rendering would be a pipeline-wide refactor.
 
@@ -756,7 +793,7 @@ The v0.1.0 build pipeline (§5.2) has a single named transform step; target-spec
 The per-target folders conform to a common internal shape. Reference file layout:
 
 ```
-core/src/targets/<target>/
+normalizer/src/targets/<target>/
 ├── schemas.ts      # Zod schemas for this target's manifests
 ├── transform.ts    # Mechanical transformations (tool-name tables, YAML→JSON, etc.)
 ├── validate.ts     # Target-specific validation rules
@@ -764,7 +801,7 @@ core/src/targets/<target>/
 └── bundle.ts       # Optional — standalone-bundle assembly (Gemini, Kiro only)
 ```
 
-The exact interface tying these together is **not specified in this spec and not exported**. It will be iterated through our own target additions and publicized only when a real third-party adapter request motivates it.
+The functions `core` calls are exported from the normalizer's package root and recorded in its API report. A uniform interface tying one target's modules together is **not specified in this spec**. It will be iterated through our own target additions and publicized only when a real third-party adapter request motivates it.
 
 **Why this isn't a full interface spec.** Freezing the adapter shape in v0.1.0 before any third-party has tried to implement one would be premature. Keeping the interface internal lets us revise freely.
 
@@ -859,7 +896,7 @@ How do authors test their plugins? A `@ai-plugin-marketplace/testing` package (o
 - **Plugin version** — a semver string in `aipm.config.ts` identifying the author's release of plugin content. Distinct from toolkit version and schema versions. See §9.
 - **Schema version** — the shape version of a target's manifest, stored in the manifest's `schemaVersion` field. Reserved in v0.1.0; consumed by future migrations. See §9.4, §12.2.
 - **Target** — a host-platform identity: `claude`, `cursor`, `gemini`, `kiro`, `vercel`, and future additions. A value, not a module.
-- **Target module** — the internal toolkit code implementing a target. Lives under `core/src/targets/<id>/`. Interface is internal and unstable in v0.1.0.
+- **Target module** — the internal toolkit code implementing a target. Lives under the normalizer's `src/targets/<id>/`. Interface is internal and unstable in v0.1.0.
 - **Toolkit version** — the semver of `@ai-plugin-marketplace/*` packages, released in lockstep. See §9.
 - **Transform step** — the named middle stage of the build pipeline: `transform(PluginSource) → PluginBuild`. The pipeline's seam for future renderers. Distinct from `transform.ts`, which names the per-target module file that implements the per-target portion of this stage.
 - **Validate phase** — the stage in which validators inspect on-disk state and emit findings. See §5.3.
@@ -878,3 +915,4 @@ How do authors test their plugins? A `@ai-plugin-marketplace/testing` package (o
 | 0.4.2   | 2026-07-15 | Reintroduced `'shared'` to `GeneratedFile.target` (now `GeneratedFileTarget = TargetId \| 'shared'`), 0.4.0 having dropped it as unused. Two build-internal artifacts genuinely have no single owning target — the payload adapter (and its sidecar), emitted for any plugin authoring hooks regardless of envelope, and the generated-root sidecar manifest, which spans every emitted single-artifact-host/registry owner — and had each been attributed to an arbitrary, deterministically-chosen single target as a workaround. Both now report `target: 'shared'` honestly instead. Breaking change to the `@public` `GeneratedFile.target` field. |
 | 0.4.3   | 2026-07-18 | Added the generator-version stamp + downgrade guard (§4.3.1): sentinel-carrying artifacts now record the producing `@ai-plugin-marketplace/core` version (`_generated.version` / `# version:` line), and `aipm build` refuses (non-zero exit, or `--force-downgrade`) when the installed toolkit is older than a stamped version — closing the silent-revert failure mode where a stale `node_modules` reverts committed artifacts to an older generator's output. Freshness (§10.5) compares modulo the version stamp so a version bump alone is not "stale". New `BuildOptions.forceDowngrade`.                                                       |
 | 0.4.4   | 2026-08-27 | Added §10.1 category 5, **host-contract checks**, and its first rule §10.1.5: Claude Code auto-loads `<pluginDir>/hooks/hooks.json` and hard-errors when the plugin manifest's `hooks` field also names it, so `aipm validate` now emits a hard `schema-invalid` when that field — string, or any string entry of an array — normalizes to `hooks/hooks.json`. §10.2 records host-contract violations as hard. Notes the still-open collision between this auto-load and the shared Codex/Gemini `hooks/hooks.json` artifact (`adapter-system.md` D6).                                                                                                  |
+| 0.5.0   | 2026-11-11 | Host normalization moved out of `core` into `@ai-plugin-marketplace/normalizer` (own repository); `core` keeps marketplace structure and consumes the normalizer's public API. Generated output unchanged.                                                                                                                                                                                                                                                                                                                                                                                                                                              |

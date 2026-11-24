@@ -2,7 +2,7 @@
  * `correctness/broken-file-ref` (§3.2, new rule) — manifest and frontmatter references to files
  * that don't exist.
  *
- * Scans every manifest/frontmatter document a plugin may author (per-target `plugin.json`s,
+ * Scans every manifest/frontmatter document a plugin may author (the native targets' `plugin.json`s,
  * `gemini-extension.json`, `POWER.md`, and every `skills/<name>/SKILL.md`, `agents/*.md`,
  * `commands/*.md`) for string field values shaped like a relative reference (`./...`, the
  * convention every target schema already uses for `skills`/`agents`/`commands`/`hooks` fields —
@@ -87,13 +87,18 @@ export function collectTopLevelRefs(
 /**
  * Candidate manifest/frontmatter files a plugin may author, relative to the plugin directory.
  * The reference sites `correctness/broken-file-ref` and `correctness/plugin-self-containment` scan.
+ *
+ * The Open Plugins manifest (root `plugin.json`) is deliberately absent. Agent Plugins 1.0.0 fixes
+ * component locations (§6) and has no path-bearing manifest fields; a leftover `skills`/`agents`
+ * field there is ignored by hosts and reported by target validation as an unknown field, so it
+ * must not also be reported as a broken reference.
+ * @see https://github.com/agentplugins/agent-plugins-spec/blob/v1.0.0/spec/1.0.0.md
  */
 export function candidateRelPaths(pluginDir: string): string[] {
   const rel: string[] = [
     '.claude-plugin/plugin.json',
     '.codex-plugin/plugin.json',
     '.cursor-plugin/plugin.json',
-    'plugin.json',
     'gemini-extension.json',
     'POWER.md',
   ];

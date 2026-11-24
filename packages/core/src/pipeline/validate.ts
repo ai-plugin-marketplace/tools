@@ -107,6 +107,22 @@ const SHARED_ARTIFACTS: { file: string; anyOf: TargetId[] }[] = [
 ];
 
 /**
+ * The `$schema` identifiers Agent Plugins 1.0.0 requires on the root `plugin.json` (§5.2) and the
+ * root `mcp.json` (§7.2). They appear in migration hints for plugins still on the pre-1.0 layout.
+ * @see https://github.com/agentplugins/agent-plugins-spec/blob/v1.0.0/spec/1.0.0.md
+ */
+const AGENT_PLUGINS_MANIFEST_SCHEMA = 'https://agent-plugins.org/schemas/1.0.0/plugin.schema.json';
+const AGENT_PLUGINS_MCP_SCHEMA = 'https://agent-plugins.org/schemas/1.0.0/mcp.schema.json';
+
+/**
+ * The pre-1.0 Open Plugins metadata directory. Agent Plugins 1.0.0 has no such directory and no
+ * target reads it, so its presence only means a plugin has not finished migrating to root
+ * `plugin.json`.
+ */
+const LEGACY_OPEN_PLUGINS_DIR = '.plugin';
+const LEGACY_OPEN_PLUGINS_MANIFEST = '.plugin/plugin.json';
+
+/**
  * Minimum required artifacts for each target. Missing any of these when the target is
  * in the envelope is an adherence violation.
  * Vercel requires at least one skills/<name>/SKILL.md — handled specially below.
@@ -500,7 +516,8 @@ export function validateEnvelopeShape(rawConfig: unknown, pluginName: string): F
  * For each target in the envelope: verify the plugin provides the minimum required artifacts.
  * For each target NOT in the envelope: verify no target-specific artifacts exist for it.
  *
- * Emits `envelope-adherence` findings.
+ * Emits `envelope-adherence` findings: hard for a missing or out-of-envelope artifact, soft for a
+ * leftover pre-1.0 `.plugin/` directory that no target reads.
  */
 export function validateEnvelopeAdherence(
   pluginDir: string,
@@ -540,24 +557,32 @@ export function validateEnvelopeAdherence(
           'envelope-adherence',
           pluginName,
           `Artifact '${file}' exists but none of [${anyOf.join(', ')}] is in the support envelope.`,
-          `Remove '${file}' or add at least one of [${anyOf.join(', ')}] to the targets array in aipm.config.ts.`,
+          sharedArtifactHint(pluginDir, file, anyOf, envelopeSet),
         ),
       );
     }
   }
 
   // Check minimum required artifacts for targets IN the envelope
+  let legacyManifestMoveHinted = false;
   for (const target of envelope) {
     const required = TARGET_MIN_REQUIRED[target];
     for (const artifact of required) {
       const full = path.join(pluginDir, artifact);
       if (!fs.existsSync(full)) {
+        const movesLegacyManifest =
+          target === 'open-plugins' &&
+          artifact === 'plugin.json' &&
+          fs.existsSync(path.join(pluginDir, LEGACY_OPEN_PLUGINS_MANIFEST));
+        if (movesLegacyManifest) legacyManifestMoveHinted = true;
         findings.push(
           hard(
             'envelope-adherence',
             pluginName,
             `Target '${target}' is in the support envelope but required artifact '${artifact}' is missing.`,
-            `Create '${artifact}' to satisfy the '${target}' target.`,
+            movesLegacyManifest
+              ? `Move '${LEGACY_OPEN_PLUGINS_MANIFEST}' to 'plugin.json', replace 'schemaVersion' with "$schema": "${AGENT_PLUGINS_MANIFEST_SCHEMA}", and delete the empty '${LEGACY_OPEN_PLUGINS_DIR}/' directory.`
+              : `Create '${artifact}' to satisfy the '${target}' target.`,
           ),
         );
       }
@@ -596,7 +621,42 @@ export function validateEnvelopeAdherence(
     }
   }
 
+  // A leftover pre-1.0 `.plugin/` directory is read by no target. It is advice rather than a
+  // failure, and it is skipped when the missing-manifest finding above already says to move it.
+  if (!legacyManifestMoveHinted && fs.existsSync(path.join(pluginDir, LEGACY_OPEN_PLUGINS_DIR))) {
+    findings.push({
+      severity: 'soft',
+      code: 'envelope-adherence',
+      plugin: pluginName,
+      message: `Directory '${LEGACY_OPEN_PLUGINS_DIR}/' is the pre-1.0 Open Plugins metadata location, which no target reads.`,
+      hint: `Delete '${LEGACY_OPEN_PLUGINS_DIR}/'. The Open Plugins manifest is the plugin root's 'plugin.json' (Agent Plugins 1.0.0).`,
+    });
+  }
+
   return findings;
+}
+
+/**
+ * The remediation hint for a shared artifact that no target in the envelope reads. The generic
+ * hint (remove the file or add a reading target) is wrong for one case: an `open-plugins` plugin
+ * still carrying `.mcp.json` from the pre-1.0 layout, whose MCP configuration belongs in root
+ * `mcp.json` instead (Agent Plugins 1.0.0 §7.2). That case gets a move hint, unless `mcp.json`
+ * already exists, in which case `.mcp.json` is simply redundant.
+ */
+function sharedArtifactHint(
+  pluginDir: string,
+  file: string,
+  anyOf: readonly TargetId[],
+  envelopeSet: ReadonlySet<TargetId>,
+): string {
+  if (
+    file === '.mcp.json' &&
+    envelopeSet.has('open-plugins') &&
+    !fs.existsSync(path.join(pluginDir, 'mcp.json'))
+  ) {
+    return `Open Plugins hosts read MCP configuration only from the plugin root's 'mcp.json'. Move '.mcp.json' to 'mcp.json', add "$schema": "${AGENT_PLUGINS_MCP_SCHEMA}", and give each server a 'type' (for example "stdio"), or add at least one of [${anyOf.join(', ')}] to the targets array in aipm.config.ts.`;
+  }
+  return `Remove '${file}' or add at least one of [${anyOf.join(', ')}] to the targets array in aipm.config.ts.`;
 }
 
 // ---------------------------------------------------------------------------
@@ -715,7 +775,7 @@ export function validateNameConsistency(
             hard(
               'name-consistency',
               expectedName,
-              `'plugin.json' has name '${parsed.data.name}' but plugin directory is '${expectedName}'.`,
+              `Root 'plugin.json' has name '${parsed.data.name}' but plugin directory is '${expectedName}'.`,
             ),
           );
         }
@@ -862,7 +922,7 @@ export async function validateVersionConsistency(
             hard(
               'version-consistency',
               pluginName,
-              `'plugin.json' has version '${parsed.data.version}' but aipm.config.ts declares version '${expectedVersion}'.`,
+              `Root 'plugin.json' has version '${parsed.data.version}' but aipm.config.ts declares version '${expectedVersion}'.`,
               `Bump the manifest's version to match aipm.config.ts, which is the source of truth for the plugin's version.`,
             ),
           );

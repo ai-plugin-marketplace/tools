@@ -88,6 +88,22 @@ describe('correctness/broken-file-ref', () => {
     const diagnostics = await brokenFileRefRule.check(makeCtx(pluginDir));
     expect(diagnostics).toEqual([]);
   });
+
+  it('ignores path-shaped fields in the Open Plugins root plugin.json (regression)', async () => {
+    // Regression: the root `plugin.json` was scanned for `skills`/`agents`/`commands`/`hooks`.
+    // Agent Plugins 1.0.0 has no such manifest fields (§6 fixes component locations); hosts ignore
+    // them and target validation reports them as unknown, so a stale `"skills": "./missing"` must
+    // not raise an error-level broken reference on top of that.
+    // @see https://github.com/agentplugins/agent-plugins-spec/blob/v1.0.0/spec/1.0.0.md
+    const pluginDir = path.join(tmpDir, 'plugin-open');
+    write(pluginDir, 'plugin.json', {
+      $schema: 'https://agent-plugins.org/schemas/1.0.0/plugin.schema.json',
+      name: 'plugin-open',
+      skills: './missing',
+    });
+    const diagnostics = await brokenFileRefRule.check(makeCtx(pluginDir));
+    expect(diagnostics).toEqual([]);
+  });
 });
 
 describe('correctness/unknown-hook-event', () => {

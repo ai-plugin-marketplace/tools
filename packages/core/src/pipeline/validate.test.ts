@@ -1262,6 +1262,89 @@ describe('Open Plugins layout (Agent Plugins 1.0.0)', () => {
     ).toBe(true);
   });
 
+  // An open-plugins plugin carrying `.mcp.json` from the pre-1.0 layout needs its MCP config
+  // moved to root `mcp.json` with `$schema` and a per-server `type` (§7.2), not deleted.
+  it('hints to move .mcp.json to mcp.json for an open-plugins plugin without mcp.json (§7.2)', () => {
+    const pluginDir = path.join(tmpDir, 'my-plugin');
+    write(pluginDir, 'plugin.json', { $schema: MANIFEST_SCHEMA, name: 'my-plugin' });
+    write(pluginDir, '.mcp.json', { mcpServers: { local: { command: 'node' } } });
+
+    const findings = validateEnvelopeAdherence(pluginDir, ['open-plugins']);
+    expect(findings).toHaveLength(1);
+    expect(findings[0]?.severity).toBe('hard');
+    expect(findings[0]?.hint).toContain("Move '.mcp.json' to 'mcp.json'");
+    expect(findings[0]?.hint).toContain(MCP_SCHEMA);
+    expect(findings[0]?.hint).toContain("'type'");
+  });
+
+  it('keeps the remove hint for .mcp.json when an open-plugins plugin already has mcp.json', () => {
+    const pluginDir = path.join(tmpDir, 'my-plugin');
+    write(pluginDir, 'plugin.json', { $schema: MANIFEST_SCHEMA, name: 'my-plugin' });
+    write(pluginDir, 'mcp.json', {
+      $schema: MCP_SCHEMA,
+      mcpServers: { local: { type: 'stdio', command: 'node' } },
+    });
+    write(pluginDir, '.mcp.json', { mcpServers: {} });
+
+    const findings = validateEnvelopeAdherence(pluginDir, ['open-plugins']);
+    expect(findings).toHaveLength(1);
+    expect(findings[0]?.hint).toContain("Remove '.mcp.json'");
+    expect(findings[0]?.hint).not.toContain('Move');
+  });
+
+  it('keeps the remove hint for .mcp.json when open-plugins is not in the envelope', () => {
+    const pluginDir = path.join(tmpDir, 'my-plugin');
+    createMinimalPlugin(pluginDir, 'my-plugin', ['kiro']);
+    write(pluginDir, '.mcp.json', { mcpServers: {} });
+
+    const finding = validateEnvelopeAdherence(pluginDir, ['kiro']).find((f) =>
+      f.message.includes('.mcp.json'),
+    );
+    expect(finding?.hint).toContain("Remove '.mcp.json'");
+  });
+
+  it('hints to move a legacy .plugin/plugin.json when the root plugin.json is missing (§5.1)', () => {
+    const pluginDir = path.join(tmpDir, 'my-plugin');
+    write(pluginDir, '.plugin/plugin.json', { schemaVersion: '0.1', name: 'my-plugin' });
+
+    const findings = validateEnvelopeAdherence(pluginDir, ['open-plugins']);
+    expect(findings).toHaveLength(1);
+    expect(findings[0]?.hint).toContain("Move '.plugin/plugin.json' to 'plugin.json'");
+    expect(findings[0]?.hint).toContain('schemaVersion');
+    expect(findings[0]?.hint).toContain(MANIFEST_SCHEMA);
+  });
+
+  it('keeps the create hint for a missing root plugin.json with no legacy manifest', () => {
+    const pluginDir = path.join(tmpDir, 'my-plugin');
+    fs.mkdirSync(pluginDir, { recursive: true });
+
+    const findings = validateEnvelopeAdherence(pluginDir, ['open-plugins']);
+    expect(findings).toHaveLength(1);
+    expect(findings[0]?.hint).toBe("Create 'plugin.json' to satisfy the 'open-plugins' target.");
+  });
+
+  it('reports a leftover .plugin/ directory as soft for a plugin outside open-plugins', () => {
+    const pluginDir = path.join(tmpDir, 'my-plugin');
+    createMinimalPlugin(pluginDir, 'my-plugin', ['claude']);
+    write(pluginDir, '.plugin/plugin.json', { schemaVersion: '0.1', name: 'my-plugin' });
+
+    const findings = validateEnvelopeAdherence(pluginDir, ['claude']);
+    expect(findings).toHaveLength(1);
+    expect(findings[0]?.code).toBe('envelope-adherence');
+    expect(findings[0]?.severity).toBe('soft');
+    expect(findings[0]?.message).toContain("'.plugin/'");
+  });
+
+  it('reports a leftover .plugin/ directory as soft once the root plugin.json exists', () => {
+    const pluginDir = path.join(tmpDir, 'my-plugin');
+    write(pluginDir, 'plugin.json', { $schema: MANIFEST_SCHEMA, name: 'my-plugin' });
+    fs.mkdirSync(path.join(pluginDir, '.plugin'), { recursive: true });
+
+    const findings = validateEnvelopeAdherence(pluginDir, ['open-plugins']);
+    expect(findings).toHaveLength(1);
+    expect(findings[0]?.severity).toBe('soft');
+  });
+
   it('checks name consistency against the root plugin.json', () => {
     const pluginDir = path.join(tmpDir, 'bar');
     write(pluginDir, 'plugin.json', { $schema: MANIFEST_SCHEMA, name: 'foo' });
@@ -1269,7 +1352,7 @@ describe('Open Plugins layout (Agent Plugins 1.0.0)', () => {
     const findings = validateNameConsistency(pluginDir, ['open-plugins']);
     expect(findings).toHaveLength(1);
     expect(findings[0]?.code).toBe('name-consistency');
-    expect(findings[0]?.message).toContain("'plugin.json' has name 'foo'");
+    expect(findings[0]?.message).toContain("Root 'plugin.json' has name 'foo'");
     expect(findings[0]?.message).toContain('bar');
   });
 
@@ -1293,7 +1376,7 @@ describe('Open Plugins layout (Agent Plugins 1.0.0)', () => {
     expect(findings).toHaveLength(1);
     expect(findings[0]?.code).toBe('version-consistency');
     expect(findings[0]?.severity).toBe('hard');
-    expect(findings[0]?.message).toContain("'plugin.json' has version '0.9.0'");
+    expect(findings[0]?.message).toContain("Root 'plugin.json' has version '0.9.0'");
     expect(findings[0]?.message).toContain('1.2.3');
   });
 });

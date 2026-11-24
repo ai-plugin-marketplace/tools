@@ -147,7 +147,7 @@ reference, and quality warning lands on a clickable `file:line:col`.
 > | -------------------- | ---------------------------------------------------------------------------------------------- | --------------------- |
 > | `aipm-repo`          | `aipm.config.ts` / `aipm.repo.ts` (existing discovery)                                         | full repo, all checks |
 > | `claude-plugin`      | `.claude-plugin/plugin.json`                                                                   | one plugin tree       |
-> | `open-plugins`       | `.plugin/plugin.json`                                                                          | one Open Plugins tree |
+> | `open-plugins`       | root `plugin.json` (Agent Plugins 1.0.0 §5.1)                                                  | one Open Plugins tree |
 > | `skills-dir`         | directory of `*/SKILL.md` (or a single `SKILL.md`)                                             | skills only           |
 > | `claude-user-config` | `settings.json` + any of `skills/`, `agents/`, `commands/`, `hooks/` in a `.claude`-shaped dir | user/project config   |
 >
@@ -221,9 +221,9 @@ rules carry this category:
   every case this mirrors `validate()`'s `envelope-invalid` for the same tree — `lint`, `validate`
   and `build` must agree rather than one staying silent; legacy code `envelope-invalid`.
 - `schema/target-conformance` — every target manifest in a plugin's envelope parses against that
-  target's current schema; legacy codes `schema-invalid`, plus the Open Plugins-specific
-  `metadata-dir-isolation` and `open-plugins-conformance` (soft, advisory-only) findings the same
-  underlying check can also emit (see the migration table, §3.6).
+  target's current schema; legacy codes `schema-invalid`, plus the `open-plugins-conformance`
+  (soft, advisory-only) findings the same underlying check can also emit (see the migration table,
+  §3.6). `metadata-dir-isolation` is reserved and no longer emitted.
 
 `repo-config-invalid` (a malformed `aipm.repo.ts` that `discoverPlugins()` fails to load, or a
 malformed `aipm.workspace.ts` that `loadWorkspaceConfig()` fails to load) is a repo-scoped
@@ -398,7 +398,7 @@ Default severity: `info` (advisory; these are judgment heuristics).
 | `envelope-invalid`              | `schema/envelope-shape`                     | `schema`      | `error`           |                                                                                                                                  |
 | `repo-config-invalid`           | _(none — repo-scoped orchestration)_        | —             | —                 | Not yet wrapped as a `Rule`; emitted directly by `validate()`'s top-level dispatch.                                              |
 | `schema-invalid`                | `schema/target-conformance`                 | `schema`      | `error`           |                                                                                                                                  |
-| `metadata-dir-isolation`        | `schema/target-conformance`                 | `schema`      | `error`           | Open Plugins `.plugin/` metadata-dir isolation; same rule as `schema-invalid`.                                                   |
+| `metadata-dir-isolation`        | `schema/target-conformance`                 | `schema`      | `error`           | Reserved; no longer emitted. Agent Plugins 1.0.0 keeps the manifest at the plugin root and has no metadata directory.            |
 | `open-plugins-conformance`      | `schema/target-conformance`                 | `schema`      | `error`           | Emitted `soft` (advisory) per its own finding; the rule's _default_ is `error`.                                                  |
 | `envelope-adherence`            | `correctness/envelope-adherence`            | `correctness` | `error`           |                                                                                                                                  |
 | `name-consistency`              | `correctness/name-consistency`              | `correctness` | `error`           |                                                                                                                                  |
@@ -412,6 +412,13 @@ Default severity: `info` (advisory; these are judgment heuristics).
 | `single-artifact-host`          | `correctness/root-artifact-freshness`       | `correctness` | `error`           | Always `error` (not CI/local-sensitive).                                                                                         |
 | `root-artifact-collision`       | `correctness/root-artifact-freshness`       | `correctness` | `error`           | Always `error` (not CI/local-sensitive).                                                                                         |
 | `unpublished-skill-installable` | `correctness/unpublished-skill-installable` | `correctness` | `error`           | #118. Always `hard` in `validate()`; run once per repo alongside the other repo-scoped rules (L-D13).                            |
+
+The normalizer's skill-audience and source-reading codes (`skill-audience-invalid`,
+`skill-audience-omitted`, `skill-audience-widened`, `skill-audience-reduced`,
+`skill-audience-unenforced`, `skill-audience-conflict`, `skill-audience-prefix-invalid`,
+`skill-name-duplicate`, `skill-location-unsupported`, `source-unreadable`) are members of the union
+so that every `@ai-plugin-marketplace/normalizer` finding is assignable to it. They come from the
+normalizer's host projection, which the toolkit does not invoke yet, so no rule owns them.
 
 New (non-legacy) rules — no `FindingCode` predecessor, `legacyCode` unset. These run under
 `lint()` only; `validate()` does not invoke them:
@@ -432,8 +439,9 @@ This table's rule set matches `ALL_RULES` exactly (20 registered rules: `envelop
 `pluginSelfContainmentRule`, `unpublishedSkillReferenceRule`, `defaultMarketplaceNameRule`,
 `registryFreshnessRule`, `rootArtifactFreshnessRule`, `unpublishedSkillInstallableRule`,
 `publishedSkillInternalRule`, `nameConsistencyRule`, `versionConsistencyRule`, `mcpKeySyncRule`,
-`marketplaceRegistrationRule`) and every entry in the closed `FindingCode` union (16 codes,
-`repo-config-invalid` explicitly called out above as not-yet-rule-wrapped rather than omitted).
+`marketplaceRegistrationRule`) and every entry in the closed `FindingCode` union (26 codes: `repo-config-invalid` explicitly called
+out above as not-yet-rule-wrapped, and the ten normalizer projection codes listed above as
+unowned, rather than omitted).
 
 ---
 

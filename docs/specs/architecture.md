@@ -500,8 +500,20 @@ export type FindingCode =
   | 'root-artifact-collision' // a generated repo-root path is occupied by a non-toolkit file
   | 'default-marketplace-name' // marketplace name/owner is still a template placeholder (always soft)
   | 'frontmatter-invalid' // a skill/agent/command/POWER.md frontmatter is not strict YAML
-  | 'metadata-dir-isolation' // the Open Plugins `.plugin/` dir holds more than plugin.json (hard, open-plugins target)
-  | 'open-plugins-conformance'; // soft advisory: native plugin is not Open-Plugins-portable (arrives with the conformance PR)
+  | 'metadata-dir-isolation' // reserved, no longer emitted: Agent Plugins 1.0.0 has no `.plugin/` metadata dir
+  | 'open-plugins-conformance' // soft advisory: native plugin name is not Open-Plugins-portable
+  | 'unpublished-skill-installable' // a repo SKILL.md outside any published plugin is installable (hard)
+  // Normalizer codes, listed so every normalizer finding is assignable (see its FindingCode):
+  | 'skill-audience-invalid'
+  | 'skill-audience-omitted'
+  | 'skill-audience-widened'
+  | 'skill-audience-reduced'
+  | 'skill-audience-unenforced'
+  | 'skill-audience-conflict'
+  | 'skill-audience-prefix-invalid'
+  | 'skill-name-duplicate'
+  | 'skill-location-unsupported'
+  | 'source-unreadable';
 
 export interface Finding {
   severity: 'hard' | 'soft';

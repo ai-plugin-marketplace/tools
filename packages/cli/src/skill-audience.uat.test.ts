@@ -9,7 +9,9 @@
  * natively; Codex restricts a user-only skill through `agents/openai.yaml` and cannot hide an
  * agent-only one, which is therefore left out with a warning naming the skill and the host), §5.3
  * (the `audience` key is removed from every host's output) and §4 (an omitted feature is reported
- * as `unavailable` with the fidelity list `[omitted]`).
+ * as `unavailable` with the fidelity list `[omitted]`). Vercel Skills installs skills by scanning
+ * the authored source, so nothing is generated for it and each restriction it cannot honour is a
+ * warning naming the skill and Vercel.
  *
  * @see https://github.com/ai-plugin-marketplace/normalizer/blob/main/docs/specs/unified-model.md
  * @see https://code.claude.com/docs/en/skills.md#control-who-invokes-a-skill
@@ -32,12 +34,12 @@ function skillMd(name: string, audience: 'user' | 'agent'): string {
   return `---\nname: ${name}\ndescription: Use when testing the ${name} skill.\naudience: ${audience}\n---\n\n# ${name}\n`;
 }
 
-/** The authored repo: a workspace and one plugin for Claude Code and Codex. */
+/** The authored repo: a workspace and one plugin for Claude Code, Codex and Vercel Skills. */
 const REPO_FILES: Record<string, string> = {
   'aipm.workspace.ts':
     "import { defineWorkspace } from '@ai-plugin-marketplace/core';\n\nexport default defineWorkspace({ marketplace: { name: 'audience-uat-marketplace' } });\n",
   'plugins/demo/aipm.config.ts':
-    "import { defineConfig } from '@ai-plugin-marketplace/core';\n\nexport default defineConfig({ version: '0.0.1', targets: ['claude', 'codex'] });\n",
+    "import { defineConfig } from '@ai-plugin-marketplace/core';\n\nexport default defineConfig({ version: '0.0.1', targets: ['claude', 'codex', 'vercel'] });\n",
   'plugins/demo/.claude-plugin/plugin.json': MANIFEST,
   'plugins/demo/.codex-plugin/plugin.json': MANIFEST,
   'plugins/demo/skills/for-user/SKILL.md': skillMd('for-user', 'user'),
@@ -104,6 +106,23 @@ describe('aipm build of a plugin whose skills state an audience', () => {
     expect(warning).toContain('for-agent');
     expect(warning).toContain('Codex');
     expect(build.stdout).not.toContain('(hard)');
+  });
+
+  it('keeps Vercel on the authored directory and warns about each restriction it cannot honour', () => {
+    const lines = build.stdout.split('\n');
+    expect(lines).toContain('[demo] vercel: plugins/demo');
+    expect(fs.existsSync(path.join(repo, 'dist', 'vercel'))).toBe(false);
+
+    for (const skill of ['for-user', 'for-agent']) {
+      const warnings = lines.filter(
+        (line) =>
+          line.startsWith('[demo] ') &&
+          line.includes('(soft): ') &&
+          line.includes(`"${skill}"`) &&
+          line.includes('Vercel'),
+      );
+      expect(warnings, skill).toHaveLength(1);
+    }
   });
 
   it('writes the form each target installs', () => {

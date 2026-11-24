@@ -147,9 +147,14 @@ reference, and quality warning lands on a clickable `file:line:col`.
 > | -------------------- | ---------------------------------------------------------------------------------------------- | --------------------- |
 > | `aipm-repo`          | `aipm.config.ts` / `aipm.repo.ts` (existing discovery)                                         | full repo, all checks |
 > | `claude-plugin`      | `.claude-plugin/plugin.json`                                                                   | one plugin tree       |
-> | `open-plugins`       | root `plugin.json` (Agent Plugins 1.0.0 §5.1)                                                  | one Open Plugins tree |
+> | `open-plugins`       | root `plugin.json` with the Agent Plugins `$schema` (Agent Plugins 1.0.0 §5.1–§5.2)            | one Open Plugins tree |
 > | `skills-dir`         | directory of `*/SKILL.md` (or a single `SKILL.md`)                                             | skills only           |
 > | `claude-user-config` | `settings.json` + any of `skills/`, `agents/`, `commands/`, `hooks/` in a `.claude`-shaped dir | user/project config   |
+>
+> A bare `plugin.json` is a common filename in other ecosystems, so the `open-plugins` signal is a
+> root `plugin.json` whose `$schema` is the Agent Plugins manifest identifier
+> (`https://agent-plugins.org/schemas/1.0.0/plugin.schema.json`), not the file's presence alone.
+> The mode is reserved and not implemented yet (§6 item 3).
 >
 > Detection evaluates **all** signals at the target path. `aipm-repo` takes precedence when it
 > matches (it subsumes the other shapes: an aipm repo legitimately contains plugin trees and

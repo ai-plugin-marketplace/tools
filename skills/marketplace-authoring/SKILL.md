@@ -85,8 +85,23 @@ version together — using the `@ai-plugin-marketplace` toolkit (the `aipm` CLI)
    > `single-artifact-host` validation finding.
 
 6. **Author the plugin's content** in the conventional locations inside the plugin folder:
-   `skills/<name>/SKILL.md`, `commands/`, `agents/`, `hooks/claude.yaml`, `.mcp.json`, and each
-   target's manifest. A skill's frontmatter needs `name` (matching its directory) and a
+   `skills/<name>/SKILL.md`, `commands/`, `agents/`, `hooks/claude.yaml`, MCP configuration, and
+   each target's manifest. Manifests and MCP configuration live in different places per target:
+
+   - Claude, Cursor and Codex: manifests in `.claude-plugin/`, `.cursor-plugin/`, `.codex-plugin/`;
+     MCP servers in `.mcp.json`.
+   - Open Plugins: the manifest is the plugin root's `plugin.json` with
+     `"$schema": "https://agent-plugins.org/schemas/1.0.0/plugin.schema.json"`. MCP servers go in
+     the root `mcp.json`, with `"$schema": "https://agent-plugins.org/schemas/1.0.0/mcp.schema.json"`
+     and a `type` (such as `"stdio"`) on each server. Open Plugins hosts ignore `.mcp.json`.
+   - Kiro: `POWER.md`, with MCP servers in the root `mcp.json` in Kiro's own shape, which allows
+     neither `$schema` nor a per-server `type`.
+
+   A plugin with MCP servers can't declare both `kiro` and `open-plugins` yet: they need different
+   shapes of the same `mcp.json`. Pick one of the two for such a plugin. A plugin without MCP
+   servers can declare both.
+
+   A skill's frontmatter needs `name` (matching its directory) and a
    `description` written to trigger precisely. A plugin is installed on its own, so everything it
    needs must live inside its folder: don't link to files elsewhere in the repo, and don't tell
    the model to use a contributor skill. If published content needs something a contributor skill

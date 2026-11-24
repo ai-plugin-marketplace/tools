@@ -35,22 +35,34 @@ Where this section and later sections disagree, this section wins.
 > - The manifest is the plugin root's **`plugin.json`** (§5.1), not `.plugin/plugin.json`. It MUST
 >   carry `"$schema": "https://agent-plugins.org/schemas/1.0.0/plugin.schema.json"` (§5.2); the
 >   scaffold writes that value instead of `schemaVersion`. `TARGET_MIN_REQUIRED`,
->   `TARGET_OWNED_ARTIFACTS`, name/version consistency, discovery's plugin-shape markers and the
->   broken-file-ref candidates all use root `plugin.json`.
+>   `TARGET_OWNED_ARTIFACTS`, name/version consistency, and discovery's plugin-shape markers all
+>   use root `plugin.json`. The broken-file-ref and self-containment candidates exclude it, because
+>   the manifest has no path-bearing fields (next bullet).
+> - A plugin that declares `open-plugins` but still has only `.plugin/plugin.json` gets the hard
+>   missing-manifest `envelope-adherence` finding with a hint to move the file. Any leftover
+>   `.plugin/` directory is a soft `envelope-adherence` finding, since no target reads it.
 > - Component locations are fixed (`skills/`, `mcp.json`) and are never declared by manifest
 >   fields (§6). Unknown manifest fields, including the former component-path fields and `logo`,
 >   are ignored with a soft `schema-invalid`.
 > - MCP configuration is the plugin root's **`mcp.json`** with its own `$schema`
 >   (`https://agent-plugins.org/schemas/1.0.0/mcp.schema.json`) and an explicit transport `type`
 >   per server (§7.2). Kiro also reads root `mcp.json`, so the file is a shared artifact of `kiro`
->   and `open-plugins`; `.mcp.json` is no longer an `open-plugins` artifact.
+>   and `open-plugins`; `.mcp.json` is no longer an `open-plugins` artifact. When `.mcp.json`
+>   exists, `open-plugins` is in the envelope, no native target that reads `.mcp.json` is, and there
+>   is no root `mcp.json`, the `envelope-adherence` hint says to move the file to `mcp.json` and add
+>   `$schema` and per-server `type`.
 > - There is no metadata directory, so the isolation rule of §2.1/§6.1 no longer exists.
->   `metadata-dir-isolation` stays in `FindingCode` as a reserved code and is not emitted. The
->   metadata-dir advisory of §7 is removed from the native targets; the name-grammar advisory
->   remains.
+>   `metadata-dir-isolation` stays in `FindingCode` as a reserved code and is not emitted. Of the
+>   §7 advisories on native targets, only the name-grammar advisory remains: the metadata-dir and
+>   non-`./` component-path advisories are removed, since Agent Plugins has neither a metadata
+>   directory nor component-path fields.
 
 Known gap: Kiro's `mcp.json` schema is strict and rejects the `$schema` and `type` keys Agent
-Plugins requires, so one root `mcp.json` cannot currently satisfy both `kiro` and `open-plugins`.
+Plugins requires, so one root `mcp.json` cannot currently satisfy both `kiro` and `open-plugins`. An Agent
+Plugins-shaped file fails Kiro's schema (hard `schema-invalid`); a Kiro-shaped file passes with
+only a soft `schema-invalid`, and Open Plugins hosts then load no MCP servers. Until the Kiro schema
+or a per-target projection resolves this, a plugin with MCP servers declares one of the two
+targets. Author-facing guidance says so.
 
 ---
 
@@ -250,7 +262,7 @@ Open Plugins makes the manifest optional and its grammar permissive. The toolkit
 authors to a **stricter** profile, because the toolkit needs a stable anchor for name-consistency,
 envelope adherence, and scaffolding.
 
-### 4.1 The manifest is REQUIRED by the toolkit
+### 4.1 The manifest is REQUIRED by the toolkit (superseded by §0)
 
 > **OP-D6 (normative).** When `open-plugins` is in a plugin's envelope, the toolkit **requires**
 > `.plugin/plugin.json` (added to `TARGET_MIN_REQUIRED`, `packages/core/src/pipeline/validate.ts:85`,
@@ -279,7 +291,7 @@ There are two name grammars in play, and they are intentionally different:
 > generate. Cursor's installed runtime regex `^[a-z0-9]([a-z0-9.-]*[a-z0-9])?$` equals the spec
 > grammar (empirical §5.2), confirming the spec grammar is the right validation width.
 
-### 4.3 Manifest field mapping
+### 4.3 Manifest field mapping (superseded by §0)
 
 The `.plugin/plugin.json` the scaffolder emits mirrors the Codex/Cursor scaffold (`scaffold.ts` in
 each target module): `{ schemaVersion, name, version, description? }` at minimum, with the
@@ -322,7 +334,7 @@ rules applied to _other_ targets are soft advisories (§7).
 | Open Plugins requirement (§2)                                                | `FindingCode`              | Severity (in `open-plugins` target) | Reuse / new |
 | ---------------------------------------------------------------------------- | -------------------------- | ----------------------------------- | ----------- |
 | Manifest `name` present and grammar-valid (§2.1)                             | `schema-invalid`           | hard                                | reuse       |
-| Component paths `./`-relative, no `..` (§2.1)                                | `schema-invalid`           | hard                                | reuse       |
+| ~~Component paths `./`-relative, no `..`~~ (removed, §0)                     | `schema-invalid`           | not emitted                         | —           |
 | ~~Metadata dir contains only `plugin.json`~~ (removed, §0)                   | `metadata-dir-isolation`   | not emitted                         | reserved    |
 | `marketplace.json` has `name` + `plugins[]` ≥ 1 (§2.4)                       | `marketplace-registration` | hard                                | reuse       |
 | Marketplace entry `source` `./`-relative, points at the plugin (§2.4)        | `marketplace-registration` | hard                                | reuse       |

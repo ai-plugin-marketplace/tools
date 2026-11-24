@@ -2,6 +2,7 @@
  * Tests for the cross-target validator pipeline module.
  *
  * @see docs/specs/architecture.md §10.1 (validation contract), §6 (support envelope), §4.4 (marketplace registry)
+ * @see https://kiro.dev/docs/mcp/configuration/ (Kiro `mcp.json` server entries)
  */
 
 import * as fs from 'node:fs';
@@ -25,6 +26,7 @@ import {
   validateMarketplaceRegistration,
   validateMcpKeySync,
   validateNameConsistency,
+  validatePerTargetSchemas,
   validateVersionConsistency,
 } from './validate.js';
 import { defineWorkspace } from '../config.js';
@@ -1378,5 +1380,59 @@ describe('Open Plugins layout (Agent Plugins 1.0.0)', () => {
     expect(findings[0]?.severity).toBe('hard');
     expect(findings[0]?.message).toContain("Root 'plugin.json' has version '0.9.0'");
     expect(findings[0]?.message).toContain('1.2.3');
+  });
+});
+
+describe('validatePerTargetSchemas() — Kiro mcp.json server entries', () => {
+  /** A kiro-only plugin whose root `mcp.json` holds the given servers. */
+  function kiroPluginWithServers(servers: Record<string, object>): string {
+    const pluginDir = path.join(tmpDir, 'my-plugin');
+    createMinimalPlugin(pluginDir, 'my-plugin', ['kiro']);
+    write(pluginDir, 'mcp.json', { mcpServers: servers });
+    return pluginDir;
+  }
+
+  it('accepts a local server with the per-server options Kiro documents', () => {
+    const pluginDir = kiroPluginWithServers({
+      local: {
+        command: 'node',
+        args: ['server.js'],
+        env: { TOKEN: '${TOKEN}' },
+        disabled: false,
+        autoApprove: ['read'],
+        disabledTools: ['write'],
+        timeout: 30000,
+      },
+    });
+
+    expect(validatePerTargetSchemas(pluginDir, ['kiro'])).toStrictEqual([]);
+  });
+
+  it('accepts a remote server configured by url, headers and oauth', () => {
+    const pluginDir = kiroPluginWithServers({
+      remote: {
+        url: 'https://mcp.example.com/mcp',
+        headers: { 'X-Team': 'docs' },
+        oauth: { clientId: 'abc', oauthScopes: ['read'], mode: 'browser' },
+      },
+    });
+
+    expect(validatePerTargetSchemas(pluginDir, ['kiro'])).toStrictEqual([]);
+  });
+
+  it('rejects a server that sets both command and url', () => {
+    const pluginDir = kiroPluginWithServers({
+      both: { command: 'node', url: 'https://mcp.example.com/mcp' },
+    });
+
+    const findings = validatePerTargetSchemas(pluginDir, ['kiro']);
+    expect(findings.some((f) => f.code === 'schema-invalid' && f.severity === 'hard')).toBe(true);
+  });
+
+  it('still rejects the Agent Plugins per-server type key, which Kiro does not document', () => {
+    const pluginDir = kiroPluginWithServers({ local: { type: 'stdio', command: 'node' } });
+
+    const findings = validatePerTargetSchemas(pluginDir, ['kiro']);
+    expect(findings.some((f) => f.code === 'schema-invalid' && f.severity === 'hard')).toBe(true);
   });
 });

@@ -20,6 +20,7 @@
  * Assertions are spec-first: expected registry shapes trace to the Open Plugins marketplace spec.
  *
  * @see https://open-plugins.com/plugin-builders/marketplace.md
+ * @see https://agent-plugins.org/specification.md (plugin manifest layout, §5)
  * @see docs/specs/open-plugins-target.md (OP-D3, OP-D4, OP-D5, VT-4)
  */
 
@@ -57,8 +58,9 @@ const ROOT_MARKETPLACE = 'marketplace.json';
 const SIDECAR_REL = ['.aipm', 'generated-root.json'] as const;
 
 /**
- * An Open-Plugins-declaring plugin carrying the required `.plugin/plugin.json` manifest (name
- * matching the directory basename so name-consistency and the metadata-dir isolation check pass).
+ * An Open-Plugins-declaring plugin carrying the required root `plugin.json` manifest (Agent Plugins
+ * 1.0.0 §5.1), with the required `$schema` identifier (§5.2) and a name matching the directory
+ * basename so name-consistency passes.
  */
 function openPluginsPlugin(name: string, meta?: SynthRegistryPlugin['meta']): SynthRegistryPlugin {
   return {
@@ -66,7 +68,15 @@ function openPluginsPlugin(name: string, meta?: SynthRegistryPlugin['meta']): Sy
     targets: ['open-plugins'],
     ...(meta !== undefined ? { meta } : {}),
     files: {
-      '.plugin/plugin.json': `{\n  "schemaVersion": "0.1.0",\n  "name": "${name}",\n  "version": "0.0.1"\n}\n`,
+      'plugin.json': `${JSON.stringify(
+        {
+          $schema: 'https://agent-plugins.org/schemas/1.0.0/plugin.schema.json',
+          name,
+          version: '0.0.1',
+        },
+        null,
+        2,
+      )}\n`,
     },
   };
 }

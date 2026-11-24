@@ -1,8 +1,8 @@
 /**
  * `schema/target-conformance` — per-target manifest/filesystem conformance (§3.1). Wraps the
  * existing per-target `validate.ts` dispatch (`validatePerTargetSchemas`), which itself emits
- * `schema-invalid`, `metadata-dir-isolation`, and `open-plugins-conformance` findings depending
- * on the target and failure kind — each finding's own `code` becomes the diagnostic's
+ * `schema-invalid` and `open-plugins-conformance` findings depending on the target and failure
+ * kind — each finding's own `code` becomes the diagnostic's
  * `legacyCode`, so one rule fairly represents several legacy codes (they are all "does this
  * target's manifest/filesystem conform" checks).
  *

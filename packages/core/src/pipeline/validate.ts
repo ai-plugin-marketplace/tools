@@ -89,17 +89,21 @@ const TARGET_OWNED_ARTIFACTS: Record<TargetId, string[]> = {
   codex: ['.codex-plugin/plugin.json', '.codex-plugin'],
   cursor: ['.cursor-plugin/plugin.json', '.cursor-plugin'],
   gemini: ['gemini-extension.json', 'GEMINI.md'],
-  kiro: ['POWER.md', 'mcp.json'],
-  'open-plugins': ['.plugin/plugin.json', '.plugin'],
+  kiro: ['POWER.md'],
+  'open-plugins': ['plugin.json'],
   vercel: [],
 };
 
 /**
  * Shared artifacts that require at least one of the listed targets in the envelope.
  * `.mcp.json` is the Claude/Cursor/Codex MCP config format, shared between those targets.
+ * Root `mcp.json` is read by both Kiro and Open Plugins (Agent Plugins 1.0.0 §7.2), so neither
+ * target owns it exclusively.
+ * @see https://agent-plugins.org/specification.md
  */
 const SHARED_ARTIFACTS: { file: string; anyOf: TargetId[] }[] = [
-  { file: '.mcp.json', anyOf: ['claude', 'codex', 'cursor', 'open-plugins'] },
+  { file: '.mcp.json', anyOf: ['claude', 'codex', 'cursor'] },
+  { file: 'mcp.json', anyOf: ['kiro', 'open-plugins'] },
 ];
 
 /**
@@ -113,7 +117,7 @@ export const TARGET_MIN_REQUIRED: Record<TargetId, string[]> = {
   cursor: ['.cursor-plugin/plugin.json'],
   gemini: ['gemini-extension.json'],
   kiro: ['POWER.md'],
-  'open-plugins': ['.plugin/plugin.json'],
+  'open-plugins': ['plugin.json'],
   vercel: [],
 };
 
@@ -701,7 +705,7 @@ export function validateNameConsistency(
         break;
       }
       case 'open-plugins': {
-        const manifestPath = path.join(pluginDir, '.plugin/plugin.json');
+        const manifestPath = path.join(pluginDir, 'plugin.json');
         if (!fs.existsSync(manifestPath)) break;
         const manifest = tryReadJson(manifestPath);
         const parsed = z.object({ name: z.string().optional() }).loose().safeParse(manifest);
@@ -711,7 +715,7 @@ export function validateNameConsistency(
             hard(
               'name-consistency',
               expectedName,
-              `'.plugin/plugin.json' has name '${parsed.data.name}' but plugin directory is '${expectedName}'.`,
+              `'plugin.json' has name '${parsed.data.name}' but plugin directory is '${expectedName}'.`,
             ),
           );
         }
@@ -848,7 +852,7 @@ export async function validateVersionConsistency(
         break;
       }
       case 'open-plugins': {
-        const manifestPath = path.join(pluginDir, '.plugin/plugin.json');
+        const manifestPath = path.join(pluginDir, 'plugin.json');
         if (!fs.existsSync(manifestPath)) break;
         const manifest = tryReadJson(manifestPath);
         const parsed = z.object({ version: z.string().optional() }).loose().safeParse(manifest);
@@ -858,7 +862,7 @@ export async function validateVersionConsistency(
             hard(
               'version-consistency',
               pluginName,
-              `'.plugin/plugin.json' has version '${parsed.data.version}' but aipm.config.ts declares version '${expectedVersion}'.`,
+              `'plugin.json' has version '${parsed.data.version}' but aipm.config.ts declares version '${expectedVersion}'.`,
               `Bump the manifest's version to match aipm.config.ts, which is the source of truth for the plugin's version.`,
             ),
           );

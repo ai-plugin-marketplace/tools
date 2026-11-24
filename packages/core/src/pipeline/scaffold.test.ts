@@ -159,7 +159,8 @@ describe('runScaffold', () => {
       '.claude-plugin/plugin.json',
       '.codex-plugin/plugin.json',
       '.cursor-plugin/plugin.json',
-      '.plugin/plugin.json',
+      // Open Plugins: root `plugin.json` (Agent Plugins 1.0.0 §5.1).
+      'plugin.json',
       'gemini-extension.json',
       'GEMINI.md',
       'POWER.md',

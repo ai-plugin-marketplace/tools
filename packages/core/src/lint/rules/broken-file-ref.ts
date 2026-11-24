@@ -93,7 +93,7 @@ export function candidateRelPaths(pluginDir: string): string[] {
     '.claude-plugin/plugin.json',
     '.codex-plugin/plugin.json',
     '.cursor-plugin/plugin.json',
-    '.plugin/plugin.json',
+    'plugin.json',
     'gemini-extension.json',
     'POWER.md',
   ];

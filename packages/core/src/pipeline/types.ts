@@ -204,23 +204,20 @@ export interface ValidationResult {
  * the earlier one's plugins — so a placeholder must be renamed to a unique value. Always SOFT: a
  * warning, never a build failure.
  *
- * `metadata-dir-isolation` — the Open Plugins metadata directory (`.plugin/`) contains an entry
- * other than `plugin.json`. The Open Plugins v1.0.0 spec requires the metadata directory to contain
- * ONLY `plugin.json`; any sibling file/dir violates that MUST. Fires HARD, and only for the
- * `open-plugins` target — the native vendor dirs (`.claude-plugin/`, `.cursor-plugin/`) are allowed
- * to hold a `marketplace.json`, so this check is scoped to `.plugin/` specifically.
- * @see https://open-plugins.com/plugin-builders/specification.md
+ * `metadata-dir-isolation` — reserved; no longer emitted. Earlier Open Plugins drafts kept the
+ * manifest in a `.plugin/` metadata directory that had to hold only `plugin.json`. Agent Plugins
+ * 1.0.0 places the manifest at the plugin root and defines no such directory, so the restriction
+ * no longer exists. The literal stays so existing consumers keep compiling.
+ * @see https://agent-plugins.org/specification.md
  *
  * `open-plugins-conformance` — a SOFT, advisory-only portability nudge emitted on native
  * `claude`/`cursor`/`codex` plugins (whether or not `open-plugins` is in the envelope) when the
- * plugin is native-valid but would need a change to be Open-Plugins-conformant: a plugin `name`
- * that is legal for the native target but violates the Open Plugins name grammar (grammar drift),
- * or a stray non-`plugin.json` file in the plugin's vendor metadata dir (`.claude-plugin/` etc.,
- * which Open Plugins requires to be isolated). ALWAYS SOFT — it never flips
- * `ValidationResult.passed`; the identical rules apply HARD only inside the `open-plugins` target
- * (spec §7 / OP-D10). A distinct code (not `schema-invalid`) because the manifest is not broken for
- * its declared targets — this says "fine as-is; here is what Open Plugins would additionally want".
- * @see docs/specs/open-plugins-target.md §7
+ * plugin is native-valid but its `name` violates the Open Plugins name grammar (Agent Plugins 1.0.0
+ * §5.5). ALWAYS SOFT — it never flips `ValidationResult.passed`; the identical rule applies HARD
+ * only inside the `open-plugins` target. A distinct code (not `schema-invalid`) because the
+ * manifest is not broken for its declared targets — this says "fine as-is; here is what Open
+ * Plugins would additionally want".
+ * @see https://github.com/agentplugins/agent-plugins-spec/blob/v1.0.0/spec/1.0.0.md#55-plugin-name-constraints
  *
  * `unpublished-skill-installable` — a `SKILL.md` in the repository is neither inside a published
  * plugin nor toolkit-generated, and its frontmatter does not carry `metadata.internal: true`.
@@ -231,6 +228,14 @@ export interface ValidationResult {
  * the skill internal, or move it into a published plugin; the toolkit never edits the file. Not
  * emitted by `build`'s post-build validation (see `ValidateOptions.skipPublishedSurfaceBoundary`).
  * @see docs/specs/lint-engine.md L-D13
+ *
+ * `skill-audience-invalid`, `skill-audience-omitted`, `skill-audience-widened`,
+ * `skill-audience-reduced`, `skill-audience-unenforced`, `skill-audience-conflict`,
+ * `skill-audience-prefix-invalid`, `skill-name-duplicate`, `skill-location-unsupported`,
+ * `source-unreadable` — codes defined by `@ai-plugin-marketplace/normalizer` for a skill's
+ * audience declaration and how it is carried to each host, and for authored source a build cannot
+ * read safely. They are listed here so every normalizer finding is assignable to this type; their
+ * meaning and severity are the normalizer's (see its `FindingCode`).
  *
  * @public
  */
@@ -250,7 +255,17 @@ export type FindingCode =
   | 'frontmatter-invalid'
   | 'metadata-dir-isolation'
   | 'open-plugins-conformance'
-  | 'unpublished-skill-installable';
+  | 'unpublished-skill-installable'
+  | 'skill-audience-invalid'
+  | 'skill-audience-omitted'
+  | 'skill-audience-widened'
+  | 'skill-audience-reduced'
+  | 'skill-audience-unenforced'
+  | 'skill-audience-conflict'
+  | 'skill-audience-prefix-invalid'
+  | 'skill-name-duplicate'
+  | 'skill-location-unsupported'
+  | 'source-unreadable';
 
 /**
  * A single validation finding.

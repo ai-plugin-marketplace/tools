@@ -93,7 +93,8 @@ describe('discoverPlugins — repo root, plugin-shaped but config-less (#91)', (
     ['cursor', '.cursor-plugin/plugin.json'],
     ['gemini', 'gemini-extension.json'],
     ['kiro', 'POWER.md'],
-    ['open-plugins', '.plugin/plugin.json'],
+    // Agent Plugins 1.0.0 §5.1: the portable manifest is the plugin root's `plugin.json`.
+    ['open-plugins', 'plugin.json'],
   ])(
     'discovers a config-less %s-shaped directory via its manifest marker',
     async (_target, rel) => {

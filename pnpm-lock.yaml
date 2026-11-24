@@ -84,6 +84,9 @@ importers:
 
   packages/core:
     dependencies:
+      '@ai-plugin-marketplace/normalizer':
+        specifier: ^0.1.0
+        version: 0.1.0
       jiti:
         specifier: ^2.7.0
         version: 2.7.0
@@ -105,6 +108,10 @@ importers:
         version: 7.7.1
 
 packages:
+
+  '@ai-plugin-marketplace/normalizer@0.1.0':
+    resolution: {integrity: sha512-c/hXOVqZ0wYMUlBi7sRqbMQXeYxPpPW1e2uKSJH7MPlPZyBsA97ueYH0iLtJNIPoJm83E9HBdcPQfIiXfLT5GA==}
+    engines: {node: '>=20.0.0'}
 
   '@api-extractor-tools/eslint-plugin@0.1.1':
     resolution: {integrity: sha512-2VY3LhHIoucP6RLVVq7WA7t1jAXPTfFWs/3zBaZptmGn0iWPGQZ/O33A/HnZaYqgIM6M7KG7uuzOq0UXAlpHGQ==}
@@ -2562,6 +2569,11 @@ packages:
     resolution: {integrity: sha512-rftlrkhHZOcjDwkGlnUtZZkvaPHCsDATp4pGpuOOMDaTdDDXF91wuVDJoWoPsKX/3YPQ5fHuF3STjcYyKr+Qhg==}
 
 snapshots:
+
+  '@ai-plugin-marketplace/normalizer@0.1.0':
+    dependencies:
+      yaml: 2.9.1
+      zod: 4.3.6
 
   '@api-extractor-tools/eslint-plugin@0.1.1(eslint@9.39.4(jiti@2.7.0))(typescript@5.9.3)':
     dependencies:

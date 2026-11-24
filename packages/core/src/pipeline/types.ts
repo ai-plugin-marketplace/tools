@@ -146,9 +146,11 @@ export interface FeatureOutcome {
  *
  * `status` says where the target's form of the plugin comes from:
  *
- * - `source` — the authored plugin directory is already the target's form (or, for a target that
- *   is always bundled, its bundle needed no change). Nothing is generated for the target beyond
- *   what the build has always written.
+ * - `source` — the target installs what the author wrote: the authored plugin directory is already
+ *   the target's form (or, for a target that is always bundled, its bundle needed no change).
+ *   Nothing is generated for the target beyond what the build has always written. A target that
+ *   can only install from the authored source (Vercel) always has this status; where its form
+ *   would differ, the findings say what it does not receive.
  * - `projected` — the target's form differs from the authored source, so the build generated it:
  *   a tree of its own under the dist root, or the target's bundle with the differences applied.
  * - `failed` — the target's form could not be built (a `hard` finding names the reason). Nothing

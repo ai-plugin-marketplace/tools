@@ -34,7 +34,8 @@ import type { FeatureOutcome, Finding, TargetId } from './types.js';
  *
  * - `source` — the authored plugin directory. The target installs from it directly, and the
  *   registries list it. This is the case for every plugin whose source is already the target's
- *   form.
+ *   form, and always for a target that can only install from the authored source (see
+ *   {@link isSourceInstalledTarget}).
  * - `bundle` — the bundle the build always generates for the target under the dist root (Gemini,
  *   Kiro). When the target's form differs from the source, the differences are applied to the
  *   bundle.
@@ -57,11 +58,25 @@ export function isBundledTarget(target: TargetId): boolean {
 }
 
 /**
+ * The targets that install a plugin's skills by scanning the authored source, with no registry
+ * entry or bundle the build could point at a generated directory instead. Nothing generated for
+ * such a target would ever be installed, so its form is the authored directory whatever the
+ * projection says: no tree is built for it, and what the authored source cannot express there (a
+ * restricted audience, for instance) is reported by the projection's findings.
+ */
+const SOURCE_INSTALLED_TARGETS: ReadonlySet<TargetId> = new Set<TargetId>(['vercel']);
+
+/** True iff `target` can only install from the authored source (see {@link HostPlacement}). */
+function isSourceInstalledTarget(target: TargetId): boolean {
+  return SOURCE_INSTALLED_TARGETS.has(target);
+}
+
+/**
  * The per-target output layout, stated once.
  *
- * A failed target gets nothing. A bundled target keeps its bundle. Any other target keeps
- * installing from the authored directory for as long as that directory is its form, and gets a
- * tree of its own as soon as it is not.
+ * A failed target gets nothing. A bundled target keeps its bundle. A source-installed target stays
+ * on the authored directory. Any other target keeps installing from the authored directory for as
+ * long as that directory is its form, and gets a tree of its own as soon as it is not.
  */
 export function placeHostForm(
   target: TargetId,
@@ -70,7 +85,18 @@ export function placeHostForm(
 ): HostPlacement {
   if (failed) return 'none';
   if (isBundledTarget(target)) return 'bundle';
+  if (isSourceInstalledTarget(target)) return 'source';
   return changes.length === 0 ? 'source' : 'tree';
+}
+
+/**
+ * True iff the build generates `form` from the authored source by applying its changes: a tree of
+ * the target's own, or a bundle that differs from what the bundler alone produces. False for a
+ * failed target and for one that installs from the authored directory, including a
+ * source-installed target whose changes cannot be delivered.
+ */
+export function isProjectedForm(form: HostForm): boolean {
+  return form.placement === 'tree' || (form.placement === 'bundle' && form.changes.length > 0);
 }
 
 /** How a plugin's authored source reaches one target of its envelope. */
@@ -88,7 +114,9 @@ export interface HostForm {
   placement: HostPlacement;
   /**
    * The changes that turn the authored source into this target's form, in the order to apply
-   * them. Empty when the source is already the form.
+   * them. Empty when the source is already the form. They are applied only where the build
+   * generates the form (see {@link isProjectedForm}); a source-installed target keeps them here as
+   * the description of what it does not receive.
    */
   changes: readonly HostFileChange[];
   /** One outcome per authored feature and subject on this target. */
@@ -229,10 +257,22 @@ export function writeHostTree(
   applyHostFileChanges(into, changes);
 }
 
+/** True iff `candidate` is `root` or lies under it. Both must be absolute and normalized. */
+function isWithin(root: string, candidate: string): boolean {
+  return candidate === root || candidate.startsWith(`${root}${path.sep}`);
+}
+
 /**
  * Resolve a change's path against the tree it applies to, refusing one that would leave the tree.
  * Change paths are relative and forward-slashed by contract; this guards the tree's boundary
  * rather than trusting that.
+ *
+ * The boundary is checked twice: as written, and as the filesystem resolves it. A tree keeps the
+ * plugin's links as the author wrote them, so a directory on the path may be a link to somewhere
+ * else (an absolute link back into the authored plugin, for instance); a change applied through it
+ * would modify what the link points at instead of the tree. The entry the path names may itself be
+ * a link (removing or moving a link acts on the link), so only the directories leading to it are
+ * resolved here; {@link applyHostFileChanges} checks the entry where it writes through it.
  */
 function resolveInTree(rootDir: string, relPath: string): string {
   const abs = path.resolve(rootDir, ...relPath.split('/'));
@@ -240,7 +280,25 @@ function resolveInTree(rootDir: string, relPath: string): string {
   if (relPath === '' || path.isAbsolute(relPath) || !abs.startsWith(`${root}${path.sep}`)) {
     throw new Error(`Host file change names a path outside the plugin: '${relPath}'.`);
   }
+  let existingParent = path.dirname(abs);
+  while (!fs.existsSync(existingParent) && existingParent !== root) {
+    existingParent = path.dirname(existingParent);
+  }
+  assertResolvesInTree(root, existingParent, relPath);
   return abs;
+}
+
+/**
+ * Throw unless `abs`, which must exist, resolves (links followed) to a place inside the tree at
+ * `root`.
+ */
+function assertResolvesInTree(root: string, abs: string, relPath: string): void {
+  if (!isWithin(fs.realpathSync(root), fs.realpathSync(abs))) {
+    throw new Error(
+      `Host file change '${relPath}' reaches outside the plugin through a link; ` +
+        `links inside a plugin must be relative and stay inside it.`,
+    );
+  }
 }
 
 /**
@@ -257,14 +315,16 @@ function resolveInTree(rootDir: string, relPath: string): string {
  * form that silently differs from the described one. A change of an unknown kind is refused for
  * the same reason.
  *
- * @throws {Error} If a path leaves `rootDir`, a precondition does not hold, or a change's kind is
- *   not one of the three above.
+ * @throws {Error} If a path leaves `rootDir` (as written, or through a link), a precondition does
+ *   not hold, or a change's kind is not one of the three above.
  */
 export function applyHostFileChanges(rootDir: string, changes: readonly HostFileChange[]): void {
   for (const change of changes) {
     switch (change.kind) {
       case 'write': {
         const abs = resolveInTree(rootDir, change.path);
+        // Writing follows a link at the path itself, so the file it leads to must be in the tree.
+        if (fs.existsSync(abs)) assertResolvesInTree(path.resolve(rootDir), abs, change.path);
         fs.mkdirSync(path.dirname(abs), { recursive: true });
         fs.writeFileSync(abs, change.content, 'utf-8');
         // `writeFileSync`'s mode only applies when it creates the file; set it explicitly so a

@@ -17,6 +17,13 @@
  * - Codex: `policy.allow_implicit_invocation: false` in `agents/openai.yaml` beside the skill
  *   keeps the agent from selecting it.
  * - `HostFileChange` (normalizer): the contract of `write`, `remove` and `move`.
+ * - Vercel Skills installs skills by scanning the repository's authored source, so no generated
+ *   tree can be what it installs.
+ *
+ * A target the unified model does not cover (Cursor, Gemini CLI, Kiro) cannot enforce an audience.
+ * The normalizer either keeps a restricted skill there or leaves it out, in both cases with a
+ * warning naming the skill and the target; the suites below hold for either and say so where it
+ * matters.
  *
  * @see https://github.com/ai-plugin-marketplace/normalizer/blob/main/docs/specs/unified-model.md
  * @see https://code.claude.com/docs/en/skills.md#control-who-invokes-a-skill
@@ -35,8 +42,13 @@ import { parse as parseYaml } from 'yaml';
 import type { HostFileChange } from '@ai-plugin-marketplace/normalizer';
 
 import { runBuild } from './build.js';
-import { applyHostFileChanges, computePluginHostForms, placeHostForm } from './host-forms.js';
-import { runValidate } from './validate.js';
+import {
+  applyHostFileChanges,
+  computePluginHostForms,
+  placeHostForm,
+  writeHostTree,
+} from './host-forms.js';
+import { runValidate, validateMarketplaceRegistration } from './validate.js';
 import { synthRegistryRepo } from '../test-support/synth-plugin.js';
 import type { SynthRegistryRepo } from '../test-support/synth-plugin.js';
 import type { BuildResult, Finding, FindingCode, HostBuildReport, TargetId } from './types.js';
@@ -174,6 +186,36 @@ function outcomesBySkill(report: HostBuildReport): Record<string, string> {
 
 const ALL_FOUR = ['for-agent', 'for-both', 'for-user', 'widened'];
 
+/** The skills of {@link AUDIENCE_SKILLS} that restrict who may invoke them. */
+const RESTRICTED = ['for-agent', 'for-user', 'widened'];
+
+/** The soft findings about `skill` on the target whose diagnostics name is `label`. */
+function warningsAbout(findings: readonly Finding[], skill: string, label: string): Finding[] {
+  return findings.filter(
+    (f) => f.severity === 'soft' && f.message.includes(`"${skill}"`) && f.message.includes(label),
+  );
+}
+
+/**
+ * Asserts what a target outside the unified model gets in `dir`: the unrestricted skill, each
+ * restricted skill either kept or left out (never renamed or added to), and only the Agent Skills
+ * floor keys on whatever is emitted.
+ */
+function expectUncoveredTargetSkills(dir: string, where: string): void {
+  const emitted = skillDirs(dir) ?? [];
+  expect(emitted, where).toContain('for-both');
+  expect(
+    emitted.filter((skill) => !ALL_FOUR.includes(skill)),
+    where,
+  ).toStrictEqual([]);
+  for (const skill of emitted) {
+    expect(Object.keys(frontmatter(dir, skill)).sort(), `${where}/${skill}`).toStrictEqual([
+      'description',
+      'name',
+    ]);
+  }
+}
+
 // ---------------------------------------------------------------------------
 // A plugin with one skill of each audience
 // ---------------------------------------------------------------------------
@@ -249,19 +291,35 @@ describe('build of a plugin whose skills state an audience', () => {
     expect(fs.existsSync(path.join(dir, 'skills', 'for-both', 'agents'))).toBe(false);
   });
 
-  it('gives a target outside the model every skill, without the source keys', async () => {
+  it('gives a target outside the model its own tree, without the source keys', async () => {
     repo = synthRepo(AUDIENCE_SKILLS);
     await runBuild(repo.repoRoot);
-    for (const target of ['cursor', 'vercel'] as const) {
-      const dir = distOf(repo, target);
-      expect(skillDirs(dir), target).toStrictEqual(ALL_FOUR);
-      for (const skill of ALL_FOUR) {
-        expect(Object.keys(frontmatter(dir, skill)).sort(), `${target}/${skill}`).toStrictEqual([
-          'description',
-          'name',
-        ]);
-      }
+    expectUncoveredTargetSkills(distOf(repo, 'cursor'), 'cursor');
+  });
+
+  it('builds nothing for Vercel, which installs the authored source', async () => {
+    repo = synthRepo(AUDIENCE_SKILLS);
+    const [result] = await runBuild(repo.repoRoot);
+
+    // No tree: nothing would install from it.
+    expect(fs.existsSync(path.join(repo.repoRoot, 'dist', 'vercel'))).toBe(false);
+    const vercel = hostReport(result, 'vercel');
+    expect(vercel).toMatchObject({ status: 'source', dir: pluginDirOf(repo) });
+    expect(vercel.outcomes).toStrictEqual([]);
+    expect(vercel).not.toHaveProperty('host');
+  });
+
+  it('warns about every restriction Vercel cannot honour', async () => {
+    repo = synthRepo(AUDIENCE_SKILLS);
+    await runBuild(repo.repoRoot);
+    const result = await runValidate(repo.repoRoot, { ci: true });
+    // The authored skills are what Vercel installs, restrictions unenforced: each one is reported.
+    for (const skill of RESTRICTED) {
+      const warnings = warningsAbout(result.findings, skill, 'Vercel');
+      expect(warnings, skill).toHaveLength(1);
+      expect(warnings[0], skill).toMatchObject({ plugin: PLUGIN });
     }
+    expect(warningsAbout(result.findings, 'for-both', 'Vercel')).toStrictEqual([]);
   });
 
   it('builds a per-target tree as the whole plugin, not only its skills', async () => {
@@ -281,14 +339,11 @@ describe('build of a plugin whose skills state an audience', () => {
     repo = synthRepo(AUDIENCE_SKILLS);
     await runBuild(repo.repoRoot);
     for (const dir of [distOf(repo, 'gemini'), distOf(repo, 'kiro'), repo.repoRoot]) {
-      expect(skillDirs(dir), dir).toStrictEqual(ALL_FOUR);
-      for (const skill of ALL_FOUR) {
-        expect(Object.keys(frontmatter(dir, skill)).sort(), `${dir}/${skill}`).toStrictEqual([
-          'description',
-          'name',
-        ]);
-      }
+      expectUncoveredTargetSkills(dir, dir);
     }
+    // The repo-root artifact is the bundle: the same skills as under dist/.
+    expect(skillDirs(repo.repoRoot)).toStrictEqual(skillDirs(distOf(repo, 'gemini')));
+    expect(skillDirs(distOf(repo, 'kiro'))).toStrictEqual(skillDirs(distOf(repo, 'gemini')));
     // Still a bundle, not a copy of the source: other targets' manifests are not in it.
     expect(fs.existsSync(path.join(distOf(repo, 'gemini'), '.claude-plugin'))).toBe(false);
     expect(fs.existsSync(path.join(distOf(repo, 'gemini'), 'gemini-extension.json'))).toBe(true);
@@ -311,7 +366,7 @@ describe('build of a plugin whose skills state an audience', () => {
     const [result] = await runBuild(repo.repoRoot);
 
     expect(result?.hosts.map((h) => h.target)).toStrictEqual([...TARGETS]);
-    for (const target of TARGETS) {
+    for (const target of ['claude', 'codex', 'cursor', 'gemini', 'kiro'] as const) {
       expect(hostReport(result, target)).toMatchObject({
         status: 'projected',
         dir: distOf(repo, target),
@@ -351,7 +406,9 @@ describe('build of a plugin whose skills state an audience', () => {
     const result = await runValidate(repo.repoRoot, { ci: true });
 
     // §5.1: an omitted skill warns, naming the skill and the host.
-    const omitted = ofCode(result.findings, 'skill-audience-omitted');
+    const omitted = ofCode(result.findings, 'skill-audience-omitted').filter((f) =>
+      f.message.includes('Codex'),
+    );
     expect(omitted).toHaveLength(1);
     expect(omitted[0]).toMatchObject({ severity: 'soft', plugin: PLUGIN });
     expect(omitted[0]?.message).toContain('for-agent');
@@ -362,10 +419,15 @@ describe('build of a plugin whose skills state an audience', () => {
     expect(widened[0]).toMatchObject({ severity: 'soft', plugin: PLUGIN });
     expect(widened[0]?.message).toContain('widened');
 
-    // Three restricted skills on each of the four targets outside the model.
-    const unenforced = ofCode(result.findings, 'skill-audience-unenforced');
-    expect(unenforced).toHaveLength(12);
-    expect(unenforced.every((f) => f.severity === 'soft')).toBe(true);
+    // A target outside the model cannot enforce an audience: whether a restricted skill is kept
+    // or left out there, exactly one warning names the skill and the target.
+    for (const label of ['Cursor', 'Gemini CLI', 'Kiro']) {
+      for (const skill of RESTRICTED) {
+        expect(warningsAbout(result.findings, skill, label), `${skill} on ${label}`).toHaveLength(
+          1,
+        );
+      }
+    }
 
     // Nothing is hard, and the freshly built trees and registries are fresh.
     expect(result.findings.filter((f) => f.severity === 'hard')).toStrictEqual([]);
@@ -397,13 +459,13 @@ describe('build of a plugin whose skills state an audience', () => {
 
     const before = await runValidate(repo.repoRoot, { ci: true });
     const staleMessages = ofCode(before.findings, 'freshness').map((f) => f.message);
-    for (const target of ['claude', 'codex', 'cursor', 'vercel']) {
+    for (const target of ['claude', 'codex', 'cursor']) {
       expect(staleMessages.some((m) => m.includes(`'dist/${target}/demo'`))).toBe(true);
     }
     expect(staleMessages.some((m) => m.includes('.claude-plugin/marketplace.json'))).toBe(true);
 
     const [result] = await runBuild(repo.repoRoot);
-    for (const target of ['claude', 'codex', 'cursor', 'vercel'] as const) {
+    for (const target of ['claude', 'codex', 'cursor'] as const) {
       expect(fs.existsSync(distOf(repo, target)), target).toBe(false);
       expect(hostReport(result, target)).toMatchObject({
         status: 'source',
@@ -527,6 +589,9 @@ describe('a hard finding about one target', () => {
     const codex = hostReport(result, 'codex');
     expect(codex.status).toBe('failed');
     expect(codex).not.toHaveProperty('dir');
+    // §4, §5.1: the skill whose prefix could not be built is reported as left out of the host.
+    expect(codex.host).toBe('codex');
+    expect(outcomesBySkill(codex)['foo']).toBe('unavailable [omitted]');
 
     // Claude Code: built and listed as usual.
     expect(hostReport(result, 'claude')).toMatchObject({
@@ -667,9 +732,14 @@ describe('placeHostForm', () => {
   });
 
   it('gives a target its own tree once it needs a change', () => {
-    for (const target of ['claude', 'codex', 'cursor', 'open-plugins', 'vercel'] as const) {
+    for (const target of ['claude', 'codex', 'cursor', 'open-plugins'] as const) {
       expect(placeHostForm(target, false, [change]), target).toBe('tree');
     }
+  });
+
+  it('keeps Vercel on the authored directory even when its form would differ', () => {
+    // Vercel Skills scans the authored source; a generated tree would never be installed.
+    expect(placeHostForm('vercel', false, [change])).toBe('source');
   });
 
   it('keeps Gemini and Kiro on their bundle either way', () => {
@@ -680,7 +750,7 @@ describe('placeHostForm', () => {
   });
 
   it('places a failed target nowhere, whatever its changes', () => {
-    for (const target of ['claude', 'gemini'] as const) {
+    for (const target of ['claude', 'gemini', 'vercel'] as const) {
       expect(placeHostForm(target, true, []), target).toBe('none');
       expect(placeHostForm(target, true, [change]), target).toBe('none');
     }
@@ -782,6 +852,59 @@ describe('applyHostFileChanges', () => {
     expect(fs.existsSync(outside)).toBe(false);
   });
 
+  it('refuses to write through a link that leads out of the tree, leaving its target untouched', () => {
+    // A tree keeps the plugin's links as written. One that points at an absolute path (here: a
+    // directory standing in for the authored plugin) must not carry a change out of the tree.
+    seed({ 'skills/a/SKILL.md': 'a' });
+    const elsewhere = fs.mkdtempSync(path.join(os.tmpdir(), 'aipm-host-changes-elsewhere-'));
+    try {
+      fs.mkdirSync(path.join(elsewhere, 'linked'));
+      fs.writeFileSync(path.join(elsewhere, 'linked', 'SKILL.md'), 'authored');
+      fs.symlinkSync(path.join(elsewhere, 'linked'), path.join(root, 'skills', 'linked'));
+      fs.symlinkSync(
+        path.join(elsewhere, 'linked', 'SKILL.md'),
+        path.join(root, 'skills', 'a', 'LINKED.md'),
+      );
+
+      // Through a linked directory, to an existing file and to a new one; and through a linked file.
+      for (const escaping of [
+        'skills/linked/SKILL.md',
+        'skills/linked/new.md',
+        'skills/a/LINKED.md',
+      ]) {
+        expect(() => {
+          applyHostFileChanges(root, [{ kind: 'write', path: escaping, content: 'changed' }]);
+        }, escaping).toThrow(/through a link/);
+      }
+      expect(() => {
+        applyHostFileChanges(root, [{ kind: 'remove', path: 'skills/linked/SKILL.md' }]);
+      }).toThrow(/through a link/);
+
+      expect(fs.readdirSync(path.join(elsewhere, 'linked'))).toStrictEqual(['SKILL.md']);
+      expect(fs.readFileSync(path.join(elsewhere, 'linked', 'SKILL.md'), 'utf-8')).toBe('authored');
+    } finally {
+      fs.rmSync(elsewhere, { recursive: true, force: true });
+    }
+  });
+
+  it('removes a link itself, not what it points at', () => {
+    seed({ 'shared/real/SKILL.md': 'real', 'skills/keep/SKILL.md': 'keep' });
+    fs.symlinkSync(path.join('..', 'shared', 'real'), path.join(root, 'skills', 'linked'));
+    applyHostFileChanges(root, [{ kind: 'remove', path: 'skills/linked' }]);
+    expect(fs.lstatSync(path.join(root, 'skills', 'linked'), { throwIfNoEntry: false })).toBe(
+      undefined,
+    );
+    expect(read('shared/real/SKILL.md')).toBe('real');
+  });
+
+  it('writes through a relative link that stays inside the tree', () => {
+    seed({ 'shared/real/SKILL.md': 'real' });
+    fs.mkdirSync(path.join(root, 'skills'));
+    fs.symlinkSync(path.join('..', 'shared', 'real'), path.join(root, 'skills', 'linked'));
+    applyHostFileChanges(root, [{ kind: 'write', path: 'skills/linked/SKILL.md', content: 'new' }]);
+    expect(read('shared/real/SKILL.md')).toBe('new');
+  });
+
   it('refuses a change of a kind it does not know rather than skipping it', () => {
     seed({ 'skills/a/SKILL.md': 'a' });
     const unknown = { kind: 'chmod', path: 'skills/a/SKILL.md' } as unknown as HostFileChange;
@@ -790,5 +913,205 @@ describe('applyHostFileChanges', () => {
     }).toThrow(/Unknown host file change kind/);
     // Nothing after the unknown change was applied.
     expect(exists('skills/a/SKILL.md')).toBe(true);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// A target's own tree
+// ---------------------------------------------------------------------------
+
+describe('writeHostTree', () => {
+  let work: string;
+  afterEach(() => {
+    fs.rmSync(work, { recursive: true, force: true });
+  });
+
+  function seedPlugin(files: Record<string, string>): string {
+    work = fs.mkdtempSync(path.join(os.tmpdir(), 'aipm-host-tree-'));
+    const pluginDir = path.join(work, 'plugins', PLUGIN);
+    for (const [rel, content] of Object.entries(files)) {
+      const abs = path.join(pluginDir, ...rel.split('/'));
+      fs.mkdirSync(path.dirname(abs), { recursive: true });
+      fs.writeFileSync(abs, content);
+    }
+    return pluginDir;
+  }
+
+  it('leaves a skill out of the tree when the target’s changes remove it, and keeps the rest', () => {
+    // How a skill a target cannot restrict is left out: a `remove` of its directory.
+    const pluginDir = seedPlugin({
+      '.cursor-plugin/plugin.json': MANIFEST,
+      'skills/for-both/SKILL.md': skillMd('for-both'),
+      'skills/for-user/SKILL.md': skillMd('for-user', 'audience: user\n'),
+      'skills/for-user/reference/notes.md': 'notes\n',
+    });
+    const authored = snapshotTree(pluginDir);
+    const into = path.join(work, 'dist', 'cursor', PLUGIN);
+
+    writeHostTree(
+      pluginDir,
+      into,
+      [{ kind: 'remove', path: 'skills/for-user' }],
+      path.join(work, 'dist'),
+    );
+
+    expect(snapshotTree(into)).toStrictEqual({
+      '.cursor-plugin/plugin.json': authored['.cursor-plugin/plugin.json'],
+      'skills/for-both/SKILL.md': authored['skills/for-both/SKILL.md'],
+    });
+    // The authored directory is the input, never the thing changed.
+    expect(snapshotTree(pluginDir)).toStrictEqual(authored);
+  });
+
+  it('replaces what an earlier build left at the destination', () => {
+    const pluginDir = seedPlugin({ 'skills/for-both/SKILL.md': skillMd('for-both') });
+    const into = path.join(work, 'dist', 'cursor', PLUGIN);
+    fs.mkdirSync(path.join(into, 'skills', 'gone'), { recursive: true });
+    fs.writeFileSync(path.join(into, 'skills', 'gone', 'SKILL.md'), 'stale');
+
+    writeHostTree(pluginDir, into, [], path.join(work, 'dist'));
+
+    expect(Object.keys(snapshotTree(into))).toStrictEqual(['skills/for-both/SKILL.md']);
+  });
+
+  it('leaves out node_modules, .git and the dist root', () => {
+    const pluginDir = seedPlugin({
+      'skills/for-both/SKILL.md': skillMd('for-both'),
+      'node_modules/dep/index.js': 'x',
+      '.git/HEAD': 'ref',
+      'dist/claude/demo/skills/for-both/SKILL.md': 'earlier output',
+    });
+    const into = path.join(work, 'out');
+
+    writeHostTree(pluginDir, into, [], path.join(pluginDir, 'dist'));
+
+    expect(Object.keys(snapshotTree(into))).toStrictEqual(['skills/for-both/SKILL.md']);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// A skill directory that is a link
+// ---------------------------------------------------------------------------
+
+describe('build of a plugin whose restricted skill is a linked directory', () => {
+  let repo: SynthRegistryRepo | undefined;
+  afterEach(() => {
+    repo?.cleanup();
+  });
+
+  const AUTHORED = skillMd('linked', 'audience: user\n');
+
+  /** A Claude Code plugin whose `skills/linked` is a relative link to `shared/linked`. */
+  function linkedSkillRepo(): SynthRegistryRepo {
+    const synth = synthRepo({ 'shared/linked/SKILL.md': AUTHORED }, ['claude']);
+    fs.mkdirSync(path.join(pluginDirOf(synth), 'skills'), { recursive: true });
+    fs.symlinkSync(
+      path.join('..', 'shared', 'linked'),
+      path.join(pluginDirOf(synth), 'skills', 'linked'),
+    );
+    return synth;
+  }
+
+  it('restricts the skill in the tree and leaves the authored file as written', async () => {
+    repo = linkedSkillRepo();
+    await runBuild(repo.repoRoot);
+
+    expect(frontmatter(distOf(repo, 'claude'), 'linked')).toStrictEqual({
+      name: 'linked',
+      description: 'Use when testing the linked skill.',
+      'disable-model-invocation': true,
+    });
+    expect(
+      fs.readFileSync(path.join(pluginDirOf(repo), 'shared', 'linked', 'SKILL.md'), 'utf-8'),
+    ).toBe(AUTHORED);
+  });
+
+  // Regression: the freshness check read every entry of a tree as a file and failed with EISDIR
+  // on a link to a directory, which a per-target tree keeps as the author wrote it.
+  it('checks the freshness of a tree that holds a link to a directory', async () => {
+    repo = linkedSkillRepo();
+    await runBuild(repo.repoRoot);
+    const fresh = await runValidate(repo.repoRoot, { ci: true });
+    expect(ofCode(fresh.findings, 'freshness')).toStrictEqual([]);
+
+    // Repointing the link in the generated tree is drift, and is named.
+    const link = path.join(distOf(repo, 'claude'), 'skills', 'linked');
+    fs.rmSync(link);
+    fs.symlinkSync(path.join('..', 'shared'), link);
+    const stale = ofCode((await runValidate(repo.repoRoot, { ci: true })).findings, 'freshness');
+    expect(stale).toHaveLength(1);
+    expect(stale[0]?.message).toContain('dist/claude/demo/skills/linked');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Registries a repository writes by hand
+// ---------------------------------------------------------------------------
+
+describe('validateMarketplaceRegistration with a per-target tree', () => {
+  let repo: SynthRegistryRepo | undefined;
+  afterEach(() => {
+    repo?.cleanup();
+  });
+
+  const REGISTRY_TARGETS: readonly TargetId[] = ['claude', 'codex'];
+
+  function rewriteClaudeSource(repoRoot: string, source: string): void {
+    const file = path.join(repoRoot, '.claude-plugin', 'marketplace.json');
+    const registry = readJson(file) as { plugins: { name: string; source: string }[] };
+    for (const entry of registry.plugins) entry.source = source;
+    fs.writeFileSync(file, `${JSON.stringify(registry, null, 2)}\n`);
+  }
+
+  it('accepts entries that point at each target’s tree', async () => {
+    repo = synthRepo(AUDIENCE_SKILLS, REGISTRY_TARGETS);
+    await runBuild(repo.repoRoot);
+    expect(
+      validateMarketplaceRegistration(
+        pluginDirOf(repo),
+        repo.repoRoot,
+        REGISTRY_TARGETS,
+        path.join(repo.repoRoot, 'dist'),
+      ),
+    ).toStrictEqual([]);
+  });
+
+  it('rejects an entry left on the authored directory, which would install without the changes', async () => {
+    repo = synthRepo(AUDIENCE_SKILLS, REGISTRY_TARGETS);
+    await runBuild(repo.repoRoot);
+    rewriteClaudeSource(repo.repoRoot, './plugins/demo');
+
+    const findings = validateMarketplaceRegistration(
+      pluginDirOf(repo),
+      repo.repoRoot,
+      REGISTRY_TARGETS,
+      path.join(repo.repoRoot, 'dist'),
+    );
+    expect(findings).toHaveLength(1);
+    expect(findings[0]).toMatchObject({
+      severity: 'hard',
+      code: 'marketplace-registration',
+      plugin: PLUGIN,
+    });
+    expect(findings[0]?.message).toContain("expected './dist/claude/demo'");
+  });
+
+  it('keeps expecting the authored directory for a plugin that states no audience', async () => {
+    repo = synthRepo(PLAIN_SKILLS, REGISTRY_TARGETS);
+    await runBuild(repo.repoRoot);
+    const distDir = path.join(repo.repoRoot, 'dist');
+    expect(
+      validateMarketplaceRegistration(pluginDirOf(repo), repo.repoRoot, REGISTRY_TARGETS, distDir),
+    ).toStrictEqual([]);
+
+    rewriteClaudeSource(repo.repoRoot, './dist/claude/demo');
+    const findings = validateMarketplaceRegistration(
+      pluginDirOf(repo),
+      repo.repoRoot,
+      REGISTRY_TARGETS,
+      distDir,
+    );
+    expect(findings).toHaveLength(1);
+    expect(findings[0]?.message).toContain("expected './plugins/demo'");
   });
 });

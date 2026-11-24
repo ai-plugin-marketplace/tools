@@ -47,6 +47,7 @@ import {
   hostFormDir,
   hostFormFor,
   isBundledTarget,
+  isProjectedForm,
   writeHostTree,
 } from './host-forms.js';
 import type { PluginHostForms } from './host-forms.js';
@@ -308,8 +309,9 @@ function bundleHostForm(
  * by build (calls `regenerate(destDir)`) and freshness (calls `regenerate(tempDir)` then compares).
  *
  * One tree per target whose form is generated: a bundled target's bundle, and the own tree of any
- * other target whose form differs from the authored source. A failed target produces no tree.
- * Trees are returned in envelope order.
+ * other target whose form differs from the authored source. A failed target produces no tree, and
+ * neither does a target that can only install from the authored source (Vercel). Trees are
+ * returned in envelope order.
  *
  * @param forms - The plugin's host forms; computed from `pluginDir` and `envelope` when omitted.
  *   Pass the value already in hand so the plugin is projected once.
@@ -847,6 +849,10 @@ export function computeRootArtifacts(
     // `source` is `./<rel>` POSIX from the repo root; resolve to the absolute plugin dir.
     const pluginDir = path.resolve(repoRoot, declarer.source);
     const forms = computePluginHostForms(pluginDir, declarer.envelope);
+    // TODO: Gemini and Kiro both place skills under the repo-root `skills/`. Their forms are
+    // identical today (neither is a host of the unified content model, so both receive the same
+    // changes); if the projection ever gives them different forms, the paths they share need one
+    // owner or a finding, since the later writer would otherwise win silently.
     if (hostFormFor(forms, host)?.failed === true) continue; // not built → no root artifact
 
     let tempDir: string | undefined;
@@ -1054,7 +1060,7 @@ async function buildOnePlugin(
     return {
       target: form.target,
       ...(form.host !== undefined ? { host: form.host } : {}),
-      status: form.failed ? 'failed' : form.changes.length > 0 ? 'projected' : 'source',
+      status: form.failed ? 'failed' : isProjectedForm(form) ? 'projected' : 'source',
       ...(dir !== undefined ? { dir } : {}),
       outcomes: form.outcomes,
     };

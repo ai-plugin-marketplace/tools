@@ -44,6 +44,7 @@ import {
 } from './build.js';
 import type { RegistryArtifact } from './build.js';
 import { discoverPlugins } from './discover.js';
+import { computePluginHostForms, hostDistDir, hostFormFor } from './host-forms.js';
 import {
   ConfigLoadError,
   createConfigCache,
@@ -1069,6 +1070,10 @@ function extractCodexSource(raw: unknown, pluginName: string): SourceExtraction 
  *   `<repoRoot>/.agents/plugins/marketplace.json` with an object `source` whose `path` is
  *   `./plugins/<name>`.
  * - If a target is NOT in the envelope, the plugin MUST NOT be listed in that marketplace.
+ * - Where the build generates a tree of the target's own for the plugin (its form differs from the
+ *   authored directory, see `host-forms.ts`), the entry MUST point at that tree instead:
+ *   `./dist/<target>/<name>`. An entry left on the authored directory would install the plugin
+ *   without the target's changes. This is only known when `distDir` is given.
  *
  * The per-registry path and source extraction are data-driven (see
  * {@link MARKETPLACE_REGISTRY_CHECKS}); the loop body is identical across registries so the same
@@ -1081,23 +1086,34 @@ export function validateMarketplaceRegistration(
   pluginDir: string,
   repoRoot: string,
   envelope: readonly TargetId[],
+  distDir?: string,
 ): Finding[] {
   const findings: Finding[] = [];
   const pluginName = path.basename(pluginDir);
   const envelopeSet = new Set(envelope);
+  const forms = distDir === undefined ? undefined : computePluginHostForms(pluginDir, envelope);
 
   // The expected source is the plugin directory's path relative to the repo root (the location
   // hosts resolve `source` against). Default topology → `plugins/<name>`; an embedded marketplace
   // with a relocated `pluginsRoot` → e.g. `agent-plugins/<name>`. POSIX separators are forced so
   // the comparison is stable on Windows. Both `./<rel>` and `<rel>` are accepted; the canonical
   // form carries the `./` prefix (§4.4).
-  const relFromRepo = path.relative(repoRoot, pluginDir).split(path.sep).join('/');
-  const expectedSource = `./${relFromRepo}`;
-  const normalizedExpected = relFromRepo;
+  const repoRelative = (dir: string): string =>
+    path.relative(repoRoot, dir).split(path.sep).join('/');
+  const authoredRel = repoRelative(pluginDir);
 
   for (const { target, marketplaceRel, extractSource } of MARKETPLACE_REGISTRY_CHECKS) {
     const marketplacePath = path.join(repoRoot, ...marketplaceRel);
     const inEnvelope = envelopeSet.has(target);
+    // A target with a generated tree of its own installs from that tree, not the authored
+    // directory. A target that could not be built has no tree; its entry is checked against the
+    // authored directory as before, and the finding that failed it is reported separately.
+    const form = forms === undefined ? undefined : hostFormFor(forms, target);
+    const normalizedExpected =
+      distDir !== undefined && form?.placement === 'tree'
+        ? repoRelative(hostDistDir(distDir, target, pluginName))
+        : authoredRel;
+    const expectedSource = `./${normalizedExpected}`;
 
     if (!fs.existsSync(marketplacePath)) {
       if (inEnvelope) {
@@ -1189,12 +1205,13 @@ export function validateCrossTarget(
   pluginDir: string,
   repoRoot: string,
   envelope: readonly TargetId[],
+  distDir?: string,
 ): Finding[] {
   return [
     ...validateEnvelopeAdherence(pluginDir, envelope),
     ...validateNameConsistency(pluginDir, envelope),
     ...validateMcpKeySync(pluginDir, envelope),
-    ...validateMarketplaceRegistration(pluginDir, repoRoot, envelope),
+    ...validateMarketplaceRegistration(pluginDir, repoRoot, envelope, distDir),
   ];
 }
 
@@ -1646,8 +1663,24 @@ export async function checkRootArtifactFreshness(
 }
 
 /**
+ * True iff the entries at `a` and `b`, which both exist, are the same: two links with the same
+ * target as written, or two files with the same bytes. A link is compared as a link and never
+ * followed, since a tree keeps the plugin's links as the author wrote them and one may name a
+ * directory.
+ */
+function sameTreeEntry(a: string, b: string): boolean {
+  const aIsLink = fs.lstatSync(a).isSymbolicLink();
+  const bIsLink = fs.lstatSync(b).isSymbolicLink();
+  if (aIsLink || bIsLink) {
+    return aIsLink && bIsLink && fs.readlinkSync(a) === fs.readlinkSync(b);
+  }
+  return fs.readFileSync(a).equals(fs.readFileSync(b));
+}
+
+/**
  * Compare two directory trees and return the relative paths that differ (present in only one
- * side, or present in both with differing bytes). An empty result means the trees are identical.
+ * side, or present in both as different entries; see {@link sameTreeEntry}). An empty result means
+ * the trees are identical.
  */
 function compareTrees(actualDir: string, expectedDir: string): string[] {
   const actual = new Set(collectFilesRelative(actualDir));
@@ -1659,9 +1692,7 @@ function compareTrees(actualDir: string, expectedDir: string): string[] {
       drift.add(rel);
       continue;
     }
-    const a = fs.readFileSync(path.join(actualDir, rel));
-    const b = fs.readFileSync(path.join(expectedDir, rel));
-    if (!a.equals(b)) drift.add(rel);
+    if (!sameTreeEntry(path.join(actualDir, rel), path.join(expectedDir, rel))) drift.add(rel);
   }
   for (const rel of expected) {
     if (!actual.has(rel)) drift.add(rel);

@@ -331,14 +331,19 @@ The **transform step** is a single named seam. In v0.1.0 it performs only mechan
 
 For most plugins the authored directory is already what a target installs, and the registries list it. Some authored features are stated once and delivered differently per target; the first is a skill's `audience` (`audience` / `audience-fallback` in `SKILL.md` frontmatter), which no target may receive as written. For each plugin the build asks `@ai-plugin-marketplace/normalizer` (`projectPluginForHosts`) what each declared target's form is, as an ordered list of file changes against the authored source, and places the result as follows:
 
-| Target's form                                               | Where it lives                                                                   | Registry `source`        |
-| ----------------------------------------------------------- | -------------------------------------------------------------------------------- | ------------------------ |
-| Needs no change                                             | The authored plugin directory, as before                                         | `./plugins/<name>`       |
-| Needs changes (Claude, Codex, Cursor, Open Plugins, Vercel) | `dist/<target>/<name>/`: a copy of the plugin directory with the changes applied | `./dist/<target>/<name>` |
-| Gemini, Kiro (always bundled)                               | `dist/<target>/<name>/` and the repo root: the bundle, with any changes applied  | n/a                      |
-| Could not be built                                          | Nowhere: nothing is emitted, and a tree from an earlier build is removed         | Not listed               |
+| Target's form                                       | Where it lives                                                                   | Registry `source`        |
+| --------------------------------------------------- | -------------------------------------------------------------------------------- | ------------------------ |
+| Needs no change                                     | The authored plugin directory, as before                                         | `./plugins/<name>`       |
+| Needs changes (Claude, Codex, Cursor, Open Plugins) | `dist/<target>/<name>/`: a copy of the plugin directory with the changes applied | `./dist/<target>/<name>` |
+| Vercel                                              | The authored plugin directory, always                                            | n/a                      |
+| Gemini, Kiro (always bundled)                       | `dist/<target>/<name>/` and the repo root: the bundle, with any changes applied  | n/a                      |
+| Could not be built                                  | Nowhere: nothing is emitted, and a tree from an earlier build is removed         | Not listed               |
 
-A plugin that states no audience has no changes for any target, so its output is exactly what it was before this step existed. The copy leaves out `node_modules` and `.git`. The authored directory is never modified.
+A plugin that states no audience has no changes for any target, so its output is exactly what it was before this step existed. The copy leaves out `node_modules` and `.git` and keeps links as the author wrote them; a change is never applied through a link that leads out of the copy. The authored directory is never modified.
+
+Vercel Skills installs skills by scanning the repository's authored source and has no registry or bundle that could point it at a generated directory, so no tree is built for it. Where its form would differ from the source (a skill whose audience is restricted, for instance), the projection's findings say what Vercel does not honour.
+
+In a repository that writes its registries by hand (no `aipm.workspace.ts`), `correctness/marketplace-registration` expects an entry to point at the target's tree whenever the build generates one.
 
 Findings from the projection are reported by validation under `portability/host-projection`. A `hard` finding about the source fails every target of that plugin; a `hard` finding about one target fails that target only. Sibling plugins are unaffected. The per-feature outcome of each target (`BuildResult.hosts`) is printed by `aipm build` for every plugin whose form differs from its source on some target.
 

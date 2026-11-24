@@ -128,7 +128,7 @@ export const marketplaceRegistrationRule: Rule = {
   check(ctx: RuleContext): Diagnostic[] {
     return wrap(MARKETPLACE_REGISTRATION_ID)(
       ctx,
-      validateMarketplaceRegistration(ctx.pluginDir, ctx.repoRoot, ctx.envelope),
+      validateMarketplaceRegistration(ctx.pluginDir, ctx.repoRoot, ctx.envelope, ctx.distDir),
     );
   },
 };

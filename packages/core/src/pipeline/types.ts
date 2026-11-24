@@ -232,9 +232,11 @@ export interface ValidationResult {
  * `skill-audience-invalid`, `skill-audience-omitted`, `skill-audience-widened`,
  * `skill-audience-reduced`, `skill-audience-unenforced`, `skill-audience-conflict`,
  * `skill-audience-prefix-invalid`, `skill-name-duplicate`, `skill-location-unsupported`,
- * `source-unreadable` — codes defined by `@ai-plugin-marketplace/normalizer` for a skill's
- * audience declaration and how it is carried to each host, and for authored source a build cannot
- * read safely. They are listed here so every normalizer finding is assignable to this type; their
+ * `source-unreadable`, `native-form-refuted`, `projection-not-implemented` — codes defined by
+ * `@ai-plugin-marketplace/normalizer` for a skill's audience declaration and how it is carried to
+ * each host (including a host form the capability grid records as failing its evaluation, and a
+ * projection the grid calls for that the normalizer cannot build yet), and for authored source a
+ * build cannot read safely. They are listed here so every normalizer finding is assignable to this type; their
  * meaning and severity are the normalizer's (see its `FindingCode`).
  *
  * @public
@@ -265,7 +267,9 @@ export type FindingCode =
   | 'skill-audience-prefix-invalid'
   | 'skill-name-duplicate'
   | 'skill-location-unsupported'
-  | 'source-unreadable';
+  | 'source-unreadable'
+  | 'native-form-refuted'
+  | 'projection-not-implemented';
 
 /**
  * A single validation finding.

@@ -421,7 +421,8 @@ Default severity: `info` (advisory; these are judgment heuristics).
 The normalizer's skill-audience and source-reading codes (`skill-audience-invalid`,
 `skill-audience-omitted`, `skill-audience-widened`, `skill-audience-reduced`,
 `skill-audience-unenforced`, `skill-audience-conflict`, `skill-audience-prefix-invalid`,
-`skill-name-duplicate`, `skill-location-unsupported`, `source-unreadable`) are members of the union
+`skill-name-duplicate`, `skill-location-unsupported`, `source-unreadable`, `native-form-refuted`,
+`projection-not-implemented`) are members of the union
 so that every `@ai-plugin-marketplace/normalizer` finding is assignable to it. They come from the
 normalizer's host projection, which the toolkit does not invoke yet, so no rule owns them.
 

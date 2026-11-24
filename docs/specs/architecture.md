@@ -513,7 +513,9 @@ export type FindingCode =
   | 'skill-audience-prefix-invalid'
   | 'skill-name-duplicate'
   | 'skill-location-unsupported'
-  | 'source-unreadable';
+  | 'source-unreadable'
+  | 'native-form-refuted'
+  | 'projection-not-implemented';
 
 export interface Finding {
   severity: 'hard' | 'soft';

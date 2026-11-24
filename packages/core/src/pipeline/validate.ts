@@ -24,7 +24,6 @@ import {
   validateVercelPlugin,
 } from '@ai-plugin-marketplace/normalizer';
 import {
-  collectFilesRelative,
   collectRegistryPlugins,
   computeDistBundles,
   computeOrphanedDistDirs,
@@ -44,6 +43,7 @@ import {
 } from './build.js';
 import type { RegistryArtifact } from './build.js';
 import { discoverPlugins } from './discover.js';
+import { compareTrees } from './tree-compare.js';
 import {
   createHostFormsRun,
   hostDistDir,
@@ -1490,6 +1490,46 @@ export function checkFreshness(
 }
 
 /**
+ * Repo-level freshness check for the generated-trees manifest: an entry that is no plugin's tree
+ * path is stale.
+ *
+ * The per-plugin check ({@link checkFreshness}) covers the entries of plugins that exist. This one
+ * covers what it cannot see: the entry, and the directory, a deleted plugin leaves behind, which a
+ * build of a single plugin deliberately keeps (it cannot tell them from a sibling's). Only a
+ * build of the whole repo removes them, and the hint says so.
+ *
+ * @param allPluginDirs - Every plugin directory of the repo, not only those being validated.
+ */
+export function checkTreeManifestFreshness(
+  repoRoot: string,
+  distDir: string,
+  allPluginDirs: readonly string[],
+  ci: boolean,
+): Finding[] {
+  const ownable = new Set<string>();
+  for (const pluginDir of allPluginDirs) {
+    for (const target of TARGET_IDS) {
+      if (isBundledTarget(target)) continue;
+      ownable.add(
+        treeManifestEntry(repoRoot, hostDistDir(distDir, target, path.basename(pluginDir))),
+      );
+    }
+  }
+  const manifestRel = treeManifestEntry(repoRoot, treeManifestPath(repoRoot));
+  return [...readTrackedTrees(repoRoot)]
+    .filter((entry) => !ownable.has(entry))
+    .sort()
+    .map((entry) =>
+      freshnessFinding(
+        ci,
+        undefined,
+        `Generated manifest '${manifestRel}' is stale — it lists '${entry}', which is no plugin's tree (its plugin may have been removed).`,
+        'run `aipm build` on the whole repo to remove the entry and the directory it names.',
+      ),
+    );
+}
+
+/**
  * Repo-level freshness check for the generated marketplace registries (design spec §"Marketplace
  * registries"). Runs ONLY when an `aipm.workspace.ts` is present (registry generation opted in).
  *
@@ -1738,54 +1778,6 @@ export async function checkRootArtifactFreshness(
   return findings;
 }
 
-/**
- * True iff the entries at `a` and `b`, which both exist, are the same: two links with the same
- * target as written, or two files with the same bytes and the same executable bits. A link is
- * compared as a link and never followed, since a tree keeps the plugin's links as the author wrote
- * them and one may name a directory.
- *
- * Of a file's permissions only the executable bits are compared: they are what a generated form
- * states (a change can set a file's mode, and trees carry scripts that are run directly) and what
- * version control preserves. The read and write bits vary with the environment that checked the
- * tree out.
- */
-function sameTreeEntry(a: string, b: string): boolean {
-  const aStat = fs.lstatSync(a);
-  const bStat = fs.lstatSync(b);
-  if (aStat.isSymbolicLink() || bStat.isSymbolicLink()) {
-    return (
-      aStat.isSymbolicLink() && bStat.isSymbolicLink() && fs.readlinkSync(a) === fs.readlinkSync(b)
-    );
-  }
-  const EXECUTABLE_BITS = 0o111;
-  if ((aStat.mode & EXECUTABLE_BITS) !== (bStat.mode & EXECUTABLE_BITS)) return false;
-  return fs.readFileSync(a).equals(fs.readFileSync(b));
-}
-
-/**
- * Compare two directory trees and return the relative paths that differ (present in only one
- * side, or present in both as different entries; see {@link sameTreeEntry}). An empty result means
- * the trees are identical.
- */
-function compareTrees(actualDir: string, expectedDir: string): string[] {
-  const actual = new Set(collectFilesRelative(actualDir));
-  const expected = new Set(collectFilesRelative(expectedDir));
-  const drift = new Set<string>();
-
-  for (const rel of actual) {
-    if (!expected.has(rel)) {
-      drift.add(rel);
-      continue;
-    }
-    if (!sameTreeEntry(path.join(actualDir, rel), path.join(expectedDir, rel))) drift.add(rel);
-  }
-  for (const rel of expected) {
-    if (!actual.has(rel)) drift.add(rel);
-  }
-
-  return [...drift].sort();
-}
-
 // ---------------------------------------------------------------------------
 // runValidate — the validate orchestrator (§5.3, §10.1, §10.3)
 // ---------------------------------------------------------------------------
@@ -1997,7 +1989,10 @@ export async function runValidateInRun(
   // whenever a workspace is present — even under `skipFreshness` — because its `single-artifact-host`
   // / `root-artifact-collision` findings are structural gates (not drift), and `runBuild`'s
   // post-build validate (which skips freshness) must still fail fast on them.
-  if (workspace !== undefined) {
+  // The registry rule also checks the generated-trees manifest, which exists with or without a
+  // workspace, so the repo-scoped rules are asked either way; each returns nothing where it does
+  // not apply.
+  {
     // For repo-root input, pluginDirs already covers the whole repo — reuse it (and the warm
     // config cache) rather than re-discovering and reloading. Single-plugin input needs a
     // repo-wide re-scan so the oracle stays repo-complete.

@@ -12,6 +12,7 @@
 import {
   checkFreshness,
   checkRegistryFreshness,
+  checkTreeManifestFreshness,
   checkRootArtifactFreshness,
 } from '../../pipeline/validate.js';
 import { hostFormsRunOf } from '../context.js';
@@ -41,27 +42,40 @@ export const pluginFreshnessRule: Rule = {
   },
 };
 
-/** Repo-scoped freshness: the generated marketplace registries. Requires `ctx.workspace`. */
+/**
+ * Repo-scoped freshness: the generated-trees manifest (any repo) and the generated marketplace
+ * registries (only with `ctx.workspace`).
+ */
 export const registryFreshnessRule: Rule = {
   meta: {
     id: FRESHNESS_ID,
     category: 'correctness',
     defaultSeverity: 'error',
     description:
-      'Generated marketplace registries match what `aipm build` would currently produce.',
-    // Requires ctx.workspace (aipm.workspace.ts) — repo-scoped, aipm-repo only.
+      'Generated marketplace registries and the generated-trees manifest match what `aipm build` would currently produce.',
+    // Repo-scoped, aipm-repo only; the registries part requires ctx.workspace (aipm.workspace.ts).
     appliesTo: ['aipm-repo'],
   },
   async check(ctx: InternalRuleContext): Promise<Diagnostic[]> {
-    if (ctx.workspace === undefined || ctx.skipFreshness) return [];
-    const findings = await checkRegistryFreshness(
+    if (ctx.skipFreshness) return [];
+    const findings = checkTreeManifestFreshness(
       ctx.repoRoot,
+      ctx.distDir,
       ctx.allPluginDirs,
-      ctx.workspace,
       ctx.ci,
-      ctx.configCache,
-      hostFormsRunOf(ctx),
     );
+    if (ctx.workspace !== undefined) {
+      findings.push(
+        ...(await checkRegistryFreshness(
+          ctx.repoRoot,
+          ctx.allPluginDirs,
+          ctx.workspace,
+          ctx.ci,
+          ctx.configCache,
+          hostFormsRunOf(ctx),
+        )),
+      );
+    }
     return findings.map((f) =>
       findingToDiagnostic(f, FRESHNESS_ID, 'correctness', docsUrlFor(FRESHNESS_ID)),
     );

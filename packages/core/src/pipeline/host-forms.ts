@@ -38,7 +38,9 @@ import {
   projectPluginForHosts,
 } from '@ai-plugin-marketplace/normalizer';
 import type { HostFileChange } from '@ai-plugin-marketplace/normalizer';
+import { parse as parseYaml } from 'yaml';
 
+import { compareTrees } from './tree-compare.js';
 import type { FeatureOutcome, Finding, TargetId } from './types.js';
 
 /**
@@ -137,6 +139,13 @@ export interface HostForm {
   outcomes: FeatureOutcome[];
   /** Every finding about this target. */
   findings: Finding[];
+  /**
+   * Absolute path of a scratch directory that already holds this target's generated form, when
+   * the run was asked to keep what it produced while checking that the changes apply (see
+   * {@link HostFormsRun}). A build moves it into place instead of producing the form again. Absent
+   * otherwise, and always absent for a failed target or one that generates nothing.
+   */
+  materialized?: string;
 }
 
 /** The host forms of one plugin: one per target of its envelope, plus findings about the source. */
@@ -219,6 +228,12 @@ export interface HostFormsLayout {
   distDir: string;
   /** The generated-trees manifest's entries as they were when the run began. */
   trackedTrees: ReadonlySet<string>;
+  /**
+   * Called with each scratch directory a form was produced in that the caller is to keep (see
+   * {@link HostForm.materialized}). Absent when nothing is to be kept: each scratch directory is
+   * then removed as soon as its form has been checked.
+   */
+  keepScratch?: (scratchRoot: string) => void;
 }
 
 /**
@@ -233,14 +248,42 @@ export interface HostFormsRun {
   readonly layout: HostFormsLayout;
   /** The host forms of the plugin at `pluginDir` for the targets in `envelope`. */
   forms(pluginDir: string, envelope: readonly TargetId[]): PluginHostForms;
+  /** Remove every scratch directory the run kept. Call once the run is over. */
+  dispose(): void;
 }
 
-/** Start a {@link HostFormsRun} for the repository at `repoRoot`, reading its manifest once. */
-export function createHostFormsRun(repoRoot: string, distDir: string): HostFormsRun {
-  const layout: HostFormsLayout = { repoRoot, distDir, trackedTrees: readTrackedTrees(repoRoot) };
+/**
+ * Start a {@link HostFormsRun} for the repository at `repoRoot`, reading its manifest once.
+ *
+ * @param opts.keepMaterialized - Keep the generated forms the run produces while checking that
+ *   each target's changes apply, so the caller can use them ({@link HostForm.materialized}). The
+ *   caller must then {@link HostFormsRun.dispose | dispose} of the run. A build asks for this, so a
+ *   form is produced once; validation and lint do not, and each form is discarded once checked.
+ */
+export function createHostFormsRun(
+  repoRoot: string,
+  distDir: string,
+  opts?: { keepMaterialized?: boolean },
+): HostFormsRun {
+  const kept: string[] = [];
+  const layout: HostFormsLayout = {
+    repoRoot,
+    distDir,
+    trackedTrees: readTrackedTrees(repoRoot),
+    ...(opts?.keepMaterialized === true
+      ? {
+          keepScratch: (scratchRoot: string): void => {
+            kept.push(scratchRoot);
+          },
+        }
+      : {}),
+  };
   const memo = new Map<string, PluginHostForms>();
   return {
     layout,
+    dispose() {
+      for (const dir of kept.splice(0)) fs.rmSync(dir, { recursive: true, force: true });
+    },
     forms(pluginDir, envelope) {
       const key = `${path.resolve(pluginDir)}\0${envelope.join(',')}`;
       let forms = memo.get(key);
@@ -253,52 +296,62 @@ export function createHostFormsRun(repoRoot: string, distDir: string): HostForms
   };
 }
 
-/** Matches a frontmatter line that states one of the two source-only audience keys. */
-const AUDIENCE_KEY_LINE = /^[ \t]*["']?audience(?:-fallback)?["']?[ \t]*:/m;
+/**
+ * Matches a line that looks like one of the two source-only audience keys written as a top-level
+ * frontmatter key. Used only on frontmatter that cannot be parsed.
+ */
+const AUDIENCE_KEY_LINE = /^["']?audience(?:-fallback)?["']?[ \t]*:/m;
 
 /**
- * True iff any `SKILL.md` under `pluginDir` states `audience` or `audience-fallback`.
+ * True iff the text of a `SKILL.md` states `audience` or `audience-fallback` as the projection
+ * understands it: a top-level key of its YAML frontmatter. A key nested under another, or the same
+ * word inside a value, states nothing. When the frontmatter is missing its closing line or is not
+ * a YAML mapping, a line that looks like such a key counts, so that a broken file does not hide a
+ * declaration.
+ */
+function skillFileStatesAudience(text: string): boolean {
+  const block = /^---\r?\n([\s\S]*?)\r?\n---[ \t]*(?:\r?\n|$)/.exec(text)?.[1];
+  if (block === undefined) return AUDIENCE_KEY_LINE.test(text);
+  let parsed: unknown;
+  try {
+    parsed = parseYaml(block);
+  } catch {
+    return AUDIENCE_KEY_LINE.test(block);
+  }
+  if (typeof parsed !== 'object' || parsed === null || Array.isArray(parsed)) {
+    return AUDIENCE_KEY_LINE.test(block);
+  }
+  return Object.hasOwn(parsed, 'audience') || Object.hasOwn(parsed, 'audience-fallback');
+}
+
+/**
+ * True iff a skill of the plugin at `pluginDir` states `audience` or `audience-fallback`.
  *
  * This is deliberately a reading of its own rather than the projection's: it must answer for the
  * very files the projection could not use (a linked `SKILL.md`, a skill directory linked from
  * outside the plugin, malformed frontmatter), which is where the answer decides how strictly their
- * findings are treated. Links are followed. Only the frontmatter block is searched, or the whole
- * file when the block is not closed; a file that cannot be read states nothing.
+ * findings are treated. It reads exactly what the projection treats as the plugin's skills,
+ * `skills/<name>/SKILL.md`, following a link at `<name>` or at `SKILL.md` to wherever it leads and
+ * no further: nothing else under the plugin or behind those links is searched, so another
+ * plugin's skills never count as this one's. A file that cannot be read states nothing.
  */
 function sourceStatesAudience(pluginDir: string): boolean {
-  const visited = new Set<string>();
-  const walk = (dir: string): boolean => {
-    let real: string;
-    let entries: string[];
-    try {
-      real = fs.realpathSync(dir);
-      if (visited.has(real)) return false;
-      visited.add(real);
-      entries = fs.readdirSync(dir);
-    } catch {
-      return false;
-    }
-    for (const name of entries) {
-      if (TREE_SKIP_NAMES.has(name)) continue;
-      const abs = path.join(dir, name);
-      const stat = fs.statSync(abs, { throwIfNoEntry: false });
-      if (stat === undefined) continue; // a dangling link
-      if (stat.isDirectory()) {
-        if (walk(abs)) return true;
-      } else if (name === 'SKILL.md' && stat.isFile()) {
-        let text: string;
-        try {
-          text = fs.readFileSync(abs, 'utf-8');
-        } catch {
-          continue;
-        }
-        const block = /^---\r?\n([\s\S]*?)\r?\n---[ \t]*(?:\r?\n|$)/.exec(text);
-        if (AUDIENCE_KEY_LINE.test(block?.[1] ?? text)) return true;
-      }
-    }
+  const skillsDir = path.join(pluginDir, 'skills');
+  let names: string[];
+  try {
+    names = fs.readdirSync(skillsDir);
+  } catch {
     return false;
-  };
-  return walk(pluginDir);
+  }
+  return names.some((name) => {
+    try {
+      return skillFileStatesAudience(
+        fs.readFileSync(path.join(skillsDir, name, 'SKILL.md'), 'utf-8'),
+      );
+    } catch {
+      return false; // not a skill directory, a dangling link, or an unreadable file
+    }
+  });
 }
 
 /**
@@ -315,7 +368,8 @@ function sourceStatesAudience(pluginDir: string): boolean {
  * - the target has a `hard` finding of its own;
  * - its changes cannot be applied (each generated form is produced once in a scratch directory to
  *   find out, so a build never discovers this halfway through writing);
- * - its tree's path is occupied by a directory the toolkit did not write (`layout` given).
+ * - its tree's path is occupied by a directory the toolkit did not write (`layout` given): one the
+ *   manifest does not list and whose content is not the form a build would write there.
  *
  * The last two are reported as `hard` findings of that target.
  *
@@ -345,8 +399,14 @@ export function computePluginHostForms(
     plugin: pluginName,
   });
 
+  // A finding about an audience declaration is itself proof that one is stated, wherever the
+  // projection found it (a `SKILL.md` outside `skills/<name>/` included).
   const statesAudience =
-    projection.hosts.some((host) => host.changes.length > 0) || sourceStatesAudience(pluginDir);
+    projection.hosts.some((host) => host.changes.length > 0) ||
+    projection.findings.some(
+      (f) => f.code.startsWith('skill-audience-') || f.code === 'skill-location-unsupported',
+    ) ||
+    sourceStatesAudience(pluginDir);
   const sourceFindings: Finding[] = projection.findings.map((f) =>
     statesAudience || f.severity !== 'hard' ? { ...f } : { ...f, severity: 'soft' },
   );
@@ -359,38 +419,61 @@ export function computePluginHostForms(
       findings.push(finding);
       failed = true;
     };
+    // Read through a function: `fail` changes `failed` from inside a closure, which control-flow
+    // narrowing of the variable itself does not see.
+    const hasFailed = (): boolean => failed;
 
-    if (!failed && placeHostForm(host.target, false, host.changes) === 'tree' && layout) {
-      const dir = hostDistDir(layout.distDir, host.target, pluginName);
-      const entry = treeManifestEntry(layout.repoRoot, dir);
-      if (fs.existsSync(dir) && !layout.trackedTrees.has(entry)) {
-        fail({
-          severity: 'hard',
-          code: 'generated-tree-collision',
-          plugin: pluginName,
-          message:
-            `Cannot write the '${host.target}' form of the plugin: '${entry}' already exists and is not toolkit-generated. ` +
-            `Generation refuses to overwrite a directory it does not own.`,
-          hint: `Move or remove '${entry}' and re-run \`aipm build\`.`,
-        });
-      }
-    }
-
+    // Produce the form once, in a scratch directory, to learn whether the changes apply and (for
+    // a tree) whether a directory already at its path is the toolkit's own.
+    let materialized: string | undefined;
     if (!failed && host.changes.length > 0 && !isSourceInstalledTarget(host.target)) {
-      const problem = tryMaterializeHostForm(
+      const scratch = materializeInScratch(
         pluginDir,
         host.target,
         host.changes,
         layout?.distDir ?? path.join(pluginDir, 'dist'),
       );
-      if (problem !== undefined) {
-        fail({
-          severity: 'hard',
-          code: 'source-unreadable',
-          plugin: pluginName,
-          message: `The '${host.target}' form of the plugin cannot be produced: ${problem}`,
-          hint: 'Fix the plugin source named in the message, then re-run `aipm build`.',
-        });
+      let keep = false;
+      try {
+        if (scratch.problem !== undefined) {
+          fail({
+            severity: 'hard',
+            code: 'source-unreadable',
+            plugin: pluginName,
+            message: `The '${host.target}' form of the plugin cannot be produced: ${scratch.problem}`,
+            hint: 'Fix the plugin source named in the message, then re-run `aipm build`.',
+          });
+        } else if (layout !== undefined && !isBundledTarget(host.target)) {
+          const dir = hostDistDir(layout.distDir, host.target, pluginName);
+          const entry = treeManifestEntry(layout.repoRoot, dir);
+          // A directory the manifest does not list is still the toolkit's when it is exactly the
+          // form a build would write: the manifest was lost or could not be read, not the tree.
+          const foreign =
+            fs.existsSync(dir) &&
+            !layout.trackedTrees.has(entry) &&
+            compareTrees(dir, scratch.dir).length > 0;
+          if (foreign) {
+            const manifest = treeManifestEntry(layout.repoRoot, treeManifestPath(layout.repoRoot));
+            fail({
+              severity: 'hard',
+              code: 'generated-tree-collision',
+              plugin: pluginName,
+              message:
+                `Cannot write the '${host.target}' form of the plugin: '${entry}' already exists and is not recorded as toolkit-generated. ` +
+                `Generation refuses to overwrite a directory it does not own.`,
+              hint:
+                `Move or remove '${entry}' and re-run \`aipm build\`. ` +
+                `If the toolkit wrote it and '${manifest}' was lost or damaged, restoring that file also resolves this.`,
+            });
+          }
+        }
+        if (!hasFailed() && layout?.keepScratch !== undefined) {
+          layout.keepScratch(scratch.root);
+          materialized = scratch.dir;
+          keep = true;
+        }
+      } finally {
+        if (!keep) fs.rmSync(scratch.root, { recursive: true, force: true });
       }
     }
 
@@ -417,6 +500,7 @@ export function computePluginHostForms(
       changes: host.changes,
       outcomes,
       findings,
+      ...(materialized !== undefined ? { materialized } : {}),
     };
   });
 
@@ -503,32 +587,59 @@ export function materializeHostForm(
   applyHostFileChanges(into, changes);
 }
 
+/** The relative path (or paths) a change names, for a message about that change. */
+function changeLabel(change: HostFileChange): string {
+  return change.kind === 'move' ? `${change.from}' -> '${change.to}` : change.path;
+}
+
 /**
- * Find out whether a target's changes can be applied, by producing its form in a scratch directory
- * that is removed again. Returns the reason they cannot, or `undefined` when they can.
+ * Produce a target's generated form in a new scratch directory and report whether its changes
+ * could be applied.
+ *
+ * Returns the scratch root (the caller removes or keeps it), the directory inside it holding the
+ * form, and `problem`: the reason the changes cannot be applied, or `undefined` when they were.
+ * With a problem the directory is partly changed and must not be used.
+ *
+ * The reason is worded for the author. A refusal by {@link applyHostFileChanges} is quoted as it
+ * is; a failure of the filesystem underneath it is reported by the change's own path and the
+ * error's code, never by the scratch directory's path, which means nothing once it is gone.
  *
  * Only applying the changes is in question here: a failure to lay down the bundle or the copy is
  * not about this target's changes and propagates as the error it is.
  */
-function tryMaterializeHostForm(
+// TODO: validation and lint only need the answer, not the form. Whether the changes apply is
+// decided by the paths they name and the links on them in the authored source (the copy keeps
+// links as written), so a check of those paths would answer without copying the plugin. A build
+// uses the form it gets here, so only those two pay for a copy they then discard.
+function materializeInScratch(
   pluginDir: string,
   target: TargetId,
   changes: readonly HostFileChange[],
   excludeDir: string,
-): string | undefined {
-  const scratch = fs.mkdtempSync(path.join(os.tmpdir(), 'aipm-host-form-'));
+): { root: string; dir: string; problem: string | undefined } {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'aipm-host-form-'));
+  const dir = path.join(root, path.basename(pluginDir));
   try {
-    const into = path.join(scratch, path.basename(pluginDir));
-    writeHostFormBase(pluginDir, target, into, excludeDir);
-    try {
-      applyHostFileChanges(into, changes);
-    } catch (err) {
-      return err instanceof Error ? err.message : String(err);
-    }
-    return undefined;
-  } finally {
-    fs.rmSync(scratch, { recursive: true, force: true });
+    writeHostFormBase(pluginDir, target, dir, excludeDir);
+  } catch (err) {
+    fs.rmSync(root, { recursive: true, force: true });
+    throw err;
   }
+  for (const change of changes) {
+    try {
+      applyHostFileChanges(dir, [change]);
+    } catch (err) {
+      const code = (err as NodeJS.ErrnoException).code;
+      const problem =
+        typeof code === 'string'
+          ? `Host file change '${changeLabel(change)}' cannot be applied (${code}).`
+          : err instanceof Error
+            ? err.message
+            : String(err);
+      return { root, dir, problem };
+    }
+  }
+  return { root, dir, problem: undefined };
 }
 
 /**

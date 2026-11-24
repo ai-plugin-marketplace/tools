@@ -38,6 +38,7 @@ import {
 import type { AipmWorkspace } from '../config.js';
 
 import { discoverPlugins } from './discover.js';
+import { collectFilesRelative } from './tree-compare.js';
 import {
   computePluginHostForms,
   createHostFormsRun,
@@ -952,22 +953,6 @@ export function readRootManifestPaths(repoRoot: string): string[] {
   return [];
 }
 
-/** Collect every file path under `dir`, relative to `dir`. Returns `[]` if `dir` is absent. */
-export function collectFilesRelative(dir: string): string[] {
-  if (!fs.existsSync(dir)) return [];
-  const out: string[] = [];
-  for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
-    if (entry.isDirectory()) {
-      for (const sub of collectFilesRelative(path.join(dir, entry.name))) {
-        out.push(path.join(entry.name, sub));
-      }
-    } else {
-      out.push(entry.name);
-    }
-  }
-  return out;
-}
-
 // ---------------------------------------------------------------------------
 // Build one plugin
 // ---------------------------------------------------------------------------
@@ -980,6 +965,23 @@ function removeGeneratedTree(dir: string): void {
   fs.rmSync(dir, { recursive: true, force: true });
   const parent = path.dirname(dir);
   if (fs.existsSync(parent) && fs.readdirSync(parent).length === 0) fs.rmdirSync(parent);
+}
+
+/**
+ * Put the generated tree at `from` (a scratch directory) in place at `to`, replacing whatever is
+ * there. A rename where the two are on one filesystem; a copy that keeps links as written, then a
+ * removal of the original, where they are not.
+ */
+function moveGeneratedTree(from: string, to: string): void {
+  fs.rmSync(to, { recursive: true, force: true });
+  fs.mkdirSync(path.dirname(to), { recursive: true });
+  try {
+    fs.renameSync(from, to);
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException).code !== 'EXDEV') throw err;
+    fs.cpSync(from, to, { recursive: true, verbatimSymlinks: true });
+    fs.rmSync(from, { recursive: true, force: true });
+  }
 }
 
 /** The {@link TargetBuildReport} status of a host form; the type documents each value. */
@@ -1019,9 +1021,6 @@ async function buildOnePlugin(
 
   const artifacts: GeneratedFile[] = [];
 
-  // Computed once, before anything is written, and shared by every step below.
-  const forms = run.forms(pluginDir, envelope);
-
   // ── In-plugin-dir generated hook JSONs (sentinel-carrying) ────────────────
   for (const hookArtifact of computePluginHookArtifacts(pluginDir, envelope)) {
     writeFileEnsuringDir(hookArtifact.absPath, hookArtifact.expectedContent);
@@ -1038,11 +1037,20 @@ async function buildOnePlugin(
     });
   }
 
+  // Computed once per run and shared by every step below. Asked for only now, after the
+  // in-plugin hook files are written: a target's own tree copies them, and the run may already
+  // hold that tree, produced while checking that the target's changes apply.
+  const forms = run.forms(pluginDir, envelope);
+
   // ── dist/** trees (sentinel-less, byte-parity with oracle) ─────────────────
-  // Written after the in-plugin hook files, so a target's own tree copies them as just generated.
   const bundles = computeDistBundles(pluginDir, distDir, forms);
   for (const bundle of bundles) {
-    bundle.regenerate(bundle.destDir);
+    const ready = hostFormFor(forms, bundle.target)?.materialized;
+    if (ready !== undefined && fs.existsSync(ready)) {
+      moveGeneratedTree(ready, bundle.destDir);
+    } else {
+      bundle.regenerate(bundle.destDir);
+    }
     for (const rel of collectFilesRelative(bundle.destDir)) {
       artifacts.push({
         path: path.join(bundle.destDir, rel),
@@ -1211,148 +1219,152 @@ export async function runBuild(targetPath: string, opts?: BuildOptions): Promise
 
   // One projection per plugin for the whole run: the build, the registries, the repo-root
   // artifacts and the validation below all read the same host forms.
-  const hostFormsRun = createHostFormsRun(repoRoot, distDir);
-
-  const results: BuildResult[] = [];
-  for (const pluginDir of pluginDirs) {
-    results.push(await buildOnePlugin(pluginDir, hostFormsRun, configCache));
-  }
-  writeTreeManifest(
-    repoRoot,
-    hostFormsRun,
-    pluginDirs,
-    path.resolve(targetPath) === repoRoot,
-    results,
-  );
-
-  // ── Marketplace registries (opt-in via aipm.workspace.ts at the repo root) ──
-  // When the repo has opted into registry generation, the three marketplace.json files are
-  // GENERATED here (subsuming the hand-authored registries + validateMarketplaceRegistration).
-  // Registries are repo-level, so we compute them from EVERY plugin under the repo root — not just
-  // the one a single-plugin `targetPath` named — so a partial build never drops sibling entries.
-  // Re-discovering from `repoRoot` (rather than reusing `pluginDirs`, which holds only the named
-  // plugin for single-plugin input) is what makes the registry repo-complete. When no
-  // `aipm.workspace.ts` is present, generation does nothing and the registries stay hand-authored.
-  const workspace = await loadWorkspaceConfig(repoRoot);
-  if (workspace !== undefined) {
-    // For repo-root input, pluginDirs already covers the whole repo — reuse it (and the warm
-    // config cache) instead of re-discovering and reloading. Only single-plugin input needs a
-    // repo-wide re-scan to make the registry repo-complete.
+  // It keeps each generated form it produces while checking the changes apply, so the form is
+  // moved into place below rather than produced a second time.
+  const hostFormsRun = createHostFormsRun(repoRoot, distDir, { keepMaterialized: true });
+  try {
+    const results: BuildResult[] = [];
+    for (const pluginDir of pluginDirs) {
+      results.push(await buildOnePlugin(pluginDir, hostFormsRun, configCache));
+    }
+    // Every plugin of the repo was built, whether the target was the repo root or a directory that
+    // resolves to the same set (the plugins root): only then is a tree no plugin produced a
+    // leftover to clean up rather than another plugin's.
     const isRepoRoot = path.resolve(targetPath) === repoRoot;
     const allPluginDirs = isRepoRoot ? pluginDirs : (await discoverPlugins(repoRoot)).pluginDirs;
-    const registryPlugins = await collectRegistryPlugins(
-      repoRoot,
-      allPluginDirs,
-      configCache,
-      hostFormsRun,
-    );
-    const registries = computeRegistryArtifacts(repoRoot, registryPlugins, workspace);
-    // Split vendor-subdirectory registries (written + orphan-swept here, unchanged) from repo-root
-    // registries (open-plugins), whose writing/orphan-removal is collision-guarded via the
-    // generated-root sidecar below (OP-D5/VT-4) so a foreign root marketplace.json is never touched.
-    const vendorRegistries = registries.filter((r) => !isRootRegistryTarget(r.target));
-    const rootRegistries = registries.filter((r) => isRootRegistryTarget(r.target));
-    const vendorExpectedPaths = new Set(vendorRegistries.map((r) => r.absPath));
-    for (const registry of vendorRegistries) {
-      writeFileEnsuringDir(registry.absPath, registry.expectedContent);
-    }
-    // Remove ORPHANED vendor registries: a managed vendor `marketplace.json` for a target no longer
-    // declared by any plugin (e.g. the last `claude` plugin was dropped). Only the toolkit-managed
-    // vendor registry paths are ever touched — repo-root registries are handled by the sidecar path.
-    for (const orphan of managedVendorRegistryPaths(repoRoot)) {
-      if (!vendorExpectedPaths.has(orphan) && fs.existsSync(orphan)) {
-        fs.rmSync(orphan);
-      }
-    }
-    // Record the generated vendor registries as repo-level artifacts on every built plugin's result
-    // so they surface in BuildResult regardless of which plugin a single-plugin build targeted.
-    // (Root registries are recorded below, once the collision guard confirms they were emitted.)
-    for (const result of results) {
+    const built = new Set(pluginDirs.map((dir) => path.resolve(dir)));
+    const builtWholeRepo = allPluginDirs.every((dir) => built.has(path.resolve(dir)));
+    writeTreeManifest(repoRoot, hostFormsRun, pluginDirs, builtWholeRepo, results);
+
+    // ── Marketplace registries (opt-in via aipm.workspace.ts at the repo root) ──
+    // When the repo has opted into registry generation, the three marketplace.json files are
+    // GENERATED here (subsuming the hand-authored registries + validateMarketplaceRegistration).
+    // Registries are repo-level, so we compute them from EVERY plugin under the repo root — not just
+    // the one a single-plugin `targetPath` named — so a partial build never drops sibling entries.
+    // Re-discovering from `repoRoot` (rather than reusing `pluginDirs`, which holds only the named
+    // plugin for single-plugin input) is what makes the registry repo-complete. When no
+    // `aipm.workspace.ts` is present, generation does nothing and the registries stay hand-authored.
+    const workspace = await loadWorkspaceConfig(repoRoot);
+    if (workspace !== undefined) {
+      // For repo-root input, pluginDirs already covers the whole repo — reuse it (and the warm
+      // config cache) instead of re-discovering and reloading. Only single-plugin input needs a
+      // repo-wide re-scan to make the registry repo-complete.
+      const registryPlugins = await collectRegistryPlugins(
+        repoRoot,
+        allPluginDirs,
+        configCache,
+        hostFormsRun,
+      );
+      const registries = computeRegistryArtifacts(repoRoot, registryPlugins, workspace);
+      // Split vendor-subdirectory registries (written + orphan-swept here, unchanged) from repo-root
+      // registries (open-plugins), whose writing/orphan-removal is collision-guarded via the
+      // generated-root sidecar below (OP-D5/VT-4) so a foreign root marketplace.json is never touched.
+      const vendorRegistries = registries.filter((r) => !isRootRegistryTarget(r.target));
+      const rootRegistries = registries.filter((r) => isRootRegistryTarget(r.target));
+      const vendorExpectedPaths = new Set(vendorRegistries.map((r) => r.absPath));
       for (const registry of vendorRegistries) {
-        result.artifacts.push({ path: registry.absPath, target: registry.target });
+        writeFileEnsuringDir(registry.absPath, registry.expectedContent);
       }
-    }
-
-    // ── Repo-root native emission (gemini / kiro + repo-root registries) ────────
-    // Single-artifact hosts install ONE extension/power per repo from the repo ROOT; repo-root
-    // registries (open-plugins) put their `marketplace.json` at the root too. Both are repo-level and
-    // computed from EVERY plugin (the N=1 gate / registry membership sees the whole repo). The emit is
-    // safety-guarded: bundling happens in temp (never against repoRoot), a single collision guard
-    // refuses to overwrite non-generated root files (OP-D5), and orphan removal is bounded to the
-    // prior tracked set recorded in the committed sidecar manifest. Merging the root registries into
-    // the same tracked set (option (a)) unifies every repo-root file the toolkit owns.
-    const priorTracked = readRootManifestPaths(repoRoot);
-    const root = mergeRootArtifacts(
-      computeRootArtifacts(repoRoot, registryPlugins, workspace),
-      rootRegistryArtifactFiles(repoRoot, rootRegistries),
-    );
-    const { collidedOwners } = detectRootCollisions(repoRoot, root, priorTracked);
-
-    // The tracked set is only the paths we actually WRITE — files of a collided (suppressed) owner
-    // are neither written nor tracked, so orphan removal can never delete an author-owned collider.
-    const writtenTracked = new Set<string>();
-    const emittedOwners = new Set<TargetId>();
-    for (const file of root.files) {
-      if (collidedOwners.has(file.owner)) continue;
-      const abs = path.join(repoRoot, ...file.relPath.split('/'));
-      fs.mkdirSync(path.dirname(abs), { recursive: true });
-      fs.writeFileSync(abs, file.content);
-      writtenTracked.add(file.relPath);
-      emittedOwners.add(file.owner);
+      // Remove ORPHANED vendor registries: a managed vendor `marketplace.json` for a target no longer
+      // declared by any plugin (e.g. the last `claude` plugin was dropped). Only the toolkit-managed
+      // vendor registry paths are ever touched — repo-root registries are handled by the sidecar path.
+      for (const orphan of managedVendorRegistryPaths(repoRoot)) {
+        if (!vendorExpectedPaths.has(orphan) && fs.existsSync(orphan)) {
+          fs.rmSync(orphan);
+        }
+      }
+      // Record the generated vendor registries as repo-level artifacts on every built plugin's result
+      // so they surface in BuildResult regardless of which plugin a single-plugin build targeted.
+      // (Root registries are recorded below, once the collision guard confirms they were emitted.)
       for (const result of results) {
-        result.artifacts.push({ path: abs, target: file.owner });
+        for (const registry of vendorRegistries) {
+          result.artifacts.push({ path: registry.absPath, target: registry.target });
+        }
       }
-    }
 
-    // Orphan removal: any path in the PRIOR tracked set that is no longer generated this run is a
-    // path the toolkit previously created and now owns the right to delete (e.g. the gemini plugin
-    // was dropped, or a second gemini plugin disabled emission via the N=1 gate). Bounded strictly
-    // to `priorTracked` — we never delete a file we did not previously record as generated.
-    for (const rel of priorTracked) {
-      if (writtenTracked.has(rel)) continue;
-      const abs = path.join(repoRoot, ...rel.split('/'));
-      if (fs.existsSync(abs)) fs.rmSync(abs);
-    }
+      // ── Repo-root native emission (gemini / kiro + repo-root registries) ────────
+      // Single-artifact hosts install ONE extension/power per repo from the repo ROOT; repo-root
+      // registries (open-plugins) put their `marketplace.json` at the root too. Both are repo-level and
+      // computed from EVERY plugin (the N=1 gate / registry membership sees the whole repo). The emit is
+      // safety-guarded: bundling happens in temp (never against repoRoot), a single collision guard
+      // refuses to overwrite non-generated root files (OP-D5), and orphan removal is bounded to the
+      // prior tracked set recorded in the committed sidecar manifest. Merging the root registries into
+      // the same tracked set (option (a)) unifies every repo-root file the toolkit owns.
+      const priorTracked = readRootManifestPaths(repoRoot);
+      const root = mergeRootArtifacts(
+        computeRootArtifacts(repoRoot, registryPlugins, workspace),
+        rootRegistryArtifactFiles(repoRoot, rootRegistries),
+      );
+      const { collidedOwners } = detectRootCollisions(repoRoot, root, priorTracked);
 
-    // Write/update the sidecar manifest (itself a generated, freshness-checked artifact). When the
-    // tracked set is empty AND no sidecar existed, skip writing so a repo that never used these
-    // hosts stays free of an empty `.aipm/` dir; otherwise keep it in sync (including emptying it).
-    const manifestAbs = rootManifestPath(repoRoot);
-    const trackedSorted = [...writtenTracked].sort();
-    if (trackedSorted.length > 0 || fs.existsSync(manifestAbs)) {
-      writeFileEnsuringDir(manifestAbs, serializeRootManifest(trackedSorted));
-      // The sidecar spans every emitted owner (gemini/kiro/open-plugins), so it has no single
-      // owning target — record it as `'shared'` rather than attributing it to one of the owners.
-      // Only when something was emitted this run: when the manifest is being emptied via orphan
-      // removal, nothing produced it this run, so it isn't recorded as an artifact.
-      if (emittedOwners.size > 0) {
+      // The tracked set is only the paths we actually WRITE — files of a collided (suppressed) owner
+      // are neither written nor tracked, so orphan removal can never delete an author-owned collider.
+      const writtenTracked = new Set<string>();
+      const emittedOwners = new Set<TargetId>();
+      for (const file of root.files) {
+        if (collidedOwners.has(file.owner)) continue;
+        const abs = path.join(repoRoot, ...file.relPath.split('/'));
+        fs.mkdirSync(path.dirname(abs), { recursive: true });
+        fs.writeFileSync(abs, file.content);
+        writtenTracked.add(file.relPath);
+        emittedOwners.add(file.owner);
         for (const result of results) {
-          result.artifacts.push({ path: manifestAbs, target: 'shared' });
+          result.artifacts.push({ path: abs, target: file.owner });
+        }
+      }
+
+      // Orphan removal: any path in the PRIOR tracked set that is no longer generated this run is a
+      // path the toolkit previously created and now owns the right to delete (e.g. the gemini plugin
+      // was dropped, or a second gemini plugin disabled emission via the N=1 gate). Bounded strictly
+      // to `priorTracked` — we never delete a file we did not previously record as generated.
+      for (const rel of priorTracked) {
+        if (writtenTracked.has(rel)) continue;
+        const abs = path.join(repoRoot, ...rel.split('/'));
+        if (fs.existsSync(abs)) fs.rmSync(abs);
+      }
+
+      // Write/update the sidecar manifest (itself a generated, freshness-checked artifact). When the
+      // tracked set is empty AND no sidecar existed, skip writing so a repo that never used these
+      // hosts stays free of an empty `.aipm/` dir; otherwise keep it in sync (including emptying it).
+      const manifestAbs = rootManifestPath(repoRoot);
+      const trackedSorted = [...writtenTracked].sort();
+      if (trackedSorted.length > 0 || fs.existsSync(manifestAbs)) {
+        writeFileEnsuringDir(manifestAbs, serializeRootManifest(trackedSorted));
+        // The sidecar spans every emitted owner (gemini/kiro/open-plugins), so it has no single
+        // owning target — record it as `'shared'` rather than attributing it to one of the owners.
+        // Only when something was emitted this run: when the manifest is being emptied via orphan
+        // removal, nothing produced it this run, so it isn't recorded as an artifact.
+        if (emittedOwners.size > 0) {
+          for (const result of results) {
+            result.artifacts.push({ path: manifestAbs, target: 'shared' });
+          }
         }
       }
     }
-  }
 
-  // §5.4: build runs validate before returning success. Skip freshness here — we just wrote the
-  // artifacts, so they are fresh by construction; running it would be redundant work.
-  // The published-surface boundary check is skipped too: it concerns contributor files outside the
-  // plugins, which is `validate`'s business, not a reason for a build to fail.
-  const validation = await runValidateInRun(
-    targetPath,
-    { skipFreshness: true, skipPublishedSurfaceBoundary: true },
-    hostFormsRun,
-  );
-  if (opts?.failFast && !validation.passed) {
-    const hardFindings = validation.findings.filter((f) => f.severity === 'hard');
-    const summary = hardFindings
-      .map((f) => `  [${f.plugin ?? '?'}] ${f.code}: ${f.message}`)
-      .join('\n');
-    throw new Error(
-      `Build produced ${String(hardFindings.length)} hard validation finding(s):\n${summary}`,
+    // §5.4: build runs validate before returning success. Skip freshness here — we just wrote the
+    // artifacts, so they are fresh by construction; running it would be redundant work.
+    // The published-surface boundary check is skipped too: it concerns contributor files outside the
+    // plugins, which is `validate`'s business, not a reason for a build to fail.
+    const validation = await runValidateInRun(
+      targetPath,
+      { skipFreshness: true, skipPublishedSurfaceBoundary: true },
+      hostFormsRun,
     );
-  }
+    if (opts?.failFast && !validation.passed) {
+      const hardFindings = validation.findings.filter((f) => f.severity === 'hard');
+      const summary = hardFindings
+        .map((f) => `  [${f.plugin ?? '?'}] ${f.code}: ${f.message}`)
+        .join('\n');
+      throw new Error(
+        `Build produced ${String(hardFindings.length)} hard validation finding(s):\n${summary}`,
+      );
+    }
 
-  return results;
+    return results;
+  } finally {
+    hostFormsRun.dispose();
+  }
 }
 
 /**

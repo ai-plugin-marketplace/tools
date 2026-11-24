@@ -54,7 +54,7 @@ import {
 } from './host-forms.js';
 import { runValidate, validateMarketplaceRegistration } from './validate.js';
 import { synthRegistryRepo } from '../test-support/synth-plugin.js';
-import type { SynthRegistryRepo } from '../test-support/synth-plugin.js';
+import type { SynthRegistryPlugin, SynthRegistryRepo } from '../test-support/synth-plugin.js';
 import type { BuildResult, Finding, FindingCode, TargetBuildReport, TargetId } from './types.js';
 
 // ---------------------------------------------------------------------------
@@ -1326,6 +1326,97 @@ describe('a skill the projection cannot use', () => {
     });
   });
 
+  // Regression: any indented line starting `audience:` counted as stating an audience, so these
+  // plugins, which state none, stopped building. Only a top-level frontmatter key is the source
+  // key (unified model §5.3).
+  it.each([
+    [
+      'a nested metadata.audience key',
+      '---\nname: notes\ndescription: Use when testing the notes skill.\nmetadata:\n  audience: developers\n---\n\n# notes\n',
+    ],
+    [
+      'a folded description whose second line starts "audience:"',
+      '---\nname: notes\ndescription: >\n  Use when testing the notes skill. Its intended\n  audience: beginners who have not used it before.\n---\n\n# notes\n',
+    ],
+  ])('does not take %s for an audience declaration', async (_case, skillFile) => {
+    repo = twoTargetPlugin({ 'skills/notes/SKILL.md': skillFile });
+    UNUSABLE_SKILLS[0]?.arrange(pluginDirOf(repo), repo.repoRoot);
+
+    const [result] = await runBuild(repo.repoRoot);
+
+    for (const target of ['claude', 'codex'] as const) {
+      expect(targetReport(result, target).status, target).toBe('authored');
+    }
+    expect(stringRegistrySource(repo.repoRoot, '.claude-plugin', 'marketplace.json')).toBe(
+      './plugins/demo',
+    );
+    const unreadable = ofCode(
+      (await runValidate(repo.repoRoot, { ci: true })).findings,
+      'source-unreadable',
+    );
+    expect(unreadable.map((f) => f.severity)).toStrictEqual(unreadable.map(() => 'soft'));
+  });
+
+  it('still reads a top-level key in frontmatter that cannot be parsed', async () => {
+    // A broken file must not hide a declaration: the key is at column 0, the YAML is invalid.
+    repo = twoTargetPlugin({
+      'skills/broken/SKILL.md':
+        '---\nname: broken\ndescription: [unclosed\naudience: user\n---\n\n# broken\n',
+    });
+    UNUSABLE_SKILLS[0]?.arrange(pluginDirOf(repo), repo.repoRoot);
+    const [result] = await runBuild(repo.repoRoot);
+    expect(targetReport(result, 'claude').status).toBe('failed');
+  });
+
+  it('is not made strict by an audience another plugin states', async () => {
+    // `skills/others` links to a sibling plugin's whole skills directory. Nothing there is a
+    // skill of this plugin, so the sibling's restricted skill says nothing about this one.
+    repo = synthRegistryRepo(
+      [
+        {
+          name: PLUGIN,
+          targets: ['claude'],
+          files: {
+            '.claude-plugin/plugin.json': MANIFEST,
+            'skills/plain/SKILL.md': skillMd('plain'),
+          },
+        },
+        {
+          name: 'sibling',
+          targets: ['claude'],
+          files: {
+            '.claude-plugin/plugin.json': `${JSON.stringify({ name: 'sibling', version: '0.0.1' })}\n`,
+            'skills/restricted/SKILL.md': skillMd('restricted', 'audience: user\n'),
+          },
+        },
+      ],
+      WORKSPACE,
+    );
+    fs.symlinkSync(
+      path.join('..', '..', 'sibling', 'skills'),
+      path.join(pluginDirOf(repo), 'skills', 'others'),
+    );
+
+    const results = await runBuild(repo.repoRoot);
+
+    expect(
+      targetReport(
+        results.find((r) => r.plugin === PLUGIN),
+        'claude',
+      ),
+    ).toMatchObject({
+      status: 'authored',
+      dir: pluginDirOf(repo),
+    });
+    // The sibling's own audience is still built for the sibling.
+    expect(
+      targetReport(
+        results.find((r) => r.plugin === 'sibling'),
+        'claude',
+      ).status,
+    ).toBe('projected');
+  });
+
   it('stays strict when the audience is stated in the very file that cannot be used', async () => {
     // The restriction is behind a linked SKILL.md, which the projection does not read. Treating
     // the plugin as stating no audience would publish the skill unrestricted.
@@ -1540,52 +1631,117 @@ describe('ownership of per-target trees', () => {
     expect(collisions).toHaveLength(1);
     expect(collisions[0]).toMatchObject({ severity: 'hard', plugin: PLUGIN });
     expect(collisions[0]?.message).toContain("'dist/claude/demo'");
+    // The other way out, for a tree that was the toolkit's all along.
+    expect(collisions[0]?.hint).toContain('.aipm/generated-trees.json');
   });
 
-  it('flags a manifest that no longer lists a tree', async () => {
+  // Regression: with the manifest lost or unreadable, every tree the toolkit had written counted
+  // as a foreign directory, so the build failed those targets and took the plugin out of its
+  // registries.
+  it.each([
+    [
+      'is deleted',
+      (file: string): void => {
+        fs.rmSync(file);
+      },
+    ],
+    [
+      'holds merge conflict markers',
+      (file: string): void => {
+        fs.writeFileSync(file, '<<<<<<< ours\n{}\n=======\n{}\n>>>>>>> theirs\n');
+      },
+    ],
+  ])('still owns its unchanged trees when the manifest %s', async (_case, damage) => {
     repo = twoTargetPlugin(AUDIENCE_SKILLS);
     await runBuild(repo.repoRoot);
-    fs.writeFileSync(
-      path.join(repo.repoRoot, '.aipm', 'generated-trees.json'),
-      `${JSON.stringify({ version: 1, paths: ['dist/codex/demo'] }, null, 2)}\n`,
+    const manifestFile = path.join(repo.repoRoot, '.aipm', 'generated-trees.json');
+    damage(manifestFile);
+
+    // Validation reports the manifest as out of date, not the trees as someone else's.
+    const before = (await runValidate(repo.repoRoot, { ci: true })).findings;
+    expect(ofCode(before, 'generated-tree-collision')).toStrictEqual([]);
+    const stale = ofCode(before, 'freshness').map((f) => f.message);
+    expect(stale.some((m) => m.includes("does not list 'dist/claude/demo'"))).toBe(true);
+
+    // A build keeps every target published and writes the manifest again.
+    const [result] = await runBuild(repo.repoRoot);
+    expect(targetReport(result, 'claude').status).toBe('projected');
+    expect(targetReport(result, 'codex').status).toBe('projected');
+    expect(stringRegistrySource(repo.repoRoot, '.claude-plugin', 'marketplace.json')).toBe(
+      './dist/claude/demo',
     );
-    const findings = (await runValidate(repo.repoRoot, { ci: true })).findings;
-    // Unlisted, the Claude Code tree is a directory the toolkit does not own.
-    expect(ofCode(findings, 'generated-tree-collision')).toHaveLength(1);
+    expect(manifestOf(repo.repoRoot)).toStrictEqual({
+      version: 1,
+      paths: ['dist/claude/demo', 'dist/codex/demo'],
+    });
+    expect(ofCode((await runValidate(repo.repoRoot, { ci: true })).findings, 'freshness')).toEqual(
+      [],
+    );
   });
 
-  it('removes the trees of a plugin that is gone when the whole repo is built', async () => {
+  it('does not take an unlisted directory for its own once its content differs', async () => {
+    repo = twoTargetPlugin(AUDIENCE_SKILLS);
+    await runBuild(repo.repoRoot);
+    fs.rmSync(path.join(repo.repoRoot, '.aipm', 'generated-trees.json'));
+    fs.appendFileSync(
+      path.join(distOf(repo, 'claude'), 'skills', 'for-both', 'SKILL.md'),
+      'edited\n',
+    );
+
+    const [result] = await runBuild(repo.repoRoot);
+    expect(targetReport(result, 'claude').status).toBe('failed');
+    expect(targetReport(result, 'codex').status).toBe('projected');
+  });
+
+  it('removes the trees of a plugin that is gone once every remaining plugin is built', async () => {
+    const claudePlugin = (name: string, skills: Record<string, string>): SynthRegistryPlugin => ({
+      name,
+      targets: ['claude'],
+      files: {
+        '.claude-plugin/plugin.json': `${JSON.stringify({ name, version: '0.0.1' })}\n`,
+        ...skills,
+      },
+    });
+    const restricted = { 'skills/hello/SKILL.md': skillMd('hello', 'audience: user\n') };
     repo = synthRegistryRepo(
       [
-        {
-          name: PLUGIN,
-          targets: ['claude'],
-          files: { '.claude-plugin/plugin.json': MANIFEST, ...AUDIENCE_SKILLS },
-        },
-        {
-          name: 'sibling',
-          targets: ['claude'],
-          files: {
-            '.claude-plugin/plugin.json': `${JSON.stringify({ name: 'sibling', version: '0.0.1' })}\n`,
-            'skills/hello/SKILL.md': skillMd('hello', 'audience: user\n'),
-          },
-        },
+        claudePlugin(PLUGIN, AUDIENCE_SKILLS),
+        claudePlugin('other', restricted),
+        claudePlugin('gone', restricted),
       ],
       WORKSPACE,
     );
     await runBuild(repo.repoRoot);
-    fs.rmSync(path.join(repo.repoRoot, 'plugins', 'sibling'), { recursive: true });
+    fs.rmSync(path.join(repo.repoRoot, 'plugins', 'gone'), { recursive: true });
+    const goneTree = path.join(repo.repoRoot, 'dist', 'claude', 'gone');
 
-    // Building one plugin leaves the other's record and tree alone.
+    // Building one of the two remaining plugins cannot tell a leftover from a sibling's tree, so
+    // it keeps both the record and the directory.
     await runBuild(pluginDirOf(repo));
     expect(manifestOf(repo.repoRoot)).toStrictEqual({
       version: 1,
-      paths: ['dist/claude/demo', 'dist/claude/sibling'],
+      paths: ['dist/claude/demo', 'dist/claude/gone', 'dist/claude/other'],
     });
+    expect(fs.existsSync(goneTree)).toBe(true);
 
-    await runBuild(repo.repoRoot);
-    expect(fs.existsSync(path.join(repo.repoRoot, 'dist', 'claude', 'sibling'))).toBe(false);
+    // Validation says so, whichever plugin it was asked about.
+    for (const target of [repo.repoRoot, pluginDirOf(repo)]) {
+      const stale = ofCode((await runValidate(target, { ci: true })).findings, 'freshness');
+      expect(
+        stale.map((f) => f.message).filter((m) => m.includes("'dist/claude/gone'")),
+      ).toHaveLength(1);
+    }
+
+    // A build that covers every plugin of the repo cleans up, whatever path it was given: with
+    // `other` removed too, building `demo` alone is such a build.
+    fs.rmSync(path.join(repo.repoRoot, 'plugins', 'other'), { recursive: true });
+    await runBuild(pluginDirOf(repo));
+    expect(fs.existsSync(goneTree)).toBe(false);
+    expect(fs.existsSync(path.join(repo.repoRoot, 'dist', 'claude', 'other'))).toBe(false);
     expect(manifestOf(repo.repoRoot)).toStrictEqual({ version: 1, paths: ['dist/claude/demo'] });
+    expect(ofCode((await runValidate(repo.repoRoot, { ci: true })).findings, 'freshness')).toEqual(
+      [],
+    );
   });
 });
 
@@ -1658,5 +1814,26 @@ describe('createHostFormsRun', () => {
     expect(run.forms(pluginDirOf(repo), ['claude', 'codex'])).toBe(first);
     // A different envelope is a different question.
     expect(run.forms(pluginDirOf(repo), ['claude'])).not.toBe(first);
+  });
+
+  it('keeps the forms it produced only when asked, until it is disposed of', () => {
+    repo = twoTargetPlugin(AUDIENCE_SKILLS);
+    const distDir = path.join(repo.repoRoot, 'dist');
+
+    const discarding = createHostFormsRun(repo.repoRoot, distDir);
+    for (const form of discarding.forms(pluginDirOf(repo), ['claude', 'codex']).hosts) {
+      expect(form, form.target).not.toHaveProperty('materialized');
+    }
+
+    const keeping = createHostFormsRun(repo.repoRoot, distDir, { keepMaterialized: true });
+    const kept = keeping
+      .forms(pluginDirOf(repo), ['claude', 'codex'])
+      .hosts.map((form) => form.materialized);
+    // What is kept is the target's form: Codex's has no agent-only skill it cannot hide.
+    expect(skillDirs(kept[0] ?? '')).toStrictEqual(ALL_FOUR);
+    expect(skillDirs(kept[1] ?? '')).toStrictEqual(['agent-only-widened', 'for-both', 'for-user']);
+
+    keeping.dispose();
+    for (const dir of kept) expect(fs.existsSync(dir ?? '')).toBe(false);
   });
 });

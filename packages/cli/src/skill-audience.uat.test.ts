@@ -11,7 +11,9 @@
  * (the `audience` key is removed from every host's output) and §4 (an omitted feature is reported
  * as `unavailable` with the fidelity list `[omitted]`). Vercel Skills installs skills by scanning
  * the authored source, so nothing is generated for it and each restriction it cannot honour is a
- * warning naming the skill and Vercel.
+ * warning naming the skill and Vercel. §4.2: a target the model does not cover yet (Cursor here)
+ * cannot enforce an audience, so a restricted skill is left out there with a warning naming the
+ * skill and the target, whatever its `audience-fallback`.
  *
  * @see https://github.com/ai-plugin-marketplace/normalizer/blob/main/docs/specs/unified-model.md
  * @see https://code.claude.com/docs/en/skills.md#control-who-invokes-a-skill
@@ -189,6 +191,45 @@ describe('aipm build of a plugin whose skills state an audience', () => {
     });
     expect(result.status, result.stdout + result.stderr).toBe(0);
     expect(result.stdout).not.toContain('freshness');
+  });
+});
+
+describe('aipm build for a target the unified model does not cover', () => {
+  it('leaves each restricted skill out of the Cursor tree and warns about each one', () => {
+    const cursorRepo = writeRepo({
+      'aipm.workspace.ts': BASE_FILES['aipm.workspace.ts'] ?? '',
+      'plugins/demo/aipm.config.ts':
+        "import { defineConfig } from '@ai-plugin-marketplace/core';\n\nexport default defineConfig({ version: '0.0.1', targets: ['cursor'] });\n",
+      'plugins/demo/.cursor-plugin/plugin.json': MANIFEST,
+      'plugins/demo/skills/for-both/SKILL.md': skillMd('for-both'),
+      'plugins/demo/skills/for-user/SKILL.md': skillMd('for-user', 'user'),
+      'plugins/demo/skills/widened/SKILL.md':
+        '---\nname: widened\ndescription: Use when testing the widened skill.\naudience: agent\naudience-fallback: widen\n---\n\n# widened\n',
+    });
+    const built = aipmBuild(cursorRepo);
+    expect(built.code, built.stdout + built.stderr).toBe(0);
+
+    const lines = built.stdout.split('\n');
+    expect(lines).toContain('[demo] cursor: dist/cursor/demo');
+    // Only the unrestricted skill is installed; `widen` does not keep a skill there.
+    expect(fs.readdirSync(path.join(cursorRepo, 'dist', 'cursor', 'demo', 'skills'))).toStrictEqual(
+      ['for-both'],
+    );
+    for (const skill of ['for-user', 'widened']) {
+      const warnings = lines.filter(
+        (line) =>
+          line.startsWith('[demo] skill-audience-omitted (soft): ') &&
+          line.includes(`"${skill}"`) &&
+          line.includes('Cursor'),
+      );
+      expect(warnings, skill).toHaveLength(1);
+    }
+    expect(built.stdout).not.toContain('(hard)');
+
+    const cursor = JSON.parse(
+      fs.readFileSync(path.join(cursorRepo, '.cursor-plugin', 'marketplace.json'), 'utf-8'),
+    ) as { plugins: { name: string; source: string }[] };
+    expect(cursor.plugins).toStrictEqual([{ name: 'demo', source: './dist/cursor/demo' }]);
   });
 });
 

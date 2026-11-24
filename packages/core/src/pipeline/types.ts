@@ -311,11 +311,14 @@ export interface ValidationResult {
  * `skill-audience-prefix-invalid`, `skill-name-duplicate`, `skill-location-unsupported`,
  * `source-unreadable`, `native-form-refuted`, `projection-not-implemented` — codes defined by
  * `@ai-plugin-marketplace/normalizer` for a skill's audience declaration (`audience` and
- * `audience-fallback` in `SKILL.md`) and its projection onto each target. They cover authored source
- * a build cannot read safely, a native form the capability grid records as failing evaluation, and
- * a projection the grid calls for that the normalizer cannot build yet. The normalizer defines
- * their meaning and severity. A `hard` source finding fails every target for the plugin, while a
- * `hard` target finding fails only that target.
+ * `audience-fallback` in `SKILL.md` frontmatter) and how it is carried to each target, and for
+ * authored source a build cannot read safely. `native-form-refuted` (always `soft`) says a host's
+ * own control was not used because a recorded evaluation of it failed, so the skill is handled as
+ * on a host without that control; `projection-not-implemented` (always `hard`) says a target
+ * calls for a form the normalizer cannot build yet, and fails that target. They are listed here
+ * so every normalizer finding is assignable to this type; their meaning and severity are the
+ * normalizer's (see its `FindingCode`). A `hard` one about the source fails the plugin's build for
+ * every target; a `hard` one about a single target fails that target only.
  *
  * `generated-tree-collision` — a target's form of a plugin needs a tree of its own under the dist
  * root, but a directory the toolkit did not write (one the generated-trees manifest does not list)
@@ -350,9 +353,9 @@ export type FindingCode =
   | 'skill-name-duplicate'
   | 'skill-location-unsupported'
   | 'source-unreadable'
-  | 'generated-tree-collision'
   | 'native-form-refuted'
-  | 'projection-not-implemented';
+  | 'projection-not-implemented'
+  | 'generated-tree-collision';
 
 /**
  * A single validation finding.

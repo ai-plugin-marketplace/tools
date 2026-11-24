@@ -432,6 +432,8 @@ Default severity: `info` (advisory; these are judgment heuristics).
 | `skill-name-duplicate`          | `portability/host-projection`               | `portability` | `error`           | Emitted `hard`, or `soft` for a plugin that states no audience (architecture §5.2.1).                                                                                                                                                                                                                                        |
 | `skill-location-unsupported`    | `portability/host-projection`               | `portability` | `error`           | Emitted `hard` where a host loads the file as a skill, `soft` elsewhere.                                                                                                                                                                                                                                                     |
 | `source-unreadable`             | `portability/host-projection`               | `portability` | `error`           | Emitted `hard`, or `soft` for a plugin that states no audience (architecture §5.2.1). Also reported, `hard`, for a target whose changes cannot be applied.                                                                                                                                                                   |
+| `native-form-refuted`           | `portability/host-projection`               | `portability` | `error`           | Always emitted `soft`. A host's own control was not used because a recorded evaluation of it failed.                                                                                                                                                                                                                         |
+| `projection-not-implemented`    | `portability/host-projection`               | `portability` | `error`           | Always emitted `hard`; fails that target. The target calls for a form the normalizer cannot build yet.                                                                                                                                                                                                                       |
 | `generated-tree-collision`      | `portability/host-projection`               | `portability` | `error`           | Always emitted `hard`; fails that target. A target's tree path holds a directory `.aipm/generated-trees.json` does not list.                                                                                                                                                                                                 |
 
 New (non-legacy) rules — no `FindingCode` predecessor, `legacyCode` unset. These run under
@@ -453,7 +455,7 @@ This table's rule set matches `ALL_RULES` exactly (21 registered rules: `envelop
 `pluginSelfContainmentRule`, `unpublishedSkillReferenceRule`, `defaultMarketplaceNameRule`,
 `registryFreshnessRule`, `rootArtifactFreshnessRule`, `unpublishedSkillInstallableRule`,
 `publishedSkillInternalRule`, `nameConsistencyRule`, `versionConsistencyRule`, `mcpKeySyncRule`,
-`marketplaceRegistrationRule`) and every entry in the closed `FindingCode` union (27 codes,
+`marketplaceRegistrationRule`) and every entry in the closed `FindingCode` union (29 codes,
 `repo-config-invalid` explicitly called out above as not-yet-rule-wrapped rather than omitted).
 
 ---

@@ -23,10 +23,11 @@
  * - Vercel Skills installs skills by scanning the repository's authored source, so no generated
  *   tree can be what it installs.
  *
- * A target the unified model does not cover (Cursor, Gemini CLI, Kiro) cannot enforce an audience.
- * The normalizer either keeps a restricted skill there or leaves it out, in both cases with a
- * warning naming the skill and the target; the suites below hold for either and say so where it
- * matters.
+ * - unified content model §4.2: a target the model does not cover yet (Cursor, Gemini CLI, Kiro,
+ *   Open Plugins) cannot enforce an audience, so a skill restricted to the user or to the agent is
+ *   left out there with a warning naming the skill and the target, and `audience-fallback: widen`
+ *   does not apply. Vercel Skills is the exception, because it installs the authored source: the
+ *   skill stays, with a warning that its restriction is not honoured.
  *
  * @see https://github.com/ai-plugin-marketplace/normalizer/blob/main/docs/specs/unified-model.md
  * @see https://code.claude.com/docs/en/skills.md#control-who-invokes-a-skill
@@ -201,23 +202,16 @@ function warningsAbout(findings: readonly Finding[], skill: string, label: strin
 }
 
 /**
- * Asserts what a target outside the unified model gets in `dir`: the unrestricted skill, each
- * restricted skill either kept or left out (never renamed or added to), and only the Agent Skills
- * floor keys on whatever is emitted.
+ * Asserts what a target outside the unified model gets in `dir` (§4.2): the unrestricted skill
+ * only, with only the Agent Skills floor keys. Every restricted skill is left out, the one that
+ * asks for `audience-fallback: widen` included, since that fallback does not apply there.
  */
 function expectUncoveredTargetSkills(dir: string, where: string): void {
-  const emitted = skillDirs(dir) ?? [];
-  expect(emitted, where).toContain('for-both');
-  expect(
-    emitted.filter((skill) => !ALL_FOUR.includes(skill)),
-    where,
-  ).toStrictEqual([]);
-  for (const skill of emitted) {
-    expect(Object.keys(frontmatter(dir, skill)).sort(), `${where}/${skill}`).toStrictEqual([
-      'description',
-      'name',
-    ]);
-  }
+  expect(skillDirs(dir), where).toStrictEqual(['for-both']);
+  expect(Object.keys(frontmatter(dir, 'for-both')).sort(), where).toStrictEqual([
+    'description',
+    'name',
+  ]);
 }
 
 // ---------------------------------------------------------------------------
@@ -295,10 +289,49 @@ describe('build of a plugin whose skills state an audience', () => {
     expect(fs.existsSync(path.join(dir, 'skills', 'for-both', 'agents'))).toBe(false);
   });
 
-  it('gives a target outside the model its own tree, without the source keys', async () => {
+  it('gives a target outside the model its own tree, without the restricted skills (§4.2)', async () => {
     repo = synthRepo(AUDIENCE_SKILLS);
     await runBuild(repo.repoRoot);
     expectUncoveredTargetSkills(distOf(repo, 'cursor'), 'cursor');
+  });
+
+  it('leaves every restricted skill out of each target outside the model, widen included (§4.2)', () => {
+    repo = synthRepo(AUDIENCE_SKILLS);
+    const uncovered = [
+      ['cursor', 'Cursor'],
+      ['gemini', 'Gemini CLI'],
+      ['kiro', 'Kiro'],
+      ['open-plugins', 'Open Plugins'],
+    ] as const;
+    const forms = computePluginHostForms(
+      pluginDirOf(repo),
+      uncovered.map(([target]) => target),
+    );
+
+    expect(forms.sourceFindings).toStrictEqual([]);
+    for (const [target, label] of uncovered) {
+      const form = forms.hosts.find((h) => h.target === target);
+      expect(form, target).toMatchObject({ failed: false, outcomes: [] });
+      expect(form, target).not.toHaveProperty('host');
+      // Each restricted skill's directory is removed, and none is renamed under the prefix.
+      const removed = (form?.changes ?? []).flatMap((c) => (c.kind === 'remove' ? [c.path] : []));
+      expect(removed.sort(), target).toStrictEqual(RESTRICTED.map((skill) => `skills/${skill}`));
+      expect(
+        form?.changes.filter((c) => c.kind === 'move'),
+        target,
+      ).toStrictEqual([]);
+      // One warning per skill left out, and nothing else: no skill is kept unenforced there.
+      expect(
+        form?.findings.map((f) => [f.code, f.severity]),
+        target,
+      ).toStrictEqual(RESTRICTED.map(() => ['skill-audience-omitted', 'soft']));
+      for (const skill of RESTRICTED) {
+        expect(
+          warningsAbout(form?.findings ?? [], skill, label),
+          `${skill} on ${label}`,
+        ).toHaveLength(1);
+      }
+    }
   });
 
   it('builds nothing for Vercel, which installs the authored source', async () => {
@@ -321,8 +354,13 @@ describe('build of a plugin whose skills state an audience', () => {
     for (const skill of RESTRICTED) {
       const warnings = warningsAbout(result.findings, skill, 'Vercel');
       expect(warnings, skill).toHaveLength(1);
-      expect(warnings[0], skill).toMatchObject({ plugin: PLUGIN });
+      expect(warnings[0], skill).toMatchObject({
+        code: 'skill-audience-unenforced',
+        plugin: PLUGIN,
+      });
     }
+    // Vercel is the only target where a restricted skill is kept unenforced (§4.2).
+    expect(ofCode(result.findings, 'skill-audience-unenforced')).toHaveLength(RESTRICTED.length);
     expect(warningsAbout(result.findings, 'for-both', 'Vercel')).toStrictEqual([]);
   });
 
@@ -423,13 +461,16 @@ describe('build of a plugin whose skills state an audience', () => {
     expect(widened[0]).toMatchObject({ severity: 'soft', plugin: PLUGIN });
     expect(widened[0]?.message).toContain('widened');
 
-    // A target outside the model cannot enforce an audience: whether a restricted skill is kept
-    // or left out there, exactly one warning names the skill and the target.
+    // §4.2: a target outside the model cannot enforce an audience, so each restricted skill is
+    // left out there, with exactly one warning naming the skill and the target.
     for (const label of ['Cursor', 'Gemini CLI', 'Kiro']) {
       for (const skill of RESTRICTED) {
-        expect(warningsAbout(result.findings, skill, label), `${skill} on ${label}`).toHaveLength(
-          1,
-        );
+        const warnings = warningsAbout(result.findings, skill, label);
+        expect(warnings, `${skill} on ${label}`).toHaveLength(1);
+        expect(warnings[0], `${skill} on ${label}`).toMatchObject({
+          code: 'skill-audience-omitted',
+          plugin: PLUGIN,
+        });
       }
     }
 

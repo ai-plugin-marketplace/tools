@@ -345,6 +345,8 @@ The copy leaves out `node_modules` and `.git` and keeps links as the author wrot
 
 **A target fails** when the source has a `hard` finding, the target has one of its own, its changes cannot be applied (each generated form is produced once in a scratch directory first, so a build never finds this out halfway through writing; the build then moves that form into place), or its tree's path holds a directory the toolkit did not write (`generated-tree-collision`). A failed target publishes nothing: no tree, no registry entry, no repo-root artifact. Sibling plugins and the plugin's other targets are unaffected.
 
+**Targets the unified model does not cover yet.** Cursor, Gemini CLI, Kiro and Open Plugins have no way to enforce an audience. The projection leaves a skill restricted to the user or to the agent out of their forms, with a `skill-audience-omitted` warning per skill and target; `audience-fallback: widen` does not apply there. The tree or bundle such a target gets therefore holds only the plugin's unrestricted skills.
+
 **Vercel cannot be withheld.** Vercel Skills installs skills by scanning the repository's authored source and has no registry or bundle that could point it at a generated directory, so no tree is built for it. Where its form would differ from the source (a skill whose audience is restricted, for instance), the projection's findings say what Vercel does not honour. For the same reason a failed build does not keep a plugin from Vercel: the authored source is still there to install, and `aipm build` says so.
 
 **Ownership of trees.** `.aipm/generated-trees.json` lists every per-target tree a build wrote, as paths from the repo root. A build replaces or removes only listed directories, and the freshness check (§10.5) reports only those; a directory at a tree's path that the manifest does not list is left alone, unless its content is exactly the form a build would write there: then the manifest was lost, not the tree, and the next build records it again. An entry that is no plugin's tree (its plugin was removed) is reported as stale and removed by a build of every plugin. The bundles of Gemini and Kiro are not listed: their directories have always been wholly generated. Freshness compares a tree's file set, contents, links and executable bits, and names paths from the repo root.
@@ -542,9 +544,9 @@ export type FindingCode =
   | 'skill-name-duplicate'
   | 'skill-location-unsupported'
   | 'source-unreadable'
-  | 'generated-tree-collision'
   | 'native-form-refuted'
-  | 'projection-not-implemented';
+  | 'projection-not-implemented'
+  | 'generated-tree-collision';
 
 export interface Finding {
   severity: 'hard' | 'soft';

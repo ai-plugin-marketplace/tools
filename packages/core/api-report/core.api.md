@@ -75,9 +75,9 @@ export interface BuildOptions {
 export interface BuildResult {
     artifacts: GeneratedFile[];
     durationMs: number;
-    hosts: HostBuildReport[];
     plugin: string;
     pluginDir: string;
+    targets: TargetBuildReport[];
 }
 
 // @public
@@ -136,7 +136,7 @@ export interface Finding {
 }
 
 // @public
-export type FindingCode = 'envelope-invalid' | 'repo-config-invalid' | 'envelope-adherence' | 'schema-invalid' | 'name-consistency' | 'version-consistency' | 'mcp-key-sync' | 'marketplace-registration' | 'freshness' | 'single-artifact-host' | 'root-artifact-collision' | 'default-marketplace-name' | 'frontmatter-invalid' | 'metadata-dir-isolation' | 'open-plugins-conformance' | 'unpublished-skill-installable' | 'skill-audience-invalid' | 'skill-audience-omitted' | 'skill-audience-widened' | 'skill-audience-reduced' | 'skill-audience-unenforced' | 'skill-audience-conflict' | 'skill-audience-prefix-invalid' | 'skill-name-duplicate' | 'skill-location-unsupported' | 'source-unreadable' | 'native-form-refuted' | 'projection-not-implemented';
+export type FindingCode = 'envelope-invalid' | 'repo-config-invalid' | 'envelope-adherence' | 'schema-invalid' | 'name-consistency' | 'version-consistency' | 'mcp-key-sync' | 'marketplace-registration' | 'freshness' | 'single-artifact-host' | 'root-artifact-collision' | 'default-marketplace-name' | 'frontmatter-invalid' | 'metadata-dir-isolation' | 'open-plugins-conformance' | 'unpublished-skill-installable' | 'skill-audience-invalid' | 'skill-audience-omitted' | 'skill-audience-widened' | 'skill-audience-reduced' | 'skill-audience-unenforced' | 'skill-audience-conflict' | 'skill-audience-prefix-invalid' | 'skill-name-duplicate' | 'skill-location-unsupported' | 'source-unreadable' | 'generated-tree-collision';
 
 // @public
 export interface Fix {
@@ -167,15 +167,6 @@ export interface GeneratedFile {
 
 // @public
 export type GeneratedFileTarget = TargetId | 'shared';
-
-// @public
-export interface HostBuildReport {
-    dir?: string;
-    host?: string;
-    outcomes: FeatureOutcome[];
-    status: 'source' | 'projected' | 'failed';
-    target: TargetId;
-}
 
 // @public
 export function init(targetDir: string, opts?: InitOptions): Promise<InitOutcome>;
@@ -321,6 +312,16 @@ export interface SupportReport {
         target: TargetId;
         wouldNeed: string[];
     }[];
+}
+
+// @public
+export interface TargetBuildReport {
+    dir?: string;
+    host?: string;
+    installsAuthoredSource: boolean;
+    outcomes: FeatureOutcome[];
+    status: 'authored' | 'bundled' | 'projected' | 'failed';
+    target: TargetId;
 }
 
 // @public

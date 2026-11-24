@@ -14,6 +14,7 @@ import {
   checkRegistryFreshness,
   checkRootArtifactFreshness,
 } from '../../pipeline/validate.js';
+import { hostFormsRunOf } from '../context.js';
 import { findingToDiagnostic } from '../diagnostic.js';
 import type { Diagnostic, InternalRuleContext, Rule } from '../types.js';
 import { docsUrlFor } from './docs-url.js';
@@ -33,7 +34,7 @@ export const pluginFreshnessRule: Rule = {
   },
   check(ctx: InternalRuleContext): Diagnostic[] {
     if (ctx.skipFreshness) return [];
-    const findings = checkFreshness(ctx.pluginDir, ctx.distDir, ctx.envelope, ctx.ci);
+    const findings = checkFreshness(ctx.pluginDir, ctx.envelope, ctx.ci, hostFormsRunOf(ctx));
     return findings.map((f) =>
       findingToDiagnostic(f, FRESHNESS_ID, 'correctness', docsUrlFor(FRESHNESS_ID)),
     );
@@ -59,6 +60,7 @@ export const registryFreshnessRule: Rule = {
       ctx.workspace,
       ctx.ci,
       ctx.configCache,
+      hostFormsRunOf(ctx),
     );
     return findings.map((f) =>
       findingToDiagnostic(f, FRESHNESS_ID, 'correctness', docsUrlFor(FRESHNESS_ID)),
@@ -93,6 +95,7 @@ export const rootArtifactFreshnessRule: Rule = {
       ctx.ci,
       ctx.skipFreshness,
       ctx.configCache,
+      hostFormsRunOf(ctx),
     );
     return findings.map((f) =>
       findingToDiagnostic(f, ROOT_ARTIFACT_ID, 'correctness', docsUrlFor(ROOT_ARTIFACT_ID)),

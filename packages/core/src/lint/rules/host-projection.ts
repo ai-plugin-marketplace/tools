@@ -14,19 +14,46 @@
  *   fallback that cannot be built). A `hard` one fails that target only.
  *
  * Each finding's own `code` becomes the diagnostic's `legacyCode`, so one rule carries every code
- * the projection reports. The rule computes the same host forms the build writes from
- * (`computePluginHostForms`), so what it reports is exactly what decided the build's output.
+ * the projection reports. The rule reads the same host forms the build writes from (the run's
+ * `HostFormsRun`), so what it reports is exactly what decided the build's output. That includes
+ * the two findings the pipeline adds to a target: changes that cannot be applied, and a tree path
+ * occupied by a directory the toolkit did not write (`generated-tree-collision`).
  *
  * @see docs/specs/lint-engine.md L-D2
  */
 
-import { computePluginHostForms } from '../../pipeline/host-forms.js';
+import * as path from 'node:path';
+
 import type { Finding } from '../../pipeline/types.js';
+import { validateFrontmatterParses } from '../../pipeline/validate.js';
+import { hostFormsRunOf } from '../context.js';
 import { findingToDiagnostic } from '../diagnostic.js';
 import type { Diagnostic, Rule, RuleContext } from '../types.js';
 import { docsUrlFor } from './docs-url.js';
 
 const RULE_ID = 'portability/host-projection';
+
+/**
+ * Drop the projection's report of a `SKILL.md` whose frontmatter is not valid YAML when
+ * `correctness/frontmatter-invalid` reports that same file, so the author reads about it once.
+ *
+ * The projection names the file at the start of its message (`<path>: ...`) and the frontmatter
+ * check quotes the same plugin-relative path. A finding is dropped only on that exact match;
+ * anything else the projection reports as `schema-invalid` is kept. This affects reporting only:
+ * whether the finding fails the plugin was decided from the full list.
+ */
+function withoutFrontmatterDuplicates(findings: readonly Finding[], pluginDir: string): Finding[] {
+  const candidates = findings.filter((f) => f.code === 'schema-invalid');
+  if (candidates.length === 0) return [...findings];
+  const alreadyReported = validateFrontmatterParses(pluginDir, path.basename(pluginDir)).map(
+    (f) => f.message,
+  );
+  return findings.filter((f) => {
+    if (f.code !== 'schema-invalid') return true;
+    const file = f.message.slice(0, Math.max(0, f.message.indexOf(': ')));
+    return file === '' || !alreadyReported.some((message) => message.includes(`'${file}'`));
+  });
+}
 
 export const hostProjectionRule: Rule = {
   meta: {
@@ -39,9 +66,9 @@ export const hostProjectionRule: Rule = {
     appliesTo: ['aipm-repo'],
   },
   check(ctx: RuleContext): Diagnostic[] {
-    const forms = computePluginHostForms(ctx.pluginDir, ctx.envelope);
+    const forms = hostFormsRunOf(ctx).forms(ctx.pluginDir, ctx.envelope);
     const findings: Finding[] = [
-      ...forms.sourceFindings,
+      ...withoutFrontmatterDuplicates(forms.sourceFindings, ctx.pluginDir),
       ...forms.hosts.flatMap((host) => host.findings),
     ];
     return findings.map((f) => findingToDiagnostic(f, RULE_ID, 'portability', docsUrlFor(RULE_ID)));

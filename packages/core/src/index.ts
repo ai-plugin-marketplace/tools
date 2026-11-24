@@ -62,7 +62,7 @@ export type {
   FeatureOutcome,
   GeneratedFile,
   GeneratedFileTarget,
-  HostBuildReport,
+  TargetBuildReport,
   ValidateOptions,
   ValidationResult,
   Finding,

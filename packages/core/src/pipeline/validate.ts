@@ -44,7 +44,16 @@ import {
 } from './build.js';
 import type { RegistryArtifact } from './build.js';
 import { discoverPlugins } from './discover.js';
-import { computePluginHostForms, hostDistDir, hostFormFor } from './host-forms.js';
+import {
+  createHostFormsRun,
+  hostDistDir,
+  hostFormFor,
+  isBundledTarget,
+  readTrackedTrees,
+  treeManifestEntry,
+  treeManifestPath,
+} from './host-forms.js';
+import type { HostFormsRun, PluginHostForms } from './host-forms.js';
 import {
   ConfigLoadError,
   createConfigCache,
@@ -54,6 +63,7 @@ import {
 import type { ConfigCache } from './load-config.js';
 import type { AipmWorkspace } from '../config.js';
 import type { Finding, TargetId, ValidateOptions, ValidationResult } from './types.js';
+import { TARGET_IDS } from './types.js';
 import { withoutGeneratorVersion } from './sentinel.js';
 import { createRuleContext } from '../lint/context.js';
 import { diagnosticToFinding } from '../lint/diagnostic.js';
@@ -1073,7 +1083,12 @@ function extractCodexSource(raw: unknown, pluginName: string): SourceExtraction 
  * - Where the build generates a tree of the target's own for the plugin (its form differs from the
  *   authored directory, see `host-forms.ts`), the entry MUST point at that tree instead:
  *   `./dist/<target>/<name>`. An entry left on the authored directory would install the plugin
- *   without the target's changes. This is only known when `distDir` is given.
+ *   without the target's changes.
+ * - Where a target's form of the plugin could not be built, the plugin MUST NOT be listed for
+ *   that target until it builds: any entry would publish a form that does not exist, or the
+ *   authored directory without the target's changes.
+ *
+ * The last two need the plugin's host forms and are only checked when `hostForms` is given.
  *
  * The per-registry path and source extraction are data-driven (see
  * {@link MARKETPLACE_REGISTRY_CHECKS}); the loop body is identical across registries so the same
@@ -1086,12 +1101,11 @@ export function validateMarketplaceRegistration(
   pluginDir: string,
   repoRoot: string,
   envelope: readonly TargetId[],
-  distDir?: string,
+  hostForms?: { forms: PluginHostForms; distDir: string },
 ): Finding[] {
   const findings: Finding[] = [];
   const pluginName = path.basename(pluginDir);
   const envelopeSet = new Set(envelope);
-  const forms = distDir === undefined ? undefined : computePluginHostForms(pluginDir, envelope);
 
   // The expected source is the plugin directory's path relative to the repo root (the location
   // hosts resolve `source` against). Default topology → `plugins/<name>`; an embedded marketplace
@@ -1106,14 +1120,32 @@ export function validateMarketplaceRegistration(
     const marketplacePath = path.join(repoRoot, ...marketplaceRel);
     const inEnvelope = envelopeSet.has(target);
     // A target with a generated tree of its own installs from that tree, not the authored
-    // directory. A target that could not be built has no tree; its entry is checked against the
-    // authored directory as before, and the finding that failed it is reported separately.
-    const form = forms === undefined ? undefined : hostFormFor(forms, target);
+    // directory.
+    const form = hostForms === undefined ? undefined : hostFormFor(hostForms.forms, target);
     const normalizedExpected =
-      distDir !== undefined && form?.placement === 'tree'
-        ? repoRelative(hostDistDir(distDir, target, pluginName))
+      hostForms !== undefined && form?.placement === 'tree'
+        ? repoRelative(hostDistDir(hostForms.distDir, target, pluginName))
         : authoredRel;
     const expectedSource = `./${normalizedExpected}`;
+
+    // A target that could not be built has nothing to list. The finding that failed it is
+    // reported separately; here the only question is whether a registry still publishes it.
+    if (inEnvelope && form?.failed === true) {
+      const listed =
+        fs.existsSync(marketplacePath) &&
+        extractSource(tryReadJson(marketplacePath), pluginName).status === 'found';
+      if (listed) {
+        findings.push(
+          hard(
+            'marketplace-registration',
+            pluginName,
+            `Plugin '${pluginName}' is listed in '${marketplacePath}', but its '${target}' form could not be built.`,
+            `Fix the finding that fails '${target}' for this plugin; until it builds, remove '${pluginName}' from this marketplace so no unbuilt form is published.`,
+          ),
+        );
+      }
+      continue;
+    }
 
     if (!fs.existsSync(marketplacePath)) {
       if (inEnvelope) {
@@ -1205,13 +1237,12 @@ export function validateCrossTarget(
   pluginDir: string,
   repoRoot: string,
   envelope: readonly TargetId[],
-  distDir?: string,
 ): Finding[] {
   return [
     ...validateEnvelopeAdherence(pluginDir, envelope),
     ...validateNameConsistency(pluginDir, envelope),
     ...validateMcpKeySync(pluginDir, envelope),
-    ...validateMarketplaceRegistration(pluginDir, repoRoot, envelope, distDir),
+    ...validateMarketplaceRegistration(pluginDir, repoRoot, envelope),
   ];
 }
 
@@ -1280,22 +1311,27 @@ function freshnessFinding(
  * 1. **In-plugin hook JSONs** (`hooks/claude.json`, `hooks/hooks.json`) — recompute the expected
  *    bytes (transform + `_generated` sentinel) and compare to disk. A missing file, an absent or
  *    altered sentinel, or any byte difference (e.g. a hand-edit) is stale.
- * 2. **`dist/**` trees** (a bundled target's bundle, or the own tree of a target whose form
- *    differs from the source) — regenerate into a temp dir and byte-compare the whole tree (file
- *    set + contents). Any divergence names the offending path. A tree on disk that the plugin no
- *    longer produces is stale too.
+ * 2. **Generated trees under the dist root** (a bundled target's bundle, or the own tree of a
+ *    target whose form differs from the source) — regenerate into a temp dir and compare the
+ *    whole tree (file set, contents, links and executable bits). Any divergence names the
+ *    offending path. A tree the toolkit wrote that the plugin no longer produces is stale too, as
+ *    is a generated-trees manifest that does not list exactly the plugin's own trees.
+ *
+ * Paths in messages are relative to the repo root, wherever the dist root is configured.
  *
  * Generation logic is shared with `runBuild` via `computePluginHookArtifacts` / `computeDistBundles`
  * so build output and the freshness oracle cannot drift.
  */
 export function checkFreshness(
   pluginDir: string,
-  distDir: string,
   envelope: readonly TargetId[],
   ci: boolean,
+  run: HostFormsRun,
 ): Finding[] {
   const findings: Finding[] = [];
   const pluginName = path.basename(pluginDir);
+  const { repoRoot, distDir } = run.layout;
+  const repoRel = (abs: string): string => treeManifestEntry(repoRoot, abs);
 
   // ── In-plugin hook JSONs ──────────────────────────────────────────────────
   let hookArtifacts: ReturnType<typeof computePluginHookArtifacts>;
@@ -1350,7 +1386,7 @@ export function checkFreshness(
   // ── dist/** trees (byte-parity via regeneration) ──────────────────────────
   let bundles: ReturnType<typeof computeDistBundles>;
   try {
-    bundles = computeDistBundles(pluginDir, distDir, envelope);
+    bundles = computeDistBundles(pluginDir, distDir, run.forms(pluginDir, envelope));
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
     findings.push(
@@ -1364,15 +1400,52 @@ export function checkFreshness(
     return findings;
   }
 
-  for (const orphan of computeOrphanedDistDirs(pluginDir, distDir, envelope, bundles)) {
+  for (const orphan of computeOrphanedDistDirs(pluginDir, run.layout, envelope, bundles)) {
     findings.push(
       freshnessFinding(
         ci,
         pluginName,
-        `Generated directory 'dist/${path.relative(distDir, orphan.dir).split(path.sep).join('/')}' is stale — \`aipm build\` no longer produces a ${orphan.target} tree for this plugin.`,
+        `Generated directory '${repoRel(orphan.dir)}' is stale — \`aipm build\` no longer produces a ${orphan.target} tree for this plugin.`,
         `run \`aipm build\` to remove it.`,
       ),
     );
+  }
+
+  // The generated-trees manifest must list exactly this plugin's own trees: a tree it does not
+  // list would be refused by the next build as a directory the toolkit did not write, and an
+  // entry for a tree that is gone claims a path the toolkit no longer uses. Read from disk rather
+  // than from the run, whose copy may predate a build earlier in the same run.
+  const tracked = readTrackedTrees(repoRoot);
+  const manifestRel = repoRel(treeManifestPath(repoRoot));
+  const producedTrees = new Set(
+    bundles.filter((b) => b.kind === 'tree').map((b) => repoRel(b.destDir)),
+  );
+  for (const entry of producedTrees) {
+    if (!tracked.has(entry)) {
+      findings.push(
+        freshnessFinding(
+          ci,
+          pluginName,
+          `Generated manifest '${manifestRel}' is stale — it does not list '${entry}'.`,
+          'run `aipm build` to regenerate it.',
+        ),
+      );
+    }
+  }
+  for (const target of TARGET_IDS) {
+    if (isBundledTarget(target)) continue;
+    const dir = hostDistDir(distDir, target, pluginName);
+    const entry = repoRel(dir);
+    if (tracked.has(entry) && !producedTrees.has(entry) && !fs.existsSync(dir)) {
+      findings.push(
+        freshnessFinding(
+          ci,
+          pluginName,
+          `Generated manifest '${manifestRel}' is stale — it lists '${entry}', which \`aipm build\` no longer produces.`,
+          'run `aipm build` to regenerate it.',
+        ),
+      );
+    }
   }
 
   for (const bundle of bundles) {
@@ -1381,7 +1454,8 @@ export function checkFreshness(
       tempDir = regenerateBundleToTemp(bundle);
       const drift = compareTrees(bundle.destDir, tempDir);
       for (const rel of drift) {
-        const distRel = path.relative(distDir, path.join(bundle.destDir, rel));
+        const fileRel = repoRel(path.join(bundle.destDir, rel));
+        const kind = bundle.kind === 'bundle' ? 'bundle' : 'tree';
         // A drifted path that isn't on disk at all was never built (e.g. first build hasn't run
         // yet) — report it as `missing`, not `stale`, so the user isn't told a nonexistent file
         // "differs" from expected output (issue #97).
@@ -1390,8 +1464,8 @@ export function checkFreshness(
             freshnessFinding(
               ci,
               pluginName,
-              `Generated bundle file 'dist/${distRel}' is missing.`,
-              `run \`aipm build\` to generate the ${bundle.target} bundle.`,
+              `Generated ${kind} file '${fileRel}' is missing.`,
+              `run \`aipm build\` to generate the ${bundle.target} ${kind}.`,
             ),
           );
           continue;
@@ -1400,8 +1474,8 @@ export function checkFreshness(
           freshnessFinding(
             ci,
             pluginName,
-            `Generated bundle file 'dist/${distRel}' is stale — it differs from what \`aipm build\` would produce.`,
-            `run \`aipm build\` to regenerate the ${bundle.target} bundle.`,
+            `Generated ${kind} file '${fileRel}' is stale — it differs from what \`aipm build\` would produce.`,
+            `run \`aipm build\` to regenerate the ${bundle.target} ${kind}.`,
           ),
         );
       }
@@ -1434,10 +1508,11 @@ export async function checkRegistryFreshness(
   workspace: AipmWorkspace,
   ci: boolean,
   cache?: ConfigCache,
+  run?: HostFormsRun,
 ): Promise<Finding[]> {
   let expected: RegistryArtifact[];
   try {
-    const registryPlugins = await collectRegistryPlugins(repoRoot, pluginDirs, cache);
+    const registryPlugins = await collectRegistryPlugins(repoRoot, pluginDirs, cache, run);
     // Repo-root registries (open-plugins) are collision-guarded and freshness-checked via the
     // generated-root sidecar path (checkRootArtifactFreshness); exclude them here so their
     // missing/stale/orphan state is reported once, not double-counted.
@@ -1534,10 +1609,11 @@ export async function checkRootArtifactFreshness(
   ci: boolean,
   skipFreshness: boolean,
   cache?: ConfigCache,
+  run?: HostFormsRun,
 ): Promise<Finding[]> {
   let root: ReturnType<typeof computeRootArtifacts>;
   try {
-    const plugins = await collectRegistryPlugins(repoRoot, pluginDirs, cache);
+    const plugins = await collectRegistryPlugins(repoRoot, pluginDirs, cache, run);
     // Merge the repo-root registries (open-plugins) into the root-artifact set so ONE collision
     // guard, sidecar tracked-set, and orphan sweep cover every repo-root file the toolkit owns
     // (OP-D5/VT-4, option (a)). A foreign root marketplace.json therefore raises
@@ -1664,16 +1740,25 @@ export async function checkRootArtifactFreshness(
 
 /**
  * True iff the entries at `a` and `b`, which both exist, are the same: two links with the same
- * target as written, or two files with the same bytes. A link is compared as a link and never
- * followed, since a tree keeps the plugin's links as the author wrote them and one may name a
- * directory.
+ * target as written, or two files with the same bytes and the same executable bits. A link is
+ * compared as a link and never followed, since a tree keeps the plugin's links as the author wrote
+ * them and one may name a directory.
+ *
+ * Of a file's permissions only the executable bits are compared: they are what a generated form
+ * states (a change can set a file's mode, and trees carry scripts that are run directly) and what
+ * version control preserves. The read and write bits vary with the environment that checked the
+ * tree out.
  */
 function sameTreeEntry(a: string, b: string): boolean {
-  const aIsLink = fs.lstatSync(a).isSymbolicLink();
-  const bIsLink = fs.lstatSync(b).isSymbolicLink();
-  if (aIsLink || bIsLink) {
-    return aIsLink && bIsLink && fs.readlinkSync(a) === fs.readlinkSync(b);
+  const aStat = fs.lstatSync(a);
+  const bStat = fs.lstatSync(b);
+  if (aStat.isSymbolicLink() || bStat.isSymbolicLink()) {
+    return (
+      aStat.isSymbolicLink() && bStat.isSymbolicLink() && fs.readlinkSync(a) === fs.readlinkSync(b)
+    );
   }
+  const EXECUTABLE_BITS = 0o111;
+  if ((aStat.mode & EXECUTABLE_BITS) !== (bStat.mode & EXECUTABLE_BITS)) return false;
   return fs.readFileSync(a).equals(fs.readFileSync(b));
 }
 
@@ -1729,6 +1814,21 @@ export async function runValidate(
   targetPath: string,
   opts?: ValidateOptions & { ci?: boolean },
 ): Promise<ValidationResult> {
+  return runValidateInRun(targetPath, opts);
+}
+
+/**
+ * {@link runValidate}, reading per-target forms from `run` when the caller already has one.
+ *
+ * A build validates what it just wrote; handing its run over makes that validation report on the
+ * very host forms the build wrote from, rather than projecting every plugin again. Without `run`
+ * a run is started for this validation alone.
+ */
+export async function runValidateInRun(
+  targetPath: string,
+  opts?: ValidateOptions & { ci?: boolean },
+  run?: HostFormsRun,
+): Promise<ValidationResult> {
   const ci = opts?.ci ?? false;
   const skipFreshness = opts?.skipFreshness ?? false;
 
@@ -1754,6 +1854,7 @@ export async function runValidate(
   // One per-invocation config memo so each plugin's aipm.config.ts is transpiled once — reused by
   // the main loop below and the repo-level registry freshness step (see ConfigCache).
   const configCache = createConfigCache();
+  const hostForms = run ?? createHostFormsRun(repoRoot, distDir);
 
   // Registry generation is opt-in via `aipm.workspace.ts`. When present, the marketplace registries
   // are GENERATED, so their correctness is enforced by the repo-level freshness check below and the
@@ -1810,6 +1911,7 @@ export async function runValidate(
       ci,
       skipFreshness,
       configCache,
+      hostForms,
     });
 
     // ── 2. Per-target schema validation ─────────────────────────────────────
@@ -1876,6 +1978,7 @@ export async function runValidate(
       ci,
       skipFreshness,
       configCache,
+      hostForms,
     });
     findings.push(
       ...(await defaultMarketplaceNameRule.check(repoLevelCtx)).map((d) =>
@@ -1910,6 +2013,7 @@ export async function runValidate(
       ci,
       skipFreshness,
       configCache,
+      hostForms,
     });
     if (!skipFreshness) {
       findings.push(
@@ -1944,6 +2048,7 @@ export async function runValidate(
       ci,
       skipFreshness,
       configCache,
+      hostForms,
     });
     for (const diagnostic of await unpublishedSkillInstallableRule.check(boundaryCtx)) {
       // `Finding.plugin` means "the plugin this finding is about". An unpublished skill belongs to

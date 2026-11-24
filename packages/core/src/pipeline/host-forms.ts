@@ -10,21 +10,33 @@
  * module owns everything the pipeline does with that description:
  *
  * - {@link computePluginHostForms} asks the normalizer once per plugin and decides, per target,
- *   whether the target failed and where its form lives ({@link HostPlacement}). It reads the
- *   source and writes nothing, so the build, the registries, the repo-root artifacts and the
+ *   whether the target failed and where its form lives ({@link HostPlacement}). It changes
+ *   nothing in the repository, so the build, the registries, the repo-root artifacts and the
  *   freshness check all work from the same answer.
+ * - {@link HostFormsRun} holds that answer for one build, validation or lint run, so each plugin
+ *   is projected once however many steps ask.
  * - {@link placeHostForm} is the single statement of the per-target output layout.
- * - {@link writeHostTree} and {@link applyHostFileChanges} produce a target's form on disk.
+ * - {@link materializeHostForm}, {@link writeHostTree} and {@link applyHostFileChanges} produce a
+ *   target's form on disk.
+ * - The generated-trees manifest ({@link treeManifestPath}) records which per-target trees the
+ *   toolkit wrote, so it only ever replaces, removes or reports directories of its own.
  *
- * Nothing here knows what any one feature means; that stays in the normalizer.
+ * What a feature means stays in the normalizer. The one thing this module reads from the source
+ * itself is whether any skill states an audience at all, which decides how strictly findings about
+ * the source are treated (see {@link computePluginHostForms}).
  *
  * @see docs/specs/architecture.md §5.2 (build phase), §10.5 (freshness)
  */
 
 import * as fs from 'node:fs';
+import * as os from 'node:os';
 import * as path from 'node:path';
 
-import { projectPluginForHosts } from '@ai-plugin-marketplace/normalizer';
+import {
+  bundleGeminiPlugin,
+  bundleKiroPlugin,
+  projectPluginForHosts,
+} from '@ai-plugin-marketplace/normalizer';
 import type { HostFileChange } from '@ai-plugin-marketplace/normalizer';
 
 import type { FeatureOutcome, Finding, TargetId } from './types.js';
@@ -43,6 +55,8 @@ import type { FeatureOutcome, Finding, TargetId } from './types.js';
  *   plugin directory with the differences applied. The registries list the tree instead of the
  *   source.
  * - `none` — the target failed. Nothing is emitted for it and no registry lists the plugin for it.
+ *   A source-installed target cannot be withheld this way: whatever the build decides, it goes on
+ *   installing the authored source.
  */
 export type HostPlacement = 'source' | 'bundle' | 'tree' | 'none';
 
@@ -67,7 +81,7 @@ export function isBundledTarget(target: TargetId): boolean {
 const SOURCE_INSTALLED_TARGETS: ReadonlySet<TargetId> = new Set<TargetId>(['vercel']);
 
 /** True iff `target` can only install from the authored source (see {@link HostPlacement}). */
-function isSourceInstalledTarget(target: TargetId): boolean {
+export function isSourceInstalledTarget(target: TargetId): boolean {
   return SOURCE_INSTALLED_TARGETS.has(target);
 }
 
@@ -106,8 +120,8 @@ export interface HostForm {
   /** The unified content model's name for the target's host; absent where the model has none. */
   host?: string;
   /**
-   * True iff the target's form cannot be built: the source has a `hard` finding of its own, or
-   * this target has one. A failed target's `changes` must not be applied.
+   * True iff the target's form cannot be built; {@link computePluginHostForms} lists the reasons.
+   * A failed target's `changes` must not be applied.
    */
   failed: boolean;
   /** Where the target's form lives. */
@@ -136,46 +150,272 @@ export interface PluginHostForms {
   hosts: HostForm[];
 }
 
+// ---------------------------------------------------------------------------
+// The generated-trees manifest
+// ---------------------------------------------------------------------------
+
+/** Repo-root-relative path of the manifest that records the per-target trees the toolkit wrote. */
+const TREE_MANIFEST_REL = ['.aipm', 'generated-trees.json'] as const;
+
 /**
- * Compute how a plugin reaches each target of its envelope, **without writing**.
+ * Absolute path of the generated-trees manifest under `repoRoot`.
+ *
+ * The manifest lists, as repo-root-relative POSIX paths, every per-target tree a build wrote. It
+ * is what lets the toolkit tell a tree of its own from a directory an author put at the same path:
+ * a build replaces or removes only listed directories, and the freshness check reports only those.
+ * A target's tree path that is occupied by an unlisted directory fails that target instead of
+ * being overwritten. Bundles of the always-bundled targets are not listed; their directories have
+ * always been wholly generated.
+ */
+export function treeManifestPath(repoRoot: string): string {
+  return path.join(repoRoot, ...TREE_MANIFEST_REL);
+}
+
+/** How the manifest names the tree at `dir`: its path from the repo root, POSIX-separated. */
+export function treeManifestEntry(repoRoot: string, dir: string): string {
+  return path.relative(repoRoot, dir).split(path.sep).join('/');
+}
+
+/**
+ * The bytes of a generated-trees manifest listing `entries`: `{ version: 1, paths }` with the
+ * paths deduplicated and sorted, 2-space JSON and a trailing newline, so the same set always
+ * serializes identically.
+ */
+export function serializeTreeManifest(entries: Iterable<string>): string {
+  return `${JSON.stringify({ version: 1, paths: [...new Set(entries)].sort() }, null, 2)}\n`;
+}
+
+/**
+ * The trees the manifest under `repoRoot` lists. A missing or unreadable manifest lists nothing:
+ * the toolkit then owns no tree, and an existing directory at a tree's path is left alone.
+ */
+export function readTrackedTrees(repoRoot: string): Set<string> {
+  try {
+    const parsed = JSON.parse(fs.readFileSync(treeManifestPath(repoRoot), 'utf-8')) as unknown;
+    if (typeof parsed === 'object' && parsed !== null && 'paths' in parsed) {
+      const { paths } = parsed as { paths: unknown };
+      if (Array.isArray(paths)) {
+        return new Set(paths.filter((p): p is string => typeof p === 'string'));
+      }
+    }
+  } catch {
+    // Absent or corrupt: nothing is tracked.
+  }
+  return new Set();
+}
+
+// ---------------------------------------------------------------------------
+// Computing host forms
+// ---------------------------------------------------------------------------
+
+/**
+ * Where a repository keeps what host forms are placed against: its root, its dist root, and the
+ * per-target trees the toolkit is recorded as having written there.
+ */
+export interface HostFormsLayout {
+  /** Absolute repo root. */
+  repoRoot: string;
+  /** Absolute dist root. */
+  distDir: string;
+  /** The generated-trees manifest's entries as they were when the run began. */
+  trackedTrees: ReadonlySet<string>;
+}
+
+/**
+ * The host forms of every plugin asked about during one build, validation or lint run.
+ *
+ * A plugin is projected the first time it is asked about and the answer is reused for the rest of
+ * the run, so every step of a run sees one consistent set of forms, computed against the manifest
+ * as it stood when the run began. A run must not outlive changes to the authored source.
+ */
+export interface HostFormsRun {
+  /** The repository layout the forms are placed against. */
+  readonly layout: HostFormsLayout;
+  /** The host forms of the plugin at `pluginDir` for the targets in `envelope`. */
+  forms(pluginDir: string, envelope: readonly TargetId[]): PluginHostForms;
+}
+
+/** Start a {@link HostFormsRun} for the repository at `repoRoot`, reading its manifest once. */
+export function createHostFormsRun(repoRoot: string, distDir: string): HostFormsRun {
+  const layout: HostFormsLayout = { repoRoot, distDir, trackedTrees: readTrackedTrees(repoRoot) };
+  const memo = new Map<string, PluginHostForms>();
+  return {
+    layout,
+    forms(pluginDir, envelope) {
+      const key = `${path.resolve(pluginDir)}\0${envelope.join(',')}`;
+      let forms = memo.get(key);
+      if (forms === undefined) {
+        forms = computePluginHostForms(pluginDir, envelope, layout);
+        memo.set(key, forms);
+      }
+      return forms;
+    },
+  };
+}
+
+/** Matches a frontmatter line that states one of the two source-only audience keys. */
+const AUDIENCE_KEY_LINE = /^[ \t]*["']?audience(?:-fallback)?["']?[ \t]*:/m;
+
+/**
+ * True iff any `SKILL.md` under `pluginDir` states `audience` or `audience-fallback`.
+ *
+ * This is deliberately a reading of its own rather than the projection's: it must answer for the
+ * very files the projection could not use (a linked `SKILL.md`, a skill directory linked from
+ * outside the plugin, malformed frontmatter), which is where the answer decides how strictly their
+ * findings are treated. Links are followed. Only the frontmatter block is searched, or the whole
+ * file when the block is not closed; a file that cannot be read states nothing.
+ */
+function sourceStatesAudience(pluginDir: string): boolean {
+  const visited = new Set<string>();
+  const walk = (dir: string): boolean => {
+    let real: string;
+    let entries: string[];
+    try {
+      real = fs.realpathSync(dir);
+      if (visited.has(real)) return false;
+      visited.add(real);
+      entries = fs.readdirSync(dir);
+    } catch {
+      return false;
+    }
+    for (const name of entries) {
+      if (TREE_SKIP_NAMES.has(name)) continue;
+      const abs = path.join(dir, name);
+      const stat = fs.statSync(abs, { throwIfNoEntry: false });
+      if (stat === undefined) continue; // a dangling link
+      if (stat.isDirectory()) {
+        if (walk(abs)) return true;
+      } else if (name === 'SKILL.md' && stat.isFile()) {
+        let text: string;
+        try {
+          text = fs.readFileSync(abs, 'utf-8');
+        } catch {
+          continue;
+        }
+        const block = /^---\r?\n([\s\S]*?)\r?\n---[ \t]*(?:\r?\n|$)/.exec(text);
+        if (AUDIENCE_KEY_LINE.test(block?.[1] ?? text)) return true;
+      }
+    }
+    return false;
+  };
+  return walk(pluginDir);
+}
+
+/**
+ * Compute how a plugin reaches each target of its envelope, **without changing the repository**.
  *
  * The single source of truth for which targets failed, where each target's form lives and what
  * changes produce it. `runBuild` writes from it; registry generation, the repo-root artifacts and
  * the freshness check derive their expectations from it, so they cannot disagree with the build.
+ * Callers inside a run go through {@link HostFormsRun} rather than calling this again.
+ *
+ * A target fails when:
+ *
+ * - the source has a `hard` finding and the plugin states an audience (see below);
+ * - the target has a `hard` finding of its own;
+ * - its changes cannot be applied (each generated form is produced once in a scratch directory to
+ *   find out, so a build never discovers this halfway through writing);
+ * - its tree's path is occupied by a directory the toolkit did not write (`layout` given).
+ *
+ * The last two are reported as `hard` findings of that target.
+ *
+ * **A plugin that states no audience builds as it always has.** When no skill states `audience`
+ * or `audience-fallback` and no target has changes, nothing the projection reads can alter the
+ * output: every target's form is the authored source. Problems it finds in the source (a skill it
+ * cannot read safely, two skills of one name) are then reported as `soft` findings and fail no
+ * target. Once any skill states an audience they are `hard`, since an unreadable skill may be one
+ * whose restriction would be lost.
  *
  * @param pluginDir - Absolute path of the authored plugin directory.
  * @param envelope - The plugin's declared targets.
+ * @param layout - The repository layout, when known. Without it no tree path is checked for
+ *   ownership.
  * @throws {Error} If the normalizer cannot project the plugin at all (for example `pluginDir` is
  *   not a directory). Problems with the authored content are findings, not errors.
  */
 export function computePluginHostForms(
   pluginDir: string,
   envelope: readonly TargetId[],
+  layout?: HostFormsLayout,
 ): PluginHostForms {
+  const pluginName = path.basename(pluginDir);
   const projection = projectPluginForHosts({
     pluginDir,
     targets: envelope,
-    plugin: path.basename(pluginDir),
+    plugin: pluginName,
   });
 
-  const sourceFindings: Finding[] = [...projection.findings];
+  const statesAudience =
+    projection.hosts.some((host) => host.changes.length > 0) || sourceStatesAudience(pluginDir);
+  const sourceFindings: Finding[] = projection.findings.map((f) =>
+    statesAudience || f.severity !== 'hard' ? { ...f } : { ...f, severity: 'soft' },
+  );
   const sourceFailed = sourceFindings.some((f) => f.severity === 'hard');
 
   const hosts = projection.hosts.map((host): HostForm => {
     const findings: Finding[] = [...host.findings];
-    const failed = sourceFailed || findings.some((f) => f.severity === 'hard');
+    let failed = sourceFailed || findings.some((f) => f.severity === 'hard');
+    const fail = (finding: Finding): void => {
+      findings.push(finding);
+      failed = true;
+    };
+
+    if (!failed && placeHostForm(host.target, false, host.changes) === 'tree' && layout) {
+      const dir = hostDistDir(layout.distDir, host.target, pluginName);
+      const entry = treeManifestEntry(layout.repoRoot, dir);
+      if (fs.existsSync(dir) && !layout.trackedTrees.has(entry)) {
+        fail({
+          severity: 'hard',
+          code: 'generated-tree-collision',
+          plugin: pluginName,
+          message:
+            `Cannot write the '${host.target}' form of the plugin: '${entry}' already exists and is not toolkit-generated. ` +
+            `Generation refuses to overwrite a directory it does not own.`,
+          hint: `Move or remove '${entry}' and re-run \`aipm build\`.`,
+        });
+      }
+    }
+
+    if (!failed && host.changes.length > 0 && !isSourceInstalledTarget(host.target)) {
+      const problem = tryMaterializeHostForm(
+        pluginDir,
+        host.target,
+        host.changes,
+        layout?.distDir ?? path.join(pluginDir, 'dist'),
+      );
+      if (problem !== undefined) {
+        fail({
+          severity: 'hard',
+          code: 'source-unreadable',
+          plugin: pluginName,
+          message: `The '${host.target}' form of the plugin cannot be produced: ${problem}`,
+          hint: 'Fix the plugin source named in the message, then re-run `aipm build`.',
+        });
+      }
+    }
+
+    // One line per distinct outcome: skills that share a name would otherwise repeat theirs.
+    const seen = new Set<string>();
+    const outcomes: FeatureOutcome[] = [];
+    for (const o of host.outcomes) {
+      const key = JSON.stringify([o.feature, o.subject, o.implementation, o.fidelity]);
+      if (seen.has(key)) continue;
+      seen.add(key);
+      outcomes.push({
+        feature: o.feature,
+        subject: o.subject,
+        implementation: o.implementation,
+        fidelity: [...o.fidelity],
+      });
+    }
+
     return {
       target: host.target,
       ...(host.host !== undefined ? { host: host.host } : {}),
       failed,
       placement: placeHostForm(host.target, failed, host.changes),
       changes: host.changes,
-      outcomes: host.outcomes.map((o) => ({
-        feature: o.feature,
-        subject: o.subject,
-        implementation: o.implementation,
-        fidelity: [...o.fidelity],
-      })),
+      outcomes,
       findings,
     };
   });
@@ -224,6 +464,74 @@ export function hostFormDir(
 const TREE_SKIP_NAMES: ReadonlySet<string> = new Set(['node_modules', '.git']);
 
 /**
+ * Lay down what a target's changes apply to, at `into` (cleared first): the target's bundle for an
+ * always-bundled target, a copy of the authored plugin directory for any other. The bundlers copy
+ * the parts of the plugin that changes address to the same relative paths, so one list of changes
+ * applies to either.
+ */
+function writeHostFormBase(
+  pluginDir: string,
+  target: TargetId,
+  into: string,
+  excludeDir: string,
+): void {
+  if (target === 'gemini') {
+    bundleGeminiPlugin(pluginDir, into);
+  } else if (target === 'kiro') {
+    bundleKiroPlugin(pluginDir, into);
+  } else {
+    copyPluginTree(pluginDir, into, excludeDir);
+  }
+}
+
+/**
+ * Produce a target's generated form of a plugin at `into`, replacing whatever is there: its
+ * bundle or a copy of the plugin directory, with the target's changes applied in order.
+ *
+ * @param excludeDir - Absolute path of a directory never to copy from (the dist root).
+ * @throws {Error} If a change cannot be applied; see {@link applyHostFileChanges}. `into` is then
+ *   left partly written.
+ */
+export function materializeHostForm(
+  pluginDir: string,
+  target: TargetId,
+  changes: readonly HostFileChange[],
+  into: string,
+  excludeDir: string,
+): void {
+  writeHostFormBase(pluginDir, target, into, excludeDir);
+  applyHostFileChanges(into, changes);
+}
+
+/**
+ * Find out whether a target's changes can be applied, by producing its form in a scratch directory
+ * that is removed again. Returns the reason they cannot, or `undefined` when they can.
+ *
+ * Only applying the changes is in question here: a failure to lay down the bundle or the copy is
+ * not about this target's changes and propagates as the error it is.
+ */
+function tryMaterializeHostForm(
+  pluginDir: string,
+  target: TargetId,
+  changes: readonly HostFileChange[],
+  excludeDir: string,
+): string | undefined {
+  const scratch = fs.mkdtempSync(path.join(os.tmpdir(), 'aipm-host-form-'));
+  try {
+    const into = path.join(scratch, path.basename(pluginDir));
+    writeHostFormBase(pluginDir, target, into, excludeDir);
+    try {
+      applyHostFileChanges(into, changes);
+    } catch (err) {
+      return err instanceof Error ? err.message : String(err);
+    }
+    return undefined;
+  } finally {
+    fs.rmSync(scratch, { recursive: true, force: true });
+  }
+}
+
+/**
  * Write a target's own tree: clear `into`, copy the authored plugin directory there, then apply
  * the target's changes.
  *
@@ -242,6 +550,12 @@ export function writeHostTree(
   changes: readonly HostFileChange[],
   excludeDir: string,
 ): void {
+  copyPluginTree(pluginDir, into, excludeDir);
+  applyHostFileChanges(into, changes);
+}
+
+/** Replace `into` with a copy of the authored plugin directory; see {@link writeHostTree}. */
+function copyPluginTree(pluginDir: string, into: string, excludeDir: string): void {
   fs.rmSync(into, { recursive: true, force: true });
   fs.mkdirSync(path.dirname(into), { recursive: true });
   const excluded = path.resolve(excludeDir);
@@ -254,7 +568,6 @@ export function writeHostTree(
       return resolved !== excluded && !resolved.startsWith(`${excluded}${path.sep}`);
     },
   });
-  applyHostFileChanges(into, changes);
 }
 
 /** True iff `candidate` is `root` or lies under it. Both must be absolute and normalized. */
@@ -323,8 +636,18 @@ export function applyHostFileChanges(rootDir: string, changes: readonly HostFile
     switch (change.kind) {
       case 'write': {
         const abs = resolveInTree(rootDir, change.path);
-        // Writing follows a link at the path itself, so the file it leads to must be in the tree.
-        if (fs.existsSync(abs)) assertResolvesInTree(path.resolve(rootDir), abs, change.path);
+        // Writing follows a link at the path itself, so what it leads to must be in the tree. A
+        // link that leads nowhere is refused outright: the write would create its target, wherever
+        // that is.
+        if (fs.lstatSync(abs, { throwIfNoEntry: false })?.isSymbolicLink() === true) {
+          if (!fs.existsSync(abs)) {
+            throw new Error(
+              `Host file change '${change.path}' writes through a link that leads nowhere; ` +
+                `links inside a plugin must be relative and stay inside it.`,
+            );
+          }
+          assertResolvesInTree(path.resolve(rootDir), abs, change.path);
+        }
         fs.mkdirSync(path.dirname(abs), { recursive: true });
         fs.writeFileSync(abs, change.content, 'utf-8');
         // `writeFileSync`'s mode only applies when it creates the file; set it explicitly so a

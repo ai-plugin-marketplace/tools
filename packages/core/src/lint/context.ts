@@ -5,10 +5,12 @@
 
 import * as fs from 'node:fs';
 import type { AipmWorkspace } from '../config.js';
+import { createHostFormsRun } from '../pipeline/host-forms.js';
+import type { HostFormsRun } from '../pipeline/host-forms.js';
 import type { ConfigCache } from '../pipeline/load-config.js';
 import type { TargetId } from '../pipeline/types.js';
 import { parseDocument, type Document } from './document.js';
-import type { InternalRuleContext } from './types.js';
+import type { InternalRuleContext, RuleContext } from './types.js';
 
 /**
  * Build an {@link InternalRuleContext} for a single plugin (or, for repo-scoped rules, the repo
@@ -26,6 +28,8 @@ export function createRuleContext(params: {
   ci: boolean;
   skipFreshness?: boolean;
   configCache?: ConfigCache;
+  /** The run's host forms, shared by every context of one invocation. */
+  hostForms?: HostFormsRun;
   /**
    * Shared across every `RuleContext` built for one `lint()` invocation. Every absolute path
    * successfully read via `getDocument()` (a real, readable file — L-D3's document layer) is
@@ -47,6 +51,7 @@ export function createRuleContext(params: {
     ci: params.ci,
     skipFreshness: params.skipFreshness ?? false,
     ...(params.configCache !== undefined ? { configCache: params.configCache } : {}),
+    ...(params.hostForms !== undefined ? { hostForms: params.hostForms } : {}),
     getDocument(absPath: string): Document | undefined {
       if (cache.has(absPath)) return cache.get(absPath);
       let doc: Document | undefined;
@@ -61,4 +66,15 @@ export function createRuleContext(params: {
       return doc;
     },
   };
+}
+
+/**
+ * The {@link HostFormsRun} a rule reads per-target forms from: the one its context carries, so the
+ * whole invocation shares one projection per plugin, or a run of its own for a context built
+ * without one (a rule exercised in isolation).
+ */
+export function hostFormsRunOf(ctx: RuleContext): HostFormsRun {
+  return (
+    (ctx as Partial<InternalRuleContext>).hostForms ?? createHostFormsRun(ctx.repoRoot, ctx.distDir)
+  );
 }

@@ -19,6 +19,7 @@ import {
   validateNameConsistency,
   validateVersionConsistency,
 } from '../../pipeline/validate.js';
+import { hostFormsRunOf } from '../context.js';
 import { findingToDiagnostic } from '../diagnostic.js';
 import type { Diagnostic, InternalRuleContext, Rule, RuleContext } from '../types.js';
 import { docsUrlFor } from './docs-url.js';
@@ -128,7 +129,10 @@ export const marketplaceRegistrationRule: Rule = {
   check(ctx: RuleContext): Diagnostic[] {
     return wrap(MARKETPLACE_REGISTRATION_ID)(
       ctx,
-      validateMarketplaceRegistration(ctx.pluginDir, ctx.repoRoot, ctx.envelope, ctx.distDir),
+      validateMarketplaceRegistration(ctx.pluginDir, ctx.repoRoot, ctx.envelope, {
+        forms: hostFormsRunOf(ctx).forms(ctx.pluginDir, ctx.envelope),
+        distDir: ctx.distDir,
+      }),
     );
   },
 };

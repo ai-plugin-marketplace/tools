@@ -29,8 +29,6 @@ import {
   CURSOR_SHIM_RUNNER_SOURCE,
   PAYLOAD_ADAPTER_FILENAME,
   PAYLOAD_ADAPTER_SOURCE,
-  bundleGeminiPlugin,
-  bundleKiroPlugin,
   convertClaudeHooksYamlToCursorJson,
   convertClaudeHooksYamlToGeminiJson,
   cursorDocHasGatingHook,
@@ -41,16 +39,20 @@ import type { AipmWorkspace } from '../config.js';
 
 import { discoverPlugins } from './discover.js';
 import {
-  applyHostFileChanges,
   computePluginHostForms,
+  createHostFormsRun,
   hostDistDir,
   hostFormDir,
   hostFormFor,
   isBundledTarget,
   isProjectedForm,
-  writeHostTree,
+  isSourceInstalledTarget,
+  materializeHostForm,
+  serializeTreeManifest,
+  treeManifestEntry,
+  treeManifestPath,
 } from './host-forms.js';
-import type { PluginHostForms } from './host-forms.js';
+import type { HostForm, HostFormsLayout, HostFormsRun, PluginHostForms } from './host-forms.js';
 import {
   assertGeneratorNotDowngraded,
   getGeneratorVersion,
@@ -65,14 +67,14 @@ import {
 import type { ConfigCache } from './load-config.js';
 import { applyJsonSentinel, readSentinelVersion, sidecarContent, sidecarPath } from './sentinel.js';
 import type { SentinelMode } from './sentinel.js';
-import { runValidate } from './validate.js';
+import { runValidateInRun } from './validate.js';
 import type {
   BuildOptions,
   BuildResult,
   Finding,
   GeneratedFile,
   GeneratedFileTarget,
-  HostBuildReport,
+  TargetBuildReport,
   TargetId,
 } from './types.js';
 import { TARGET_IDS } from './types.js';
@@ -275,33 +277,12 @@ export function computePluginHookArtifacts(
  */
 export interface DistBundle {
   target: TargetId;
+  /** Which of the two kinds of tree this is; diagnostics name it accordingly. */
+  kind: 'bundle' | 'tree';
   /** Absolute destination directory under `dist/`. */
   destDir: string;
   /** Rebuild the tree into `into` (clears `into` first). */
   regenerate: (into: string) => void;
-}
-
-/** A target whose form is always produced by a bundler (see `isBundledTarget`). */
-type BundledTarget = 'gemini' | 'kiro';
-
-/**
- * Bundle a bundled target's form of a plugin into `into`: run the target's bundler (which clears
- * `into` first), then apply the target's host changes to the result. The bundlers copy the parts
- * of the plugin that host changes address to the same relative paths, so the changes apply to the
- * bundle as they would to a copy of the source.
- */
-function bundleHostForm(
-  target: BundledTarget,
-  pluginDir: string,
-  into: string,
-  forms: PluginHostForms,
-): void {
-  if (target === 'gemini') {
-    bundleGeminiPlugin(pluginDir, into);
-  } else {
-    bundleKiroPlugin(pluginDir, into);
-  }
-  applyHostFileChanges(into, hostFormFor(forms, target)?.changes ?? []);
 }
 
 /**
@@ -313,57 +294,48 @@ function bundleHostForm(
  * neither does a target that can only install from the authored source (Vercel). Trees are
  * returned in envelope order.
  *
- * @param forms - The plugin's host forms; computed from `pluginDir` and `envelope` when omitted.
- *   Pass the value already in hand so the plugin is projected once.
+ * @param forms - The plugin's host forms for this run.
  */
 export function computeDistBundles(
   pluginDir: string,
   distDir: string,
-  envelope: readonly TargetId[],
-  forms: PluginHostForms = computePluginHostForms(pluginDir, envelope),
+  forms: PluginHostForms,
 ): DistBundle[] {
   const pluginName = path.basename(pluginDir);
   const bundles: DistBundle[] = [];
 
   for (const form of forms.hosts) {
-    const { target } = form;
-    const destDir = hostDistDir(distDir, target, pluginName);
-    if (form.placement === 'bundle' && (target === 'gemini' || target === 'kiro')) {
-      bundles.push({
-        target,
-        destDir,
-        regenerate: (into) => {
-          bundleHostForm(target, pluginDir, into, forms);
-        },
-      });
-    } else if (form.placement === 'tree') {
-      bundles.push({
-        target,
-        destDir,
-        regenerate: (into) => {
-          writeHostTree(pluginDir, into, form.changes, distDir);
-        },
-      });
-    }
+    if (form.placement !== 'bundle' && form.placement !== 'tree') continue;
+    const { target, changes } = form;
+    bundles.push({
+      target,
+      kind: form.placement,
+      destDir: hostDistDir(distDir, target, pluginName),
+      regenerate: (into) => {
+        materializeHostForm(pluginDir, target, changes, into, distDir);
+      },
+    });
   }
 
   return bundles;
 }
 
 /**
- * The `dist/<target>/<plugin>` directories that exist on disk but that a build of this plugin
- * would remove, because the plugin no longer produces a tree there.
+ * The `dist/<target>/<plugin>` directories that exist on disk, that the toolkit generated, and
+ * that a build of this plugin would remove because the plugin no longer produces a tree there.
  *
  * A target that is not bundled gets a tree only while its form differs from the source, so its
- * directory is orphaned as soon as it does not (or the target leaves the envelope, or fails). A
- * bundled target's directory is orphaned only when the target is declared and failed; one left
- * behind by a target dropped from the envelope is not this function's concern.
+ * directory is orphaned as soon as it does not (or the target leaves the envelope, or fails).
+ * Only a directory the generated-trees manifest lists counts: one the toolkit did not write is
+ * never an orphan, whatever its path. A bundled target's directory has always been wholly
+ * generated; it is orphaned only when the target is declared and failed, and one left behind by a
+ * target dropped from the envelope is not this function's concern.
  *
  * Shared by build (which removes them) and freshness (which reports them).
  */
 export function computeOrphanedDistDirs(
   pluginDir: string,
-  distDir: string,
+  layout: HostFormsLayout,
   envelope: readonly TargetId[],
   bundles: readonly DistBundle[],
 ): { target: TargetId; dir: string }[] {
@@ -373,9 +345,11 @@ export function computeOrphanedDistDirs(
   const orphans: { target: TargetId; dir: string }[] = [];
   for (const target of TARGET_IDS) {
     if (produced.has(target)) continue;
-    if (isBundledTarget(target) && !declared.has(target)) continue;
-    const dir = hostDistDir(distDir, target, pluginName);
-    if (fs.existsSync(dir)) orphans.push({ target, dir });
+    const dir = hostDistDir(layout.distDir, target, pluginName);
+    const owned = isBundledTarget(target)
+      ? declared.has(target)
+      : layout.trackedTrees.has(treeManifestEntry(layout.repoRoot, dir));
+    if (owned && fs.existsSync(dir)) orphans.push({ target, dir });
   }
   return orphans;
 }
@@ -413,6 +387,11 @@ export interface RegistryPluginInfo {
    * target's registry and repo-root artifact: listing it would publish a form that was not built.
    */
   failedTargets?: readonly TargetId[];
+  /**
+   * The plugin's host forms for this run, from which the two fields above were derived. Carried so
+   * the repo-root artifacts are built from the same answer; computed afresh when absent.
+   */
+  hostForms?: PluginHostForms;
   /** The plugin's declared support envelope (`config.targets`). */
   envelope: readonly TargetId[];
   /** Optional one-line description from `aipm.config.ts`; maps to the entry `description`/`tags` host. */
@@ -636,19 +615,24 @@ export function computeRegistryArtifacts(
  *
  * @param repoRoot - Absolute repo root (the base for the `./`-prefixed `source`).
  * @param pluginDirs - Absolute plugin directories (already discovery-sorted).
+ * @param run - The run's host forms; a run of its own is started when omitted.
  */
 export async function collectRegistryPlugins(
   repoRoot: string,
   pluginDirs: readonly string[],
   cache?: ConfigCache,
+  run?: HostFormsRun,
 ): Promise<RegistryPluginInfo[]> {
   const infos: RegistryPluginInfo[] = [];
-  const distDir = path.join(repoRoot, (await loadRepoConfig(repoRoot)).distDir);
+  const formsRun =
+    run ??
+    createHostFormsRun(repoRoot, path.join(repoRoot, (await loadRepoConfig(repoRoot)).distDir));
+  const { distDir } = formsRun.layout;
   const repoRelative = (dir: string): string =>
     `./${path.relative(repoRoot, dir).split(path.sep).join('/')}`;
   for (const pluginDir of pluginDirs) {
     const config = await loadPluginConfig(pluginDir, cache);
-    const forms = computePluginHostForms(pluginDir, config.targets);
+    const forms = formsRun.forms(pluginDir, config.targets);
     const targetSources: Partial<Record<TargetId, string>> = {};
     const failedTargets: TargetId[] = [];
     for (const form of forms.hosts) {
@@ -665,6 +649,7 @@ export async function collectRegistryPlugins(
       envelope: config.targets,
       ...(Object.keys(targetSources).length > 0 ? { targetSources } : {}),
       ...(failedTargets.length > 0 ? { failedTargets } : {}),
+      hostForms: forms,
       ...(config.description !== undefined ? { description: config.description } : {}),
       ...(config.keywords !== undefined ? { keywords: config.keywords } : {}),
     });
@@ -701,13 +686,10 @@ export function rootManifestPath(repoRoot: string): string {
  * at a throwaway temp directory — never the repo root or any real dir. Mirrors the
  * `regenerate`/temp pattern used by {@link computeDistBundles}.
  */
-function bundleHostToTemp(
-  host: SingleArtifactHost,
-  pluginDir: string,
-  forms: PluginHostForms,
-): string {
+function bundleHostToTemp(host: SingleArtifactHost, pluginDir: string, form: HostForm): string {
   const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), `aipm-root-${host}-`));
-  bundleHostForm(host, pluginDir, tempDir, forms);
+  // A bundler copies nothing from a dist root, so there is none to exclude.
+  materializeHostForm(pluginDir, host, form.changes, tempDir, tempDir);
   return tempDir;
 }
 
@@ -848,16 +830,17 @@ export function computeRootArtifacts(
     if (declarer === undefined) continue; // unreachable (length === 1), satisfies noUncheckedIndexedAccess
     // `source` is `./<rel>` POSIX from the repo root; resolve to the absolute plugin dir.
     const pluginDir = path.resolve(repoRoot, declarer.source);
-    const forms = computePluginHostForms(pluginDir, declarer.envelope);
+    const forms = declarer.hostForms ?? computePluginHostForms(pluginDir, declarer.envelope);
     // TODO: Gemini and Kiro both place skills under the repo-root `skills/`. Their forms are
     // identical today (neither is a host of the unified content model, so both receive the same
     // changes); if the projection ever gives them different forms, the paths they share need one
     // owner or a finding, since the later writer would otherwise win silently.
-    if (hostFormFor(forms, host)?.failed === true) continue; // not built → no root artifact
+    const form = hostFormFor(forms, host);
+    if (form === undefined || form.failed) continue; // not built → no root artifact
 
     let tempDir: string | undefined;
     try {
-      tempDir = bundleHostToTemp(host, pluginDir, forms);
+      tempDir = bundleHostToTemp(host, pluginDir, form);
       for (const rel of collectFilesRelative(tempDir)) {
         // Tracked set is POSIX-separated (stable across platforms; the freshness oracle and
         // sidecar compare against this exact form).
@@ -989,6 +972,23 @@ export function collectFilesRelative(dir: string): string[] {
 // Build one plugin
 // ---------------------------------------------------------------------------
 
+/**
+ * Remove a generated `dist/<target>/<plugin>` tree, and the `dist/<target>` directory with it when
+ * that leaves it empty, so a target that no longer produces any tree leaves nothing behind.
+ */
+function removeGeneratedTree(dir: string): void {
+  fs.rmSync(dir, { recursive: true, force: true });
+  const parent = path.dirname(dir);
+  if (fs.existsSync(parent) && fs.readdirSync(parent).length === 0) fs.rmdirSync(parent);
+}
+
+/** The {@link TargetBuildReport} status of a host form; the type documents each value. */
+function targetBuildStatus(form: HostForm): TargetBuildReport['status'] {
+  if (form.failed) return 'failed';
+  if (isProjectedForm(form)) return 'projected';
+  return form.placement === 'bundle' ? 'bundled' : 'authored';
+}
+
 /** Write a file ensuring its parent directory exists. */
 function writeFileEnsuringDir(absPath: string, content: string): void {
   fs.mkdirSync(path.dirname(absPath), { recursive: true });
@@ -1007,9 +1007,10 @@ function writeFileEnsuringDir(absPath: string, content: string): void {
  */
 async function buildOnePlugin(
   pluginDir: string,
-  distDir: string,
+  run: HostFormsRun,
   cache?: ConfigCache,
 ): Promise<BuildResult> {
+  const { distDir } = run.layout;
   const start = performance.now();
   const pluginName = path.basename(pluginDir);
 
@@ -1019,7 +1020,7 @@ async function buildOnePlugin(
   const artifacts: GeneratedFile[] = [];
 
   // Computed once, before anything is written, and shared by every step below.
-  const forms = computePluginHostForms(pluginDir, envelope);
+  const forms = run.forms(pluginDir, envelope);
 
   // ── In-plugin-dir generated hook JSONs (sentinel-carrying) ────────────────
   for (const hookArtifact of computePluginHookArtifacts(pluginDir, envelope)) {
@@ -1039,7 +1040,7 @@ async function buildOnePlugin(
 
   // ── dist/** trees (sentinel-less, byte-parity with oracle) ─────────────────
   // Written after the in-plugin hook files, so a target's own tree copies them as just generated.
-  const bundles = computeDistBundles(pluginDir, distDir, envelope, forms);
+  const bundles = computeDistBundles(pluginDir, distDir, forms);
   for (const bundle of bundles) {
     bundle.regenerate(bundle.destDir);
     for (const rel of collectFilesRelative(bundle.destDir)) {
@@ -1051,16 +1052,17 @@ async function buildOnePlugin(
     }
   }
 
-  for (const orphan of computeOrphanedDistDirs(pluginDir, distDir, envelope, bundles)) {
-    fs.rmSync(orphan.dir, { recursive: true });
+  for (const orphan of computeOrphanedDistDirs(pluginDir, run.layout, envelope, bundles)) {
+    removeGeneratedTree(orphan.dir);
   }
 
-  const hosts = forms.hosts.map((form): HostBuildReport => {
+  const targets = forms.hosts.map((form): TargetBuildReport => {
     const dir = hostFormDir(pluginDir, distDir, form);
     return {
       target: form.target,
       ...(form.host !== undefined ? { host: form.host } : {}),
-      status: form.failed ? 'failed' : isProjectedForm(form) ? 'projected' : 'source',
+      status: targetBuildStatus(form),
+      installsAuthoredSource: isSourceInstalledTarget(form.target),
       ...(dir !== undefined ? { dir } : {}),
       outcomes: form.outcomes,
     };
@@ -1070,9 +1072,64 @@ async function buildOnePlugin(
     plugin: pluginName,
     pluginDir,
     artifacts,
-    hosts,
+    targets,
     durationMs: performance.now() - start,
   };
+}
+
+/**
+ * Bring the generated-trees manifest in line with what this build wrote, and record it as an
+ * artifact of every built plugin.
+ *
+ * The new list is every tree the built plugins now have. Entries of plugins this build did not
+ * touch are kept when a single plugin was built (their trees are still theirs). When the whole
+ * repo was built, an entry no plugin produced is a tree of a plugin that is gone: the directory is
+ * removed, since the manifest says the toolkit wrote it. The manifest is written when it lists
+ * anything or already exists, so a repo with no per-target tree never gains an empty one.
+ */
+function writeTreeManifest(
+  repoRoot: string,
+  run: HostFormsRun,
+  builtPluginDirs: readonly string[],
+  builtWholeRepo: boolean,
+  results: BuildResult[],
+): void {
+  const { distDir, trackedTrees } = run.layout;
+  const written = new Set<string>();
+  for (const result of results) {
+    for (const report of result.targets) {
+      if (report.status !== 'projected' || report.dir === undefined) continue;
+      if (isBundledTarget(report.target)) continue;
+      written.add(treeManifestEntry(repoRoot, report.dir));
+    }
+  }
+
+  const builtNames = new Set(builtPluginDirs.map((dir) => path.basename(dir)));
+  const ownedByBuiltPlugin = (entry: string): boolean =>
+    [...builtNames].some((name) =>
+      TARGET_IDS.some(
+        (target) => treeManifestEntry(repoRoot, hostDistDir(distDir, target, name)) === entry,
+      ),
+    );
+
+  const next = new Set(written);
+  for (const entry of trackedTrees) {
+    if (written.has(entry) || ownedByBuiltPlugin(entry)) continue;
+    if (builtWholeRepo) {
+      removeGeneratedTree(path.join(repoRoot, ...entry.split('/')));
+    } else {
+      next.add(entry);
+    }
+  }
+
+  const manifestAbs = treeManifestPath(repoRoot);
+  if (next.size === 0 && !fs.existsSync(manifestAbs)) return;
+  writeFileEnsuringDir(manifestAbs, serializeTreeManifest(next));
+  if (written.size > 0) {
+    for (const result of results) {
+      result.artifacts.push({ path: manifestAbs, target: 'shared' });
+    }
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -1152,10 +1209,21 @@ export async function runBuild(targetPath: string, opts?: BuildOptions): Promise
   const stampedArtifacts = await collectStampedArtifacts(repoRoot, pluginDirs, configCache);
   assertGeneratorNotDowngraded(getGeneratorVersion(), stampedArtifacts, opts?.forceDowngrade);
 
+  // One projection per plugin for the whole run: the build, the registries, the repo-root
+  // artifacts and the validation below all read the same host forms.
+  const hostFormsRun = createHostFormsRun(repoRoot, distDir);
+
   const results: BuildResult[] = [];
   for (const pluginDir of pluginDirs) {
-    results.push(await buildOnePlugin(pluginDir, distDir, configCache));
+    results.push(await buildOnePlugin(pluginDir, hostFormsRun, configCache));
   }
+  writeTreeManifest(
+    repoRoot,
+    hostFormsRun,
+    pluginDirs,
+    path.resolve(targetPath) === repoRoot,
+    results,
+  );
 
   // ── Marketplace registries (opt-in via aipm.workspace.ts at the repo root) ──
   // When the repo has opted into registry generation, the three marketplace.json files are
@@ -1172,7 +1240,12 @@ export async function runBuild(targetPath: string, opts?: BuildOptions): Promise
     // repo-wide re-scan to make the registry repo-complete.
     const isRepoRoot = path.resolve(targetPath) === repoRoot;
     const allPluginDirs = isRepoRoot ? pluginDirs : (await discoverPlugins(repoRoot)).pluginDirs;
-    const registryPlugins = await collectRegistryPlugins(repoRoot, allPluginDirs, configCache);
+    const registryPlugins = await collectRegistryPlugins(
+      repoRoot,
+      allPluginDirs,
+      configCache,
+      hostFormsRun,
+    );
     const registries = computeRegistryArtifacts(repoRoot, registryPlugins, workspace);
     // Split vendor-subdirectory registries (written + orphan-swept here, unchanged) from repo-root
     // registries (open-plugins), whose writing/orphan-removal is collision-guarded via the
@@ -1264,10 +1337,11 @@ export async function runBuild(targetPath: string, opts?: BuildOptions): Promise
   // artifacts, so they are fresh by construction; running it would be redundant work.
   // The published-surface boundary check is skipped too: it concerns contributor files outside the
   // plugins, which is `validate`'s business, not a reason for a build to fail.
-  const validation = await runValidate(targetPath, {
-    skipFreshness: true,
-    skipPublishedSurfaceBoundary: true,
-  });
+  const validation = await runValidateInRun(
+    targetPath,
+    { skipFreshness: true, skipPublishedSurfaceBoundary: true },
+    hostFormsRun,
+  );
   if (opts?.failFast && !validation.passed) {
     const hardFindings = validation.findings.filter((f) => f.severity === 'hard');
     const summary = hardFindings

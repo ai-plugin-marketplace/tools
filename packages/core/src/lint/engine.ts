@@ -20,6 +20,7 @@ import {
 } from '../pipeline/load-config.js';
 import { discoverPlugins } from '../pipeline/discover.js';
 import { createRuleContext } from './context.js';
+import { createHostFormsRun } from '../pipeline/host-forms.js';
 import {
   PER_PLUGIN_RULES,
   REPO_SCOPED_RULES,
@@ -44,6 +45,8 @@ export async function lint(targetPath: string, options?: LintOptions): Promise<L
   const { repoRoot, distDir, pluginDirs } = await discoverPlugins(targetPath);
   const workspace = await loadWorkspaceConfig(repoRoot);
   const configCache = createConfigCache();
+  // One projection per plugin for the whole invocation, shared by every rule that needs it.
+  const hostForms = createHostFormsRun(repoRoot, distDir);
   // Registry generation opted in (aipm.workspace.ts present) — mirrors `runValidate`'s
   // `generatesRegistries`. When true, marketplace-registration is skipped below in favor of the
   // registry-freshness rule, which is what actually enforces registry correctness in that mode
@@ -66,6 +69,7 @@ export async function lint(targetPath: string, options?: LintOptions): Promise<L
       workspace,
       ci,
       configCache,
+      hostForms,
       scannedFiles,
     });
     diagnostics.push(...(await envelopeShapeRule.check(shapeCtx)));
@@ -89,6 +93,7 @@ export async function lint(targetPath: string, options?: LintOptions): Promise<L
       workspace,
       ci,
       configCache,
+      hostForms,
       scannedFiles,
     });
 
@@ -128,6 +133,7 @@ export async function lint(targetPath: string, options?: LintOptions): Promise<L
     workspace,
     ci,
     configCache,
+    hostForms,
     scannedFiles,
   });
   for (const rule of REPO_SCOPED_RULES) {

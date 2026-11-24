@@ -339,15 +339,21 @@ For most plugins the authored directory is already what a target installs, and t
 | Gemini, Kiro (always bundled)                       | `dist/<target>/<name>/` and the repo root: the bundle, with any changes applied  | n/a                      |
 | Could not be built                                  | Nowhere: nothing is emitted, and a tree from an earlier build is removed         | Not listed               |
 
-A plugin that states no audience has no changes for any target, so its output is exactly what it was before this step existed. The copy leaves out `node_modules` and `.git` and keeps links as the author wrote them; a change is never applied through a link that leads out of the copy. The authored directory is never modified.
+**A plugin that states no audience builds as it did before this step existed.** When no skill states `audience` or `audience-fallback` and no target has changes, every target's form is the authored source. Problems the projection finds in such a source (a skill it cannot read safely, two skills that state one name) are reported as `soft` findings: they fail no target and change neither output nor registries. Once any skill states an audience they are `hard`, because an unreadable skill may be one whose restriction would otherwise be lost.
 
-Vercel Skills installs skills by scanning the repository's authored source and has no registry or bundle that could point it at a generated directory, so no tree is built for it. Where its form would differ from the source (a skill whose audience is restricted, for instance), the projection's findings say what Vercel does not honour.
+The copy leaves out `node_modules` and `.git` and keeps links as the author wrote them. A change is never applied through a link that leads out of the copy, or through one that leads nowhere. The authored directory is never modified.
 
-In a repository that writes its registries by hand (no `aipm.workspace.ts`), `correctness/marketplace-registration` expects an entry to point at the target's tree whenever the build generates one.
+**A target fails** when the source has a `hard` finding, the target has one of its own, its changes cannot be applied (each generated form is produced once in a scratch directory first, so a build never finds this out halfway through writing), or its tree's path holds a directory the toolkit did not write (`generated-tree-collision`). A failed target publishes nothing: no tree, no registry entry, no repo-root artifact. Sibling plugins and the plugin's other targets are unaffected.
 
-Findings from the projection are reported by validation under `portability/host-projection`. A `hard` finding about the source fails every target of that plugin; a `hard` finding about one target fails that target only. Sibling plugins are unaffected. The per-feature outcome of each target (`BuildResult.hosts`) is printed by `aipm build` for every plugin whose form differs from its source on some target.
+**Vercel cannot be withheld.** Vercel Skills installs skills by scanning the repository's authored source and has no registry or bundle that could point it at a generated directory, so no tree is built for it. Where its form would differ from the source (a skill whose audience is restricted, for instance), the projection's findings say what Vercel does not honour. For the same reason a failed build does not keep a plugin from Vercel: the authored source is still there to install, and `aipm build` says so.
 
-The layout is decided in one function (`placeHostForm` in `packages/core/src/pipeline/host-forms.ts`), and the same computed result feeds the build, registry generation, the repo-root artifacts and the freshness check (§10.5).
+**Ownership of trees.** `.aipm/generated-trees.json` lists every per-target tree a build wrote, as paths from the repo root. A build replaces or removes only listed directories, and the freshness check (§10.5) reports only those; a directory at a tree's path that the manifest does not list is left alone. The bundles of Gemini and Kiro are not listed: their directories have always been wholly generated. Freshness compares a tree's file set, contents, links and executable bits, and names paths from the repo root.
+
+In a repository that writes its registries by hand (no `aipm.workspace.ts`), `correctness/marketplace-registration` expects an entry to point at the target's tree whenever the build generates one, and expects no entry for a target that could not be built.
+
+Findings from the projection are reported by validation under `portability/host-projection`. `BuildResult.targets` reports, per target, what it installs (`authored`, `bundled`, `projected` or `failed`) and the outcome of each authored feature; `aipm build` prints it for every plugin whose form differs from its source on some target, without outcomes for a target that was not built.
+
+The layout is decided in one function (`placeHostForm` in `packages/core/src/pipeline/host-forms.ts`). Each plugin is projected once per build, validation or lint run, and that one result feeds the build, registry generation, the repo-root artifacts, the rules and the freshness check (§10.5).
 
 ### 5.3 Validate phase
 
@@ -536,6 +542,7 @@ export type FindingCode =
   | 'skill-name-duplicate'
   | 'skill-location-unsupported'
   | 'source-unreadable'
+  | 'generated-tree-collision'
   | 'native-form-refuted'
   | 'projection-not-implemented';
 

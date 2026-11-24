@@ -109,10 +109,10 @@ export interface BuildResult {
   /** Every file the build produced or verified as up-to-date. */
   artifacts: GeneratedFile[];
   /**
-   * How the plugin reached each target of its envelope, in envelope order: where the target's form
-   * of the plugin is, and how each authored feature is delivered there.
+   * What the build produced for each target of the plugin's envelope, in envelope order: where the
+   * target's form of the plugin is, and how each authored feature is delivered there.
    */
-  hosts: HostBuildReport[];
+  targets: TargetBuildReport[];
   /** Wall-clock time in milliseconds. */
   durationMs: number;
 }
@@ -144,21 +144,24 @@ export interface FeatureOutcome {
 /**
  * What a build produced for one target of a plugin's envelope.
  *
- * `status` says where the target's form of the plugin comes from:
+ * `status` says what the target installs:
  *
- * - `source` — the target installs what the author wrote: the authored plugin directory is already
- *   the target's form (or, for a target that is always bundled, its bundle needed no change).
- *   Nothing is generated for the target beyond what the build has always written. A target that
- *   can only install from the authored source (Vercel) always has this status; where its form
- *   would differ, the findings say what it does not receive.
- * - `projected` — the target's form differs from the authored source, so the build generated it:
- *   a tree of its own under the dist root, or the target's bundle with the differences applied.
+ * - `authored` — the authored plugin directory, as written. It is already the target's form, and
+ *   nothing is generated for the target. A target that can only install from the authored source
+ *   (`installsAuthoredSource`) has this status even where its form would differ; the build's
+ *   findings then say what it does not receive.
+ * - `bundled` — the bundle the build always generates for the target (Gemini, Kiro), exactly as
+ *   bundled from the authored source: the plugin needed no change for this target.
+ * - `projected` — a form the build generated because it differs from the authored source: a tree
+ *   of the target's own under the dist root, or the target's bundle with the differences applied.
  * - `failed` — the target's form could not be built (a `hard` finding names the reason). Nothing
- *   is emitted for the target, and no registry lists the plugin for it.
+ *   is emitted for the target and no registry lists the plugin for it.
+ *   A target with `installsAuthoredSource` cannot be withheld this way: it goes on installing the
+ *   authored directory.
  *
  * @public
  */
-export interface HostBuildReport {
+export interface TargetBuildReport {
   /** The target. */
   target: TargetId;
   /**
@@ -166,14 +169,23 @@ export interface HostBuildReport {
    * a target the model does not cover yet; such a target reports no outcomes.
    */
   host?: string;
-  /** Where the target's form comes from; see the interface description. */
-  status: 'source' | 'projected' | 'failed';
+  /** What the target installs; see the interface description. */
+  status: 'authored' | 'bundled' | 'projected' | 'failed';
+  /**
+   * True iff the target installs skills by scanning the authored source (Vercel Skills), so no
+   * generated directory can stand in for it and a failed build cannot withhold the plugin from it.
+   */
+  installsAuthoredSource: boolean;
   /**
    * Absolute path of the directory holding the target's form of the plugin: the plugin directory
    * itself, or a generated directory under the dist root. Absent when `status` is `failed`.
    */
   dir?: string;
-  /** One outcome per authored feature and subject on this target. */
+  /**
+   * One outcome per authored feature and subject on this target. When `status` is `failed` these
+   * are what the projection decided before the target failed (a skill whose fallback could not be
+   * built is `unavailable`); no form exists that delivers them.
+   */
   outcomes: FeatureOutcome[];
 }
 
@@ -305,6 +317,10 @@ export interface ValidationResult {
  * their meaning and severity. A `hard` source finding fails every target for the plugin, while a
  * `hard` target finding fails only that target.
  *
+ * `generated-tree-collision` — a target's form of a plugin needs a tree of its own under the dist
+ * root, but a directory the toolkit did not write (one the generated-trees manifest does not list)
+ * is already at that path. Always `hard`; it fails that target and the directory is left alone.
+ *
  * @public
  */
 export type FindingCode =
@@ -334,6 +350,7 @@ export type FindingCode =
   | 'skill-name-duplicate'
   | 'skill-location-unsupported'
   | 'source-unreadable'
+  | 'generated-tree-collision'
   | 'native-form-refuted'
   | 'projection-not-implemented';
 

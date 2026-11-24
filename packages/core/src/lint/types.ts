@@ -6,6 +6,7 @@
 
 import type { AipmWorkspace } from '../config.js';
 import type { ConfigCache } from '../pipeline/load-config.js';
+import type { HostFormsRun } from '../pipeline/host-forms.js';
 import type { FindingCode, TargetId } from '../pipeline/types.js';
 import type { Document } from './document.js';
 
@@ -131,6 +132,13 @@ export interface InternalRuleContext extends RuleContext {
    * `validate()`'s orchestrator already warmed rather than re-transpiling every config.
    */
   readonly configCache?: ConfigCache;
+  /**
+   * The host forms of the run this context belongs to (see `pipeline/host-forms.ts`), threaded
+   * through so every rule that needs a plugin's per-target forms reads the one projection the run
+   * computed. Rules reach it through `hostFormsRunOf` (`context.ts`), which starts a run of its own
+   * for a context built without one.
+   */
+  readonly hostForms?: HostFormsRun;
 }
 
 /**

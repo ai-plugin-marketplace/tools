@@ -17,6 +17,9 @@
  * - Codex: `policy.allow_implicit_invocation: false` in `agents/openai.yaml` beside the skill
  *   keeps the agent from selecting it.
  * - `HostFileChange` (normalizer): the contract of `write`, `remove` and `move`.
+ * - docs/specs/architecture.md §5.2.1: a plugin that states no audience builds as it did before;
+ *   a target that cannot be built publishes nothing; the toolkit replaces, removes and reports
+ *   only per-target trees its generated-trees manifest lists.
  * - Vercel Skills installs skills by scanning the repository's authored source, so no generated
  *   tree can be what it installs.
  *
@@ -45,13 +48,14 @@ import { runBuild } from './build.js';
 import {
   applyHostFileChanges,
   computePluginHostForms,
+  createHostFormsRun,
   placeHostForm,
   writeHostTree,
 } from './host-forms.js';
 import { runValidate, validateMarketplaceRegistration } from './validate.js';
 import { synthRegistryRepo } from '../test-support/synth-plugin.js';
 import type { SynthRegistryRepo } from '../test-support/synth-plugin.js';
-import type { BuildResult, Finding, FindingCode, HostBuildReport, TargetId } from './types.js';
+import type { BuildResult, Finding, FindingCode, TargetBuildReport, TargetId } from './types.js';
 
 // ---------------------------------------------------------------------------
 // Fixtures
@@ -171,14 +175,14 @@ function ofCode(findings: readonly Finding[], code: FindingCode): Finding[] {
   return findings.filter((f) => f.code === code);
 }
 
-function hostReport(result: BuildResult | undefined, target: TargetId): HostBuildReport {
-  const report = result?.hosts.find((h) => h.target === target);
-  if (report === undefined) throw new Error(`no host report for ${target}`);
+function targetReport(result: BuildResult | undefined, target: TargetId): TargetBuildReport {
+  const report = result?.targets.find((t) => t.target === target);
+  if (report === undefined) throw new Error(`no report for ${target}`);
   return report;
 }
 
 /** `subject → "implementation [fidelity, …]"` for one target's outcomes. */
-function outcomesBySkill(report: HostBuildReport): Record<string, string> {
+function outcomesBySkill(report: TargetBuildReport): Record<string, string> {
   return Object.fromEntries(
     report.outcomes.map((o) => [o.subject, `${o.implementation} [${o.fidelity.join(', ')}]`]),
   );
@@ -303,8 +307,8 @@ describe('build of a plugin whose skills state an audience', () => {
 
     // No tree: nothing would install from it.
     expect(fs.existsSync(path.join(repo.repoRoot, 'dist', 'vercel'))).toBe(false);
-    const vercel = hostReport(result, 'vercel');
-    expect(vercel).toMatchObject({ status: 'source', dir: pluginDirOf(repo) });
+    const vercel = targetReport(result, 'vercel');
+    expect(vercel).toMatchObject({ status: 'authored', dir: pluginDirOf(repo) });
     expect(vercel.outcomes).toStrictEqual([]);
     expect(vercel).not.toHaveProperty('host');
   });
@@ -365,15 +369,15 @@ describe('build of a plugin whose skills state an audience', () => {
     repo = synthRepo(AUDIENCE_SKILLS);
     const [result] = await runBuild(repo.repoRoot);
 
-    expect(result?.hosts.map((h) => h.target)).toStrictEqual([...TARGETS]);
+    expect(result?.targets.map((t) => t.target)).toStrictEqual([...TARGETS]);
     for (const target of ['claude', 'codex', 'cursor', 'gemini', 'kiro'] as const) {
-      expect(hostReport(result, target)).toMatchObject({
+      expect(targetReport(result, target)).toMatchObject({
         status: 'projected',
         dir: distOf(repo, target),
       });
     }
 
-    const claude = hostReport(result, 'claude');
+    const claude = targetReport(result, 'claude');
     expect(claude.host).toBe('claude-code');
     expect(outcomesBySkill(claude)).toStrictEqual({
       'for-both': 'native []',
@@ -382,7 +386,7 @@ describe('build of a plugin whose skills state an audience', () => {
       widened: 'native []',
     });
 
-    const codex = hostReport(result, 'codex');
+    const codex = targetReport(result, 'codex');
     expect(codex.host).toBe('codex');
     expect(outcomesBySkill(codex)).toStrictEqual({
       'for-both': 'native []',
@@ -395,7 +399,7 @@ describe('build of a plugin whose skills state an audience', () => {
     expect(codex.outcomes.every((o) => o.feature === 'skills.audience')).toBe(true);
 
     // A target the model does not cover reports no outcome and has no model host name.
-    const cursor = hostReport(result, 'cursor');
+    const cursor = targetReport(result, 'cursor');
     expect(cursor.outcomes).toStrictEqual([]);
     expect(cursor).not.toHaveProperty('host');
   });
@@ -446,7 +450,8 @@ describe('build of a plugin whose skills state an audience', () => {
     const result = await runValidate(repo.repoRoot, { ci: true });
     const stale = ofCode(result.findings, 'freshness');
     expect(stale).toHaveLength(1);
-    expect(stale[0]?.message).toContain('dist/codex/demo/skills/for-user/SKILL.md');
+    expect(stale[0]?.message).toContain("tree file 'dist/codex/demo/skills/for-user/SKILL.md'");
+    expect(stale[0]?.hint).toContain('codex tree');
     expect(result.passed).toBe(false);
   });
 
@@ -466,9 +471,10 @@ describe('build of a plugin whose skills state an audience', () => {
 
     const [result] = await runBuild(repo.repoRoot);
     for (const target of ['claude', 'codex', 'cursor'] as const) {
-      expect(fs.existsSync(distOf(repo, target)), target).toBe(false);
-      expect(hostReport(result, target)).toMatchObject({
-        status: 'source',
+      // The tree goes, and so does the target's directory once nothing is left in it.
+      expect(fs.existsSync(path.dirname(distOf(repo, target))), target).toBe(false);
+      expect(targetReport(result, target)).toMatchObject({
+        status: 'authored',
         dir: pluginDirOf(repo),
       });
     }
@@ -532,14 +538,14 @@ describe('build of a plugin that states no audience', () => {
     const [result] = await runBuild(repo.repoRoot);
 
     for (const target of ['claude', 'codex', 'cursor', 'vercel'] as const) {
-      expect(hostReport(result, target)).toMatchObject({
-        status: 'source',
+      expect(targetReport(result, target)).toMatchObject({
+        status: 'authored',
         dir: pluginDirOf(repo),
       });
     }
     for (const target of ['gemini', 'kiro'] as const) {
-      expect(hostReport(result, target)).toMatchObject({
-        status: 'source',
+      expect(targetReport(result, target)).toMatchObject({
+        status: 'bundled',
         dir: distOf(repo, target),
       });
     }
@@ -586,7 +592,7 @@ describe('a hard finding about one target', () => {
     expect(fs.existsSync(path.join(repo.repoRoot, '.agents', 'plugins', 'marketplace.json'))).toBe(
       false,
     );
-    const codex = hostReport(result, 'codex');
+    const codex = targetReport(result, 'codex');
     expect(codex.status).toBe('failed');
     expect(codex).not.toHaveProperty('dir');
     // §4, §5.1: the skill whose prefix could not be built is reported as left out of the host.
@@ -594,7 +600,7 @@ describe('a hard finding about one target', () => {
     expect(outcomesBySkill(codex)['foo']).toBe('unavailable [omitted]');
 
     // Claude Code: built and listed as usual.
-    expect(hostReport(result, 'claude')).toMatchObject({
+    expect(targetReport(result, 'claude')).toMatchObject({
       status: 'projected',
       dir: distOf(repo, 'claude'),
     });
@@ -663,7 +669,7 @@ describe('a hard finding about the source', () => {
     const [result] = await runBuild(repo.repoRoot);
 
     for (const target of TARGETS) {
-      const report = hostReport(result, target);
+      const report = targetReport(result, target);
       expect(report.status, target).toBe('failed');
       expect(report, target).not.toHaveProperty('dir');
       expect(fs.existsSync(distOf(repo, target)), target).toBe(false);
@@ -887,6 +893,33 @@ describe('applyHostFileChanges', () => {
     }
   });
 
+  it('refuses to write through a link that leads nowhere, creating nothing at its target', () => {
+    // Writing through a dangling link would create the file it names, wherever that is.
+    seed({ 'skills/a/SKILL.md': 'a' });
+    const outsideDir = fs.mkdtempSync(path.join(os.tmpdir(), 'aipm-host-changes-elsewhere-'));
+    try {
+      const absoluteTarget = path.join(outsideDir, 'new.txt');
+      fs.symlinkSync(absoluteTarget, path.join(root, 'skills', 'a', 'absolute.txt'));
+      fs.symlinkSync(
+        path.join('..', '..', '..', path.basename(outsideDir), 'relative.txt'),
+        path.join(root, 'skills', 'a', 'relative.txt'),
+      );
+      // A dangling link whose target would be inside the tree is refused too: nothing a build
+      // lays down is a link to a file that does not exist yet.
+      fs.symlinkSync('missing.txt', path.join(root, 'skills', 'a', 'inside.txt'));
+
+      for (const name of ['absolute.txt', 'relative.txt', 'inside.txt']) {
+        expect(() => {
+          applyHostFileChanges(root, [{ kind: 'write', path: `skills/a/${name}`, content: 'x' }]);
+        }, name).toThrow(/link that leads nowhere/);
+      }
+      expect(fs.readdirSync(outsideDir)).toStrictEqual([]);
+      expect(exists('skills/a/missing.txt')).toBe(false);
+    } finally {
+      fs.rmSync(outsideDir, { recursive: true, force: true });
+    }
+  });
+
   it('removes a link itself, not what it points at', () => {
     seed({ 'shared/real/SKILL.md': 'real', 'skills/keep/SKILL.md': 'keep' });
     fs.symlinkSync(path.join('..', 'shared', 'real'), path.join(root, 'skills', 'linked'));
@@ -1056,6 +1089,18 @@ describe('validateMarketplaceRegistration with a per-target tree', () => {
 
   const REGISTRY_TARGETS: readonly TargetId[] = ['claude', 'codex'];
 
+  /** The registration findings for the plugin, given its host forms as a run computes them. */
+  function checkRegistration(synth: SynthRegistryRepo): Finding[] {
+    const distDir = path.join(synth.repoRoot, 'dist');
+    return validateMarketplaceRegistration(pluginDirOf(synth), synth.repoRoot, REGISTRY_TARGETS, {
+      forms: createHostFormsRun(synth.repoRoot, distDir).forms(
+        pluginDirOf(synth),
+        REGISTRY_TARGETS,
+      ),
+      distDir,
+    });
+  }
+
   function rewriteClaudeSource(repoRoot: string, source: string): void {
     const file = path.join(repoRoot, '.claude-plugin', 'marketplace.json');
     const registry = readJson(file) as { plugins: { name: string; source: string }[] };
@@ -1066,14 +1111,7 @@ describe('validateMarketplaceRegistration with a per-target tree', () => {
   it('accepts entries that point at each target’s tree', async () => {
     repo = synthRepo(AUDIENCE_SKILLS, REGISTRY_TARGETS);
     await runBuild(repo.repoRoot);
-    expect(
-      validateMarketplaceRegistration(
-        pluginDirOf(repo),
-        repo.repoRoot,
-        REGISTRY_TARGETS,
-        path.join(repo.repoRoot, 'dist'),
-      ),
-    ).toStrictEqual([]);
+    expect(checkRegistration(repo)).toStrictEqual([]);
   });
 
   it('rejects an entry left on the authored directory, which would install without the changes', async () => {
@@ -1081,12 +1119,7 @@ describe('validateMarketplaceRegistration with a per-target tree', () => {
     await runBuild(repo.repoRoot);
     rewriteClaudeSource(repo.repoRoot, './plugins/demo');
 
-    const findings = validateMarketplaceRegistration(
-      pluginDirOf(repo),
-      repo.repoRoot,
-      REGISTRY_TARGETS,
-      path.join(repo.repoRoot, 'dist'),
-    );
+    const findings = checkRegistration(repo);
     expect(findings).toHaveLength(1);
     expect(findings[0]).toMatchObject({
       severity: 'hard',
@@ -1099,19 +1132,531 @@ describe('validateMarketplaceRegistration with a per-target tree', () => {
   it('keeps expecting the authored directory for a plugin that states no audience', async () => {
     repo = synthRepo(PLAIN_SKILLS, REGISTRY_TARGETS);
     await runBuild(repo.repoRoot);
-    const distDir = path.join(repo.repoRoot, 'dist');
-    expect(
-      validateMarketplaceRegistration(pluginDirOf(repo), repo.repoRoot, REGISTRY_TARGETS, distDir),
-    ).toStrictEqual([]);
+    expect(checkRegistration(repo)).toStrictEqual([]);
 
     rewriteClaudeSource(repo.repoRoot, './dist/claude/demo');
-    const findings = validateMarketplaceRegistration(
-      pluginDirOf(repo),
-      repo.repoRoot,
-      REGISTRY_TARGETS,
-      distDir,
-    );
+    const findings = checkRegistration(repo);
     expect(findings).toHaveLength(1);
     expect(findings[0]?.message).toContain("expected './plugins/demo'");
+  });
+
+  // Regression: a failed target's entry was checked against the authored directory, so the hint
+  // told the author to publish the source without the target's restrictions.
+  it('says a plugin must not be listed for a target that could not be built', async () => {
+    // No workspace: the registries are written by hand. Codex fails on the prefix collision.
+    repo = synthRegistryRepo([
+      {
+        name: PLUGIN,
+        targets: REGISTRY_TARGETS,
+        files: {
+          '.claude-plugin/plugin.json': MANIFEST,
+          '.codex-plugin/plugin.json': MANIFEST,
+          'skills/foo/SKILL.md': skillMd('foo', 'audience: agent\naudience-fallback: widen\n'),
+          'skills/agent-only-foo/SKILL.md': skillMd('agent-only-foo'),
+        },
+      },
+    ]);
+    const writeRegistries = (codexListed: boolean): void => {
+      const claude = path.join(repo?.repoRoot ?? '', '.claude-plugin', 'marketplace.json');
+      fs.mkdirSync(path.dirname(claude), { recursive: true });
+      fs.writeFileSync(
+        claude,
+        JSON.stringify({ name: 'm', plugins: [{ name: PLUGIN, source: './dist/claude/demo' }] }),
+      );
+      const codex = path.join(repo?.repoRoot ?? '', '.agents', 'plugins', 'marketplace.json');
+      fs.mkdirSync(path.dirname(codex), { recursive: true });
+      fs.writeFileSync(
+        codex,
+        JSON.stringify({
+          name: 'm',
+          plugins: codexListed
+            ? [{ name: PLUGIN, source: { source: 'local', path: './dist/codex/demo' } }]
+            : [],
+        }),
+      );
+    };
+
+    writeRegistries(true);
+    await runBuild(repo.repoRoot);
+    const listed = ofCode(
+      (await runValidate(repo.repoRoot, { ci: true })).findings,
+      'marketplace-registration',
+    );
+    expect(listed).toHaveLength(1);
+    expect(listed[0]).toMatchObject({ severity: 'hard', plugin: PLUGIN });
+    expect(listed[0]?.message).toContain("'codex' form could not be built");
+    // Never a pointer at the authored directory, which carries none of the restrictions.
+    expect(`${listed[0]?.message ?? ''} ${listed[0]?.hint ?? ''}`).not.toContain('./plugins/demo');
+
+    // Unlisted, the failed target raises nothing here; Claude Code's entry on its tree is right.
+    writeRegistries(false);
+    expect(
+      ofCode((await runValidate(repo.repoRoot, { ci: true })).findings, 'marketplace-registration'),
+    ).toStrictEqual([]);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// A plugin that states no audience, with a skill the projection cannot use
+// ---------------------------------------------------------------------------
+
+/** The files of a plugin for Claude Code and Codex only, plus `skills`. */
+function twoTargetPlugin(skills: Record<string, string>): SynthRegistryRepo {
+  return synthRegistryRepo(
+    [
+      {
+        name: PLUGIN,
+        targets: ['claude', 'codex'],
+        files: {
+          '.claude-plugin/plugin.json': MANIFEST,
+          '.codex-plugin/plugin.json': MANIFEST,
+          ...skills,
+        },
+      },
+    ],
+    WORKSPACE,
+  );
+}
+
+/**
+ * Four kinds of source the projection reports as a problem of the source itself, none of which
+ * has anything to do with audience. `arrange` adds the problem to a built-up plugin directory.
+ */
+const UNUSABLE_SKILLS: readonly {
+  name: string;
+  code: FindingCode;
+  arrange: (pluginDir: string, repoRoot: string) => void;
+}[] = [
+  {
+    name: 'a skill directory linked from outside the plugin',
+    code: 'source-unreadable',
+    arrange: (pluginDir, repoRoot) => {
+      const external = path.join(repoRoot, 'shared-skills', 'ext');
+      fs.mkdirSync(external, { recursive: true });
+      fs.writeFileSync(path.join(external, 'SKILL.md'), skillMd('ext'));
+      fs.symlinkSync(
+        path.join('..', '..', '..', 'shared-skills', 'ext'),
+        path.join(pluginDir, 'skills', 'ext'),
+      );
+    },
+  },
+  {
+    name: 'a SKILL.md that is a link to a file',
+    code: 'source-unreadable',
+    arrange: (pluginDir) => {
+      fs.mkdirSync(path.join(pluginDir, 'shared'), { recursive: true });
+      fs.writeFileSync(path.join(pluginDir, 'shared', 'linked.md'), skillMd('linked'));
+      fs.mkdirSync(path.join(pluginDir, 'skills', 'linked'));
+      fs.symlinkSync(
+        path.join('..', '..', 'shared', 'linked.md'),
+        path.join(pluginDir, 'skills', 'linked', 'SKILL.md'),
+      );
+    },
+  },
+  {
+    name: 'a dangling link under skills/',
+    code: 'source-unreadable',
+    arrange: (pluginDir) => {
+      fs.symlinkSync(path.join('..', 'nowhere'), path.join(pluginDir, 'skills', 'dangling'));
+    },
+  },
+  {
+    name: 'two skills that state the same name',
+    code: 'skill-name-duplicate',
+    arrange: (pluginDir) => {
+      for (const dir of ['twin-a', 'twin-b']) {
+        fs.mkdirSync(path.join(pluginDir, 'skills', dir));
+        fs.writeFileSync(path.join(pluginDir, 'skills', dir, 'SKILL.md'), skillMd('twin'));
+      }
+    },
+  },
+];
+
+describe('a skill the projection cannot use', () => {
+  let repo: SynthRegistryRepo | undefined;
+  afterEach(() => {
+    repo?.cleanup();
+  });
+
+  describe.each(UNUSABLE_SKILLS)('$name', ({ code, arrange }) => {
+    // Regression: any hard finding about the source failed every target, so a plugin that had
+    // always built stopped building and left its registries.
+    it('does not stop a plugin that states no audience: warning only, output as before', async () => {
+      repo = twoTargetPlugin({ 'skills/plain/SKILL.md': skillMd('plain') });
+      arrange(pluginDirOf(repo), repo.repoRoot);
+
+      const [result] = await runBuild(repo.repoRoot, { failFast: false });
+
+      for (const target of ['claude', 'codex'] as const) {
+        expect(targetReport(result, target), target).toMatchObject({
+          status: 'authored',
+          dir: pluginDirOf(repo),
+        });
+      }
+      expect(fs.existsSync(path.join(repo.repoRoot, 'dist'))).toBe(false);
+      expect(stringRegistrySource(repo.repoRoot, '.claude-plugin', 'marketplace.json')).toBe(
+        './plugins/demo',
+      );
+      expect(codexRegistryPath(repo.repoRoot)).toBe('./plugins/demo');
+
+      const reported = ofCode((await runValidate(repo.repoRoot, { ci: true })).findings, code);
+      expect(reported.length).toBeGreaterThan(0);
+      expect(reported.map((f) => f.severity)).toStrictEqual(reported.map(() => 'soft'));
+    });
+
+    it('stops every target once another skill states an audience', async () => {
+      repo = twoTargetPlugin({
+        'skills/plain/SKILL.md': skillMd('plain'),
+        'skills/restricted/SKILL.md': skillMd('restricted', 'audience: user\n'),
+      });
+      arrange(pluginDirOf(repo), repo.repoRoot);
+
+      const [result] = await runBuild(repo.repoRoot);
+
+      for (const target of ['claude', 'codex'] as const) {
+        expect(targetReport(result, target).status, target).toBe('failed');
+        expect(fs.existsSync(distOf(repo, target)), target).toBe(false);
+      }
+      expect(fs.existsSync(path.join(repo.repoRoot, '.claude-plugin', 'marketplace.json'))).toBe(
+        false,
+      );
+      const validation = await runValidate(repo.repoRoot, { ci: true });
+      expect(ofCode(validation.findings, code).some((f) => f.severity === 'hard')).toBe(true);
+      expect(validation.passed).toBe(false);
+    });
+  });
+
+  it('stays strict when the audience is stated in the very file that cannot be used', async () => {
+    // The restriction is behind a linked SKILL.md, which the projection does not read. Treating
+    // the plugin as stating no audience would publish the skill unrestricted.
+    repo = twoTargetPlugin({ 'skills/plain/SKILL.md': skillMd('plain') });
+    const pluginDir = pluginDirOf(repo);
+    fs.mkdirSync(path.join(pluginDir, 'shared'), { recursive: true });
+    fs.writeFileSync(
+      path.join(pluginDir, 'shared', 'linked.md'),
+      skillMd('linked', 'audience: user\n'),
+    );
+    fs.mkdirSync(path.join(pluginDir, 'skills', 'linked'));
+    fs.symlinkSync(
+      path.join('..', '..', 'shared', 'linked.md'),
+      path.join(pluginDir, 'skills', 'linked', 'SKILL.md'),
+    );
+
+    const [result] = await runBuild(repo.repoRoot);
+    expect(targetReport(result, 'claude').status).toBe('failed');
+    expect(targetReport(result, 'codex').status).toBe('failed');
+  });
+
+  it('reports a SKILL.md with malformed frontmatter once', async () => {
+    // Both the frontmatter check and the projection read this file; one report is enough.
+    repo = twoTargetPlugin({
+      'skills/bad/SKILL.md': '---\nname: bad\ndescription: [unclosed\n---\n\n# bad\n',
+    });
+    const about = (await runValidate(repo.repoRoot, { ci: true })).findings.filter((f) =>
+      f.message.includes('skills/bad/SKILL.md'),
+    );
+    expect(about.map((f) => f.code)).toStrictEqual(['frontmatter-invalid']);
+  });
+
+  it('reports each skill of a shared name once per target', async () => {
+    repo = twoTargetPlugin({});
+    fs.mkdirSync(path.join(pluginDirOf(repo), 'skills'), { recursive: true });
+    UNUSABLE_SKILLS[3]?.arrange(pluginDirOf(repo), repo.repoRoot);
+    const [result] = await runBuild(repo.repoRoot);
+    const twins = targetReport(result, 'claude').outcomes.filter((o) => o.subject === 'twin');
+    expect(twins).toHaveLength(1);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Changes that cannot be applied
+// ---------------------------------------------------------------------------
+
+describe('a target whose changes cannot be applied', () => {
+  let repo: SynthRegistryRepo | undefined;
+  afterEach(() => {
+    repo?.cleanup();
+  });
+
+  const SIBLING = {
+    name: 'sibling',
+    targets: ['claude'] as const,
+    files: {
+      '.claude-plugin/plugin.json': `${JSON.stringify({ name: 'sibling', version: '0.0.1' })}\n`,
+      'skills/hello/SKILL.md': skillMd('hello', 'audience: user\n'),
+    },
+  };
+  const AUTHORED = skillMd('linked', 'audience: user\n');
+
+  /** `demo` (Claude Code) with a restricted skill reached through `skills/linked`, and a sibling. */
+  function repoWithLinkedSkill(linkTarget: (pluginDir: string) => string): SynthRegistryRepo {
+    const synth = synthRegistryRepo(
+      [
+        {
+          name: PLUGIN,
+          targets: ['claude'],
+          files: { '.claude-plugin/plugin.json': MANIFEST, 'shared/linked/SKILL.md': AUTHORED },
+        },
+        SIBLING,
+      ],
+      WORKSPACE,
+    );
+    const pluginDir = pluginDirOf(synth);
+    fs.mkdirSync(path.join(pluginDir, 'skills'));
+    fs.symlinkSync(linkTarget(pluginDir), path.join(pluginDir, 'skills', 'linked'));
+    return synth;
+  }
+
+  const absoluteLink = (pluginDir: string): string => path.join(pluginDir, 'shared', 'linked');
+  const relativeLink = (): string => path.join('..', 'shared', 'linked');
+
+  // Regression: the refusal to write through an absolute link was thrown out of the build, which
+  // stopped every plugin and left a half-written tree behind.
+  it('fails that target with a finding, and builds the rest of the repo', async () => {
+    repo = repoWithLinkedSkill(absoluteLink);
+
+    const results = await runBuild(repo.repoRoot);
+
+    const demo = results.find((r) => r.plugin === PLUGIN);
+    expect(targetReport(demo, 'claude').status).toBe('failed');
+    expect(fs.existsSync(distOf(repo, 'claude'))).toBe(false);
+    // The authored skill was not written through the link.
+    expect(
+      fs.readFileSync(path.join(pluginDirOf(repo), 'shared', 'linked', 'SKILL.md'), 'utf-8'),
+    ).toBe(AUTHORED);
+
+    // The sibling is built and is the only plugin listed.
+    const registry = readJson(repo.repoRoot, '.claude-plugin', 'marketplace.json') as {
+      plugins: { name: string; source: string }[];
+    };
+    expect(registry.plugins).toStrictEqual([{ name: 'sibling', source: './dist/claude/sibling' }]);
+
+    const validation = await runValidate(repo.repoRoot, { ci: true });
+    const failures = validation.findings.filter(
+      (f) => f.severity === 'hard' && f.plugin === PLUGIN && f.message.includes('through a link'),
+    );
+    expect(failures).toHaveLength(1);
+    expect(failures[0]?.message).toContain("'claude' form");
+    expect(validation.findings.filter((f) => f.plugin === 'sibling')).toStrictEqual([]);
+    expect(ofCode(validation.findings, 'freshness')).toStrictEqual([]);
+  });
+
+  it('removes the tree an earlier, successful build left', async () => {
+    repo = repoWithLinkedSkill(relativeLink);
+    await runBuild(repo.repoRoot);
+    expect(fs.existsSync(distOf(repo, 'claude'))).toBe(true);
+
+    const link = path.join(pluginDirOf(repo), 'skills', 'linked');
+    fs.rmSync(link);
+    fs.symlinkSync(absoluteLink(pluginDirOf(repo)), link);
+    await runBuild(repo.repoRoot);
+
+    expect(fs.existsSync(distOf(repo, 'claude'))).toBe(false);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Which directories under the dist root are the toolkit's
+// ---------------------------------------------------------------------------
+
+describe('ownership of per-target trees', () => {
+  let repo: SynthRegistryRepo | undefined;
+  afterEach(() => {
+    repo?.cleanup();
+  });
+
+  const manifestOf = (repoRoot: string): unknown =>
+    readJson(repoRoot, '.aipm', 'generated-trees.json');
+
+  function plantForeign(repoRoot: string, target: TargetId): string {
+    const file = path.join(repoRoot, 'dist', target, PLUGIN, 'NOTES.md');
+    fs.mkdirSync(path.dirname(file), { recursive: true });
+    fs.writeFileSync(file, 'not generated\n');
+    return file;
+  }
+
+  it('records the trees a build writes, and nothing for a plugin that needs none', async () => {
+    repo = twoTargetPlugin(AUDIENCE_SKILLS);
+    await runBuild(repo.repoRoot);
+    expect(manifestOf(repo.repoRoot)).toStrictEqual({
+      version: 1,
+      paths: ['dist/claude/demo', 'dist/codex/demo'],
+    });
+
+    const plain = twoTargetPlugin(PLAIN_SKILLS);
+    try {
+      await runBuild(plain.repoRoot);
+      expect(fs.existsSync(path.join(plain.repoRoot, '.aipm'))).toBe(false);
+    } finally {
+      plain.cleanup();
+    }
+  });
+
+  it('empties the record when the trees go', async () => {
+    repo = twoTargetPlugin(AUDIENCE_SKILLS);
+    await runBuild(repo.repoRoot);
+    for (const [rel, content] of Object.entries(PLAIN_SKILLS)) {
+      fs.writeFileSync(path.join(pluginDirOf(repo), rel), content);
+    }
+    await runBuild(repo.repoRoot);
+    expect(manifestOf(repo.repoRoot)).toStrictEqual({ version: 1, paths: [] });
+  });
+
+  it('neither removes nor reports a directory it did not write', async () => {
+    // A plugin with no per-target tree, and directories at the paths trees would have.
+    repo = twoTargetPlugin(PLAIN_SKILLS);
+    const foreign = (['claude', 'codex', 'cursor', 'vercel'] as const).map((target) =>
+      plantForeign(repo?.repoRoot ?? '', target),
+    );
+
+    await runBuild(repo.repoRoot);
+
+    for (const file of foreign) expect(fs.readFileSync(file, 'utf-8')).toBe('not generated\n');
+    expect(ofCode((await runValidate(repo.repoRoot, { ci: true })).findings, 'freshness')).toEqual(
+      [],
+    );
+  });
+
+  it('fails a target whose tree path holds a directory it did not write, and leaves it alone', async () => {
+    repo = twoTargetPlugin(AUDIENCE_SKILLS);
+    const foreign = plantForeign(repo.repoRoot, 'claude');
+
+    const [result] = await runBuild(repo.repoRoot);
+
+    expect(targetReport(result, 'claude').status).toBe('failed');
+    expect(fs.readFileSync(foreign, 'utf-8')).toBe('not generated\n');
+    expect(fs.readdirSync(distOf(repo, 'claude'))).toStrictEqual(['NOTES.md']);
+    expect(fs.existsSync(path.join(repo.repoRoot, '.claude-plugin', 'marketplace.json'))).toBe(
+      false,
+    );
+    // Codex is unaffected.
+    expect(targetReport(result, 'codex').status).toBe('projected');
+    expect(manifestOf(repo.repoRoot)).toStrictEqual({ version: 1, paths: ['dist/codex/demo'] });
+
+    const collisions = ofCode(
+      (await runValidate(repo.repoRoot, { ci: true })).findings,
+      'generated-tree-collision',
+    );
+    expect(collisions).toHaveLength(1);
+    expect(collisions[0]).toMatchObject({ severity: 'hard', plugin: PLUGIN });
+    expect(collisions[0]?.message).toContain("'dist/claude/demo'");
+  });
+
+  it('flags a manifest that no longer lists a tree', async () => {
+    repo = twoTargetPlugin(AUDIENCE_SKILLS);
+    await runBuild(repo.repoRoot);
+    fs.writeFileSync(
+      path.join(repo.repoRoot, '.aipm', 'generated-trees.json'),
+      `${JSON.stringify({ version: 1, paths: ['dist/codex/demo'] }, null, 2)}\n`,
+    );
+    const findings = (await runValidate(repo.repoRoot, { ci: true })).findings;
+    // Unlisted, the Claude Code tree is a directory the toolkit does not own.
+    expect(ofCode(findings, 'generated-tree-collision')).toHaveLength(1);
+  });
+
+  it('removes the trees of a plugin that is gone when the whole repo is built', async () => {
+    repo = synthRegistryRepo(
+      [
+        {
+          name: PLUGIN,
+          targets: ['claude'],
+          files: { '.claude-plugin/plugin.json': MANIFEST, ...AUDIENCE_SKILLS },
+        },
+        {
+          name: 'sibling',
+          targets: ['claude'],
+          files: {
+            '.claude-plugin/plugin.json': `${JSON.stringify({ name: 'sibling', version: '0.0.1' })}\n`,
+            'skills/hello/SKILL.md': skillMd('hello', 'audience: user\n'),
+          },
+        },
+      ],
+      WORKSPACE,
+    );
+    await runBuild(repo.repoRoot);
+    fs.rmSync(path.join(repo.repoRoot, 'plugins', 'sibling'), { recursive: true });
+
+    // Building one plugin leaves the other's record and tree alone.
+    await runBuild(pluginDirOf(repo));
+    expect(manifestOf(repo.repoRoot)).toStrictEqual({
+      version: 1,
+      paths: ['dist/claude/demo', 'dist/claude/sibling'],
+    });
+
+    await runBuild(repo.repoRoot);
+    expect(fs.existsSync(path.join(repo.repoRoot, 'dist', 'claude', 'sibling'))).toBe(false);
+    expect(manifestOf(repo.repoRoot)).toStrictEqual({ version: 1, paths: ['dist/claude/demo'] });
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Freshness of a generated tree
+// ---------------------------------------------------------------------------
+
+describe('freshness of a per-target tree', () => {
+  let repo: SynthRegistryRepo | undefined;
+  afterEach(() => {
+    repo?.cleanup();
+  });
+
+  // Regression: only bytes were compared, so a tree that gained or lost an executable bit (which
+  // a change can state, and which scripts in a tree depend on) counted as fresh.
+  it('flags a file whose executable bit changed', async () => {
+    repo = twoTargetPlugin(AUDIENCE_SKILLS);
+    await runBuild(repo.repoRoot);
+    const file = path.join(distOf(repo, 'claude'), 'skills', 'for-both', 'SKILL.md');
+    fs.chmodSync(file, 0o755);
+
+    const stale = ofCode((await runValidate(repo.repoRoot, { ci: true })).findings, 'freshness');
+    expect(stale).toHaveLength(1);
+    expect(stale[0]?.message).toContain('dist/claude/demo/skills/for-both/SKILL.md');
+  });
+
+  it('names paths from the repo root when the dist root is relocated', async () => {
+    repo = twoTargetPlugin(AUDIENCE_SKILLS);
+    fs.writeFileSync(
+      path.join(repo.repoRoot, 'aipm.repo.ts'),
+      "export default { distDir: 'generated/out' };\n",
+    );
+    await runBuild(repo.repoRoot);
+    const tree = path.join(repo.repoRoot, 'generated', 'out', 'codex', PLUGIN);
+    fs.appendFileSync(path.join(tree, 'skills', 'for-user', 'SKILL.md'), 'edited\n');
+
+    const stale = ofCode((await runValidate(repo.repoRoot, { ci: true })).findings, 'freshness');
+    expect(stale).toHaveLength(1);
+    expect(stale[0]?.message).toContain("'generated/out/codex/demo/skills/for-user/SKILL.md'");
+
+    // An orphaned tree is named the same way.
+    for (const [rel, content] of Object.entries(PLAIN_SKILLS)) {
+      fs.writeFileSync(path.join(pluginDirOf(repo), rel), content);
+    }
+    const orphaned = ofCode((await runValidate(repo.repoRoot, { ci: true })).findings, 'freshness')
+      .map((f) => f.message)
+      .filter((m) => m.includes('no longer produces'));
+    expect(orphaned.some((m) => m.includes("'generated/out/claude/demo'"))).toBe(true);
+    expect(orphaned.every((m) => !m.includes("'dist/"))).toBe(true);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// One projection per run
+// ---------------------------------------------------------------------------
+
+describe('createHostFormsRun', () => {
+  let repo: SynthRegistryRepo | undefined;
+  afterEach(() => {
+    repo?.cleanup();
+  });
+
+  it('answers for a plugin once and reuses the answer for the rest of the run', () => {
+    repo = twoTargetPlugin(AUDIENCE_SKILLS);
+    const run = createHostFormsRun(repo.repoRoot, path.join(repo.repoRoot, 'dist'));
+    const first = run.forms(pluginDirOf(repo), ['claude', 'codex']);
+
+    // Even after the source changes: a run is one consistent view.
+    fs.rmSync(path.join(pluginDirOf(repo), 'skills', 'for-user'), { recursive: true });
+    expect(run.forms(pluginDirOf(repo), ['claude', 'codex'])).toBe(first);
+    // A different envelope is a different question.
+    expect(run.forms(pluginDirOf(repo), ['claude'])).not.toBe(first);
   });
 });

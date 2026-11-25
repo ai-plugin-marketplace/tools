@@ -924,10 +924,16 @@ function writeFileReplacing(absPath: string, content: string): void {
   fs.mkdirSync(path.dirname(absPath), { recursive: true });
   const temp = `${absPath}.${String(process.pid)}.${randomUUID()}.tmp`;
   // `wx` creates the temporary file or fails, so cleanup only ever removes a file this call made.
-  fs.writeFileSync(temp, '', { flag: 'wx', mode: existing?.mode ?? 0o666 });
+  // Writing through that descriptor works even when the mode is read-only. A new file gets the
+  // usual umask-filtered mode; a replaced one gets the old file's exact mode.
+  const fd = fs.openSync(temp, 'wx', existing?.mode ?? 0o666);
   try {
-    fs.writeFileSync(temp, content, 'utf-8');
-    if (existing !== undefined) fs.chmodSync(temp, existing.mode);
+    try {
+      fs.writeFileSync(fd, content, 'utf-8');
+      if (existing !== undefined) fs.fchmodSync(fd, existing.mode);
+    } finally {
+      fs.closeSync(fd);
+    }
     fs.renameSync(temp, absPath);
   } finally {
     fs.rmSync(temp, { force: true });

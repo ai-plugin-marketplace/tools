@@ -20,6 +20,7 @@
 import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
+import { randomUUID } from 'node:crypto';
 import { performance } from 'node:perf_hooks';
 
 import { PAYLOAD_ADAPTER_FILENAME, PAYLOAD_ADAPTER_SOURCE } from '../hooks/payload-adapter.js';
@@ -877,25 +878,54 @@ function writeFileEnsuringDir(absPath: string, content: string): void {
 }
 
 /**
- * Refuse to write hook artifacts through a `hooks/` directory that resolves outside the plugin
- * (a symlinked `hooks/`), which would overwrite files the plugin does not own.
+ * Refuse to write a hook artifact anywhere but a regular file inside the plugin: through a
+ * `hooks/` directory that resolves outside it, or to a path that is a symbolic link or other
+ * non-file entry. Writing there would change a file the plugin does not own.
  *
- * @throws {Error} If any planned hook artifact's directory resolves outside the plugin.
+ * @throws {Error} If any planned hook artifact would be written outside a regular in-plugin file.
  */
 function assertHookArtifactsInsidePlugin(
   pluginDir: string,
   hookArtifacts: readonly PluginHookArtifact[],
 ): void {
-  const realPlugin = fs.realpathSync(pluginDir);
+  const plugin = path.basename(pluginDir);
+  // `.native` returns the on-disk spelling, so case-insensitive aliases compare equal.
+  const realPlugin = fs.realpathSync.native(pluginDir);
   for (const dir of new Set(hookArtifacts.map((a) => path.dirname(a.absPath)))) {
     if (!fs.existsSync(dir)) continue;
-    const rel = path.relative(realPlugin, fs.realpathSync(dir));
+    const rel = path.relative(realPlugin, fs.realpathSync.native(dir));
     if (rel === '..' || rel.startsWith(`..${path.sep}`) || path.isAbsolute(rel)) {
       throw new Error(
-        `${path.basename(pluginDir)}: ${path.relative(pluginDir, dir)}/ resolves outside the plugin ` +
-          `directory, so aipm build will not write into it. Replace the link with a real directory and rebuild.`,
+        `${plugin}: ${path.relative(pluginDir, dir)}/ resolves outside the plugin directory, so ` +
+          `aipm build will not write into it. Replace the link with a real directory and rebuild.`,
       );
     }
+  }
+  for (const { absPath } of hookArtifacts) {
+    const stat = fs.lstatSync(absPath, { throwIfNoEntry: false });
+    if (stat !== undefined && !stat.isFile()) {
+      throw new Error(
+        `${plugin}: ${path.relative(pluginDir, absPath)} is not a regular file, so aipm build will ` +
+          `not write to it. Replace it with a regular file (or remove it) and rebuild.`,
+      );
+    }
+  }
+}
+
+/**
+ * Write `content` to `absPath` by way of a new temporary sibling and a rename, so a failed or
+ * short write never leaves a partial file at `absPath`. Used for the ownership marker the next
+ * build trusts: a truncated marker would make the build refuse its own output.
+ */
+function writeFileReplacing(absPath: string, content: string): void {
+  fs.mkdirSync(path.dirname(absPath), { recursive: true });
+  const temp = `${absPath}.${String(process.pid)}.${randomUUID()}.tmp`;
+  fs.writeFileSync(temp, content, { encoding: 'utf-8', flag: 'wx' });
+  try {
+    fs.renameSync(temp, absPath);
+  } catch (error) {
+    fs.rmSync(temp, { force: true });
+    throw error;
   }
 }
 
@@ -909,8 +939,7 @@ function assertHookArtifactsInsidePlugin(
  *   the sidecar before the body, so a build interrupted between the two still owns the pair;
  * - with no sidecar, the body must carry the inline `_generated` sentinel that earlier toolkit
  *   versions wrote on the in-plugin Gemini copy.
- * Both paths must be regular files: writing through a symbolic link would change a file outside
- * the plugin ({@link assertHookArtifactsInsidePlugin} checks the hooks directory itself). Anything
+ * ({@link assertHookArtifactsInsidePlugin} has already refused links and non-file paths.) Anything
  * else would be silently discarded, so the build fails and the author ports it into
  * `hooks/claude.yaml`.
  *
@@ -924,15 +953,6 @@ function assertClaudeHooksFileOwned(
   if (!hookArtifacts.some((a) => a.absPath === hooksJson)) return;
   const sidecar = sidecarPath(hooksJson);
   const plugin = path.basename(pluginDir);
-  for (const candidate of [hooksJson, sidecar]) {
-    const stat = fs.lstatSync(candidate, { throwIfNoEntry: false });
-    if (stat !== undefined && !stat.isFile()) {
-      throw new Error(
-        `${plugin}: ${path.relative(pluginDir, candidate)} is not a regular file, so aipm build will not ` +
-          `write to it. Replace it with a regular file (or remove it) and rebuild.`,
-      );
-    }
-  }
   if (fs.existsSync(sidecar)) {
     if (isToolkitSentinelFor(fs.readFileSync(sidecar, 'utf-8'), 'sidecar', CLAUDE_HOOKS_SOURCES)) {
       return;
@@ -976,7 +996,13 @@ async function buildOnePlugin(
   assertHookArtifactsInsidePlugin(pluginDir, hookArtifacts);
   assertClaudeHooksFileOwned(pluginDir, hookArtifacts);
   for (const hookArtifact of hookArtifacts) {
-    writeFileEnsuringDir(hookArtifact.absPath, hookArtifact.expectedContent);
+    if (
+      hookArtifact.absPath === sidecarPath(path.join(pluginDir, 'hooks', CLAUDE_HOOKS_FILENAME))
+    ) {
+      writeFileReplacing(hookArtifact.absPath, hookArtifact.expectedContent);
+    } else {
+      writeFileEnsuringDir(hookArtifact.absPath, hookArtifact.expectedContent);
+    }
     if (hookArtifact.executable) {
       // writeFileSync's mode argument only applies at file creation, so an existing file (e.g. a
       // stale non-executable copy from before this artifact carried `executable: true`) would

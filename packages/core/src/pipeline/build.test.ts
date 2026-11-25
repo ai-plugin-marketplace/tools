@@ -948,6 +948,27 @@ describe('runBuild — Claude hooks/hooks.json migration', () => {
     expect(fs.existsSync(path.join(outside, 'cursor.json'))).toBe(false);
   });
 
+  it('refuses to write through a symlinked hooks/cursor.json', async () => {
+    // Regression: only parent directories were checked, so a linked leaf let the build rewrite
+    // an authored file outside the plugin.
+    const pluginDir = writePlugin(['cursor'], 'hooks: {}\n');
+    const outside = path.join(repoRoot ?? '', 'authored-cursor.json');
+    fs.writeFileSync(outside, '{"version":1,"hooks":{}}\n', 'utf-8');
+    fs.symlinkSync(outside, path.join(pluginDir, 'hooks', 'cursor.json'));
+
+    await expect(runBuild(pluginDir)).rejects.toThrow('is not a regular file');
+    expect(fs.readFileSync(outside, 'utf-8')).toBe('{"version":1,"hooks":{}}\n');
+  });
+
+  it('leaves no temporary files beside the hooks sidecar', async () => {
+    const pluginDir = writePlugin(['claude'], 'hooks: {}\n');
+    await runBuild(pluginDir);
+    await runBuild(pluginDir);
+    expect(fs.readdirSync(path.join(pluginDir, 'hooks')).filter((f) => f.endsWith('.tmp'))).toEqual(
+      [],
+    );
+  });
+
   it('rebuilds a generated pair whose line endings a checkout converted to CRLF', async () => {
     // Regression: the sidecar reader only accepted LF, so a CRLF checkout rejected its own output.
     const pluginDir = writePlugin(['claude'], 'hooks: {}\n');

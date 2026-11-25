@@ -915,17 +915,22 @@ function assertHookArtifactsInsidePlugin(
 /**
  * Write `content` to `absPath` by way of a new temporary sibling and a rename, so a failed or
  * short write never leaves a partial file at `absPath`. Used for the ownership marker the next
- * build trusts: a truncated marker would make the build refuse its own output.
+ * build trusts: a truncated marker would make the build refuse its own output. An unchanged file
+ * is left alone, and a replaced one keeps its permission bits.
  */
 function writeFileReplacing(absPath: string, content: string): void {
+  const existing = fs.statSync(absPath, { throwIfNoEntry: false });
+  if (existing !== undefined && fs.readFileSync(absPath, 'utf-8') === content) return;
   fs.mkdirSync(path.dirname(absPath), { recursive: true });
   const temp = `${absPath}.${String(process.pid)}.${randomUUID()}.tmp`;
-  fs.writeFileSync(temp, content, { encoding: 'utf-8', flag: 'wx' });
+  // `wx` creates the temporary file or fails, so cleanup only ever removes a file this call made.
+  fs.writeFileSync(temp, '', { flag: 'wx', mode: existing?.mode ?? 0o666 });
   try {
+    fs.writeFileSync(temp, content, 'utf-8');
+    if (existing !== undefined) fs.chmodSync(temp, existing.mode);
     fs.renameSync(temp, absPath);
-  } catch (error) {
+  } finally {
     fs.rmSync(temp, { force: true });
-    throw error;
   }
 }
 

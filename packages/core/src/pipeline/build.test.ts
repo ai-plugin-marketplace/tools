@@ -960,6 +960,21 @@ describe('runBuild — Claude hooks/hooks.json migration', () => {
     expect(fs.readFileSync(outside, 'utf-8')).toBe('{"version":1,"hooks":{}}\n');
   });
 
+  it('keeps the hooks sidecar permission bits when it rewrites the sidecar', async () => {
+    const pluginDir = writePlugin(['claude'], 'hooks: {}\n');
+    await runBuild(pluginDir);
+    const sidecar = sidecarPath(hooksJson(pluginDir));
+    fs.writeFileSync(
+      sidecar,
+      fs.readFileSync(sidecar, 'utf-8').replace(/# version: .*/, '# version: 0.0.1'),
+    );
+    fs.chmodSync(sidecar, 0o600);
+
+    await runBuild(pluginDir);
+    expect(fs.statSync(sidecar).mode & 0o777).toBe(0o600);
+    expect(fs.readFileSync(sidecar, 'utf-8')).not.toContain('0.0.1');
+  });
+
   it('leaves no temporary files beside the hooks sidecar', async () => {
     const pluginDir = writePlugin(['claude'], 'hooks: {}\n');
     await runBuild(pluginDir);

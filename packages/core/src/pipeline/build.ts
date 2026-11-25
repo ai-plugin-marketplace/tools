@@ -870,20 +870,32 @@ export function collectFilesRelative(dir: string): string[] {
 // Build one plugin
 // ---------------------------------------------------------------------------
 
-/**
- * Write a file, creating its parent directory, so that readers only ever see the old or the new
- * content. The bytes go to a temporary sibling that is then renamed over the target: a failed or
- * short write leaves the target untouched, and the rename gives the target a fresh inode instead
- * of rewriting one a hard link may share with a file outside the plugin.
- */
+/** Write a file ensuring its parent directory exists. */
 function writeFileEnsuringDir(absPath: string, content: string): void {
   fs.mkdirSync(path.dirname(absPath), { recursive: true });
-  const temp = `${absPath}.${String(process.pid)}.tmp`;
-  try {
-    fs.writeFileSync(temp, content, 'utf-8');
-    fs.renameSync(temp, absPath);
-  } finally {
-    fs.rmSync(temp, { force: true });
+  fs.writeFileSync(absPath, content, 'utf-8');
+}
+
+/**
+ * Refuse to write hook artifacts through a `hooks/` directory that resolves outside the plugin
+ * (a symlinked `hooks/`), which would overwrite files the plugin does not own.
+ *
+ * @throws {Error} If any planned hook artifact's directory resolves outside the plugin.
+ */
+function assertHookArtifactsInsidePlugin(
+  pluginDir: string,
+  hookArtifacts: readonly PluginHookArtifact[],
+): void {
+  const realPlugin = fs.realpathSync(pluginDir);
+  for (const dir of new Set(hookArtifacts.map((a) => path.dirname(a.absPath)))) {
+    if (!fs.existsSync(dir)) continue;
+    const rel = path.relative(realPlugin, fs.realpathSync(dir));
+    if (rel === '..' || rel.startsWith(`..${path.sep}`) || path.isAbsolute(rel)) {
+      throw new Error(
+        `${path.basename(pluginDir)}: ${path.relative(pluginDir, dir)}/ resolves outside the plugin ` +
+          `directory, so aipm build will not write into it. Replace the link with a real directory and rebuild.`,
+      );
+    }
   }
 }
 
@@ -898,8 +910,9 @@ function writeFileEnsuringDir(absPath: string, content: string): void {
  * - with no sidecar, the body must carry the inline `_generated` sentinel that earlier toolkit
  *   versions wrote on the in-plugin Gemini copy.
  * Both paths must be regular files: writing through a symbolic link would change a file outside
- * the plugin. Anything else would be silently discarded, so the build fails and the author ports
- * it into `hooks/claude.yaml`.
+ * the plugin ({@link assertHookArtifactsInsidePlugin} checks the hooks directory itself). Anything
+ * else would be silently discarded, so the build fails and the author ports it into
+ * `hooks/claude.yaml`.
  *
  * @throws {Error} If the build would replace a file it cannot prove it owns.
  */
@@ -911,17 +924,6 @@ function assertClaudeHooksFileOwned(
   if (!hookArtifacts.some((a) => a.absPath === hooksJson)) return;
   const sidecar = sidecarPath(hooksJson);
   const plugin = path.basename(pluginDir);
-  // The hooks directory itself must not lead outside the plugin (a symlinked hooks/).
-  const hooksDir = path.dirname(hooksJson);
-  if (fs.existsSync(hooksDir)) {
-    const rel = path.relative(fs.realpathSync(pluginDir), fs.realpathSync(hooksDir));
-    if (rel === '..' || rel.startsWith(`..${path.sep}`) || path.isAbsolute(rel)) {
-      throw new Error(
-        `${plugin}: hooks/ resolves outside the plugin directory, so aipm build will not write ` +
-          `hooks/hooks.json into it. Replace the link with a real directory and rebuild.`,
-      );
-    }
-  }
   for (const candidate of [hooksJson, sidecar]) {
     const stat = fs.lstatSync(candidate, { throwIfNoEntry: false });
     if (stat !== undefined && !stat.isFile()) {
@@ -971,6 +973,7 @@ async function buildOnePlugin(
 
   // ── In-plugin-dir generated hook JSONs (sentinel-carrying) ────────────────
   const hookArtifacts = computePluginHookArtifacts(pluginDir, envelope);
+  assertHookArtifactsInsidePlugin(pluginDir, hookArtifacts);
   assertClaudeHooksFileOwned(pluginDir, hookArtifacts);
   for (const hookArtifact of hookArtifacts) {
     writeFileEnsuringDir(hookArtifact.absPath, hookArtifact.expectedContent);

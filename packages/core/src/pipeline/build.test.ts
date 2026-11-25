@@ -937,17 +937,15 @@ describe('runBuild — Claude hooks/hooks.json migration', () => {
     expect(fs.existsSync(path.join(outside, 'hooks.json'))).toBe(false);
   });
 
-  it('replaces hooks/hooks.json without changing a hard-linked copy elsewhere', async () => {
-    // Regression: an in-place write rewrote the shared inode, changing the file outside the plugin.
-    const pluginDir = writePlugin(['claude'], 'hooks: {}\n');
-    await runBuild(pluginDir);
-    const outside = path.join(repoRoot ?? '', 'peer.json');
-    fs.writeFileSync(hooksJson(pluginDir), '{"hooks":{"Stop":[]}}\n', 'utf-8');
-    fs.linkSync(hooksJson(pluginDir), outside);
+  it('refuses to write Cursor hooks through a symlinked hooks directory', async () => {
+    // Regression: the containment check only ran when Claude output was planned.
+    const pluginDir = writePlugin(['cursor'], 'hooks: {}\n');
+    const outside = path.join(repoRoot ?? '', 'shared-hooks');
+    fs.renameSync(path.join(pluginDir, 'hooks'), outside);
+    fs.symlinkSync(outside, path.join(pluginDir, 'hooks'), 'dir');
 
-    await runBuild(pluginDir);
-    expect(fs.readFileSync(outside, 'utf-8')).toBe('{"hooks":{"Stop":[]}}\n');
-    expect(JSON.parse(fs.readFileSync(hooksJson(pluginDir), 'utf-8'))).toStrictEqual({ hooks: {} });
+    await expect(runBuild(pluginDir)).rejects.toThrow('resolves outside the plugin directory');
+    expect(fs.existsSync(path.join(outside, 'cursor.json'))).toBe(false);
   });
 
   it('rebuilds a generated pair whose line endings a checkout converted to CRLF', async () => {

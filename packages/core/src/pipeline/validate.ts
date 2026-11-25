@@ -551,7 +551,7 @@ export function validateEnvelopeAdherence(
   // bundle, and a Claude build replaces this file, so a copy still marked this way is stale.
   const hooksJson = path.join(pluginDir, 'hooks', 'hooks.json');
   if (
-    fs.existsSync(hooksJson) &&
+    fs.statSync(hooksJson, { throwIfNoEntry: false })?.isFile() === true &&
     isToolkitSentinelFor(fs.readFileSync(hooksJson, 'utf-8'), 'json-field', CLAUDE_HOOKS_SOURCES)
   ) {
     findings.push(
@@ -559,7 +559,7 @@ export function validateEnvelopeAdherence(
         'envelope-adherence',
         pluginName,
         `'hooks/hooks.json' is the Gemini hooks copy an earlier aipm build wrote; Claude Code, Codex and Open Plugins load it by default.`,
-        `Delete 'hooks/hooks.json' and run \`aipm build\` (Gemini reads its hooks from dist/gemini/; with the claude target the build writes Claude's hooks there).`,
+        `Make sure hooks/claude.yaml holds these hooks (port them from 'hooks/hooks.json' if it is missing), then delete 'hooks/hooks.json' and run \`aipm build\`. Gemini reads its hooks from dist/gemini/; with the claude target the build writes Claude's hooks to 'hooks/hooks.json'.`,
       ),
     );
   }

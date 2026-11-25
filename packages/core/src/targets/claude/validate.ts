@@ -358,9 +358,14 @@ const CLAUDE_HOOKS_FILE_KEYS: ReadonlySet<string> = new Set(['$schema', 'descrip
 function hasToolkitSidecar(hooksPath: string): boolean {
   const sidecar = sidecarPath(hooksPath);
   return (
-    fs.existsSync(sidecar) &&
+    isRegularFile(sidecar) &&
     isToolkitSentinelFor(fs.readFileSync(sidecar, 'utf-8'), 'sidecar', CLAUDE_HOOKS_SOURCES)
   );
+}
+
+/** Whether `absPath` is a regular file (not missing, a directory, or another kind of entry). */
+function isRegularFile(absPath: string): boolean {
+  return fs.statSync(absPath, { throwIfNoEntry: false })?.isFile() === true;
 }
 
 /**
@@ -376,6 +381,15 @@ function hasToolkitSidecar(hooksPath: string): boolean {
 function validateHooksFile(pluginDir: string, pluginName: string): Finding[] {
   const hooksPath = path.join(pluginDir, ...CLAUDE_HOOKS_PATH.split('/'));
   if (!fs.existsSync(hooksPath)) return [];
+  if (!isRegularFile(hooksPath)) {
+    return [
+      hardFinding(
+        pluginName,
+        `${CLAUDE_HOOKS_PATH} is not a regular file`,
+        `replace ${CLAUDE_HOOKS_PATH} with a JSON file, or remove it`,
+      ),
+    ];
+  }
 
   let raw: unknown;
   try {
@@ -409,22 +423,26 @@ function validateHooksFile(pluginDir: string, pluginName: string): Finding[] {
       ),
     ];
   }
-  // Claude Code reads `hooks` as an object mapping each event to an array of matcher groups.
+  // Claude Code reads `hooks` as an object mapping each event to an array of matcher groups, each
+  // an object with a `hooks` array of handlers. Event names and handler forms are left to the host.
   const hooks = (raw as Record<string, unknown>)['hooks'];
-  const badEvents =
-    typeof hooks === 'object' && hooks !== null && !Array.isArray(hooks)
-      ? Object.entries(hooks)
-          .filter(([, groups]) => !Array.isArray(groups))
-          .map(([event]) => event)
-      : undefined;
+  const isObject = (v: unknown): v is Record<string, unknown> =>
+    typeof v === 'object' && v !== null && !Array.isArray(v);
+  const isMatcherGroup = (g: unknown): boolean =>
+    isObject(g) && Array.isArray(g['hooks']) && g['hooks'].every(isObject);
+  const badEvents = isObject(hooks)
+    ? Object.entries(hooks)
+        .filter(([, groups]) => !Array.isArray(groups) || !groups.every(isMatcherGroup))
+        .map(([event]) => event)
+    : undefined;
   if (badEvents === undefined || badEvents.length > 0) {
     return [
       hardFinding(
         pluginName,
         badEvents === undefined
           ? `${CLAUDE_HOOKS_PATH} has no hooks object`
-          : `${CLAUDE_HOOKS_PATH} event(s) ${badEvents.join(', ')} must each hold an array of matcher groups`,
-        `give ${CLAUDE_HOOKS_PATH} the shape { "hooks": { "<Event>": [ { "hooks": [ ... ] } ] } }, or regenerate it with \`aipm build\``,
+          : `${CLAUDE_HOOKS_PATH} event(s) ${badEvents.join(', ')} must each hold an array of matcher groups, each with a hooks array of handler objects`,
+        `give ${CLAUDE_HOOKS_PATH} the shape { "hooks": { "<Event>": [ { "hooks": [ { ... } ] } ] } }, or regenerate it with \`aipm build\``,
       ),
     ];
   }
@@ -465,7 +483,7 @@ function validateOrphanedHooksFile(pluginDir: string, pluginName: string): Findi
     hardFinding(
       pluginName,
       `${CLAUDE_HOOKS_PATH} was generated from hooks/claude.yaml, which no longer exists, so Claude Code still loads the deleted hooks`,
-      `delete ${CLAUDE_HOOKS_PATH} and ${CLAUDE_HOOKS_PATH}.generated, or restore hooks/claude.yaml and run \`aipm build\``,
+      `restore hooks/claude.yaml and run \`aipm build\`; if these hooks are no longer wanted, delete ${CLAUDE_HOOKS_PATH} and ${CLAUDE_HOOKS_PATH}.generated`,
     ),
   ];
 }
@@ -480,7 +498,7 @@ function validateRetiredHooksFile(pluginDir: string, pluginName: string): Findin
     hardFinding(
       pluginName,
       `${RETIRED_CLAUDE_HOOKS_PATH} is no longer generated or loaded; Claude's hooks now live in ${CLAUDE_HOOKS_PATH}`,
-      `delete ${RETIRED_CLAUDE_HOOKS_PATH} and run \`aipm build\` to write ${CLAUDE_HOOKS_PATH}`,
+      `run \`aipm build\` to write ${CLAUDE_HOOKS_PATH} from hooks/claude.yaml (port the hooks there first if it is missing), point any manifest that names ${RETIRED_CLAUDE_HOOKS_PATH} at the new file, then delete ${RETIRED_CLAUDE_HOOKS_PATH}`,
     ),
   ];
 }

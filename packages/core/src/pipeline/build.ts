@@ -192,6 +192,15 @@ export function computePluginHookArtifacts(
     // hooks document; its sentinel lives in the sidecar, because the desktop app's remote plugin
     // sync drops a hooks.json that carries any other top-level key (such as `_generated`).
     const claudeHooksAbsPath = path.join(pluginDir, 'hooks', CLAUDE_HOOKS_FILENAME);
+    // The sidecar goes first: if the build stops between the two writes, the sidecar still marks
+    // the pair as toolkit-owned and the next build completes it.
+    artifacts.push({
+      absPath: sidecarPath(claudeHooksAbsPath),
+      source: yaml.source,
+      sentinelMode: 'sidecar',
+      target: 'claude',
+      expectedContent: sidecarContent(yaml.source, version),
+    });
     artifacts.push({
       absPath: claudeHooksAbsPath,
       source: yaml.source,
@@ -200,13 +209,6 @@ export function computePluginHookArtifacts(
       // Only `hooks` is written: `schemaVersion` is a source-only key, and Claude hosts reject any
       // top-level key in this file beyond $schema, description and hooks.
       expectedContent: serializeClaudeHooksJson({ hooks: parsed.hooks }),
-    });
-    artifacts.push({
-      absPath: sidecarPath(claudeHooksAbsPath),
-      source: yaml.source,
-      sentinelMode: 'sidecar',
-      target: 'claude',
-      expectedContent: sidecarContent(yaml.source, version),
     });
   }
 
@@ -875,38 +877,56 @@ function writeFileEnsuringDir(absPath: string, content: string): void {
 }
 
 /**
- * Refuse to overwrite a `hooks/hooks.json` the toolkit did not write.
+ * Refuse to overwrite a `hooks/hooks.json` or its sidecar that the toolkit did not write.
  *
  * `hooks/hooks.json` is a host-native default (Claude Code, Codex and Open Plugins all read it), so
- * a plugin may carry a hand-authored one. The build only replaces it when it is provably
- * toolkit-owned: its `.generated` sidecar carries this toolkit's sentinel, the file carries the
- * inline `_generated` sentinel that earlier toolkit versions wrote on the in-plugin Gemini copy,
- * or the file already holds exactly the bytes this build would write (a retry after the sidecar
- * write failed). Anything else would be silently discarded, so the build fails and the author
- * merges it into `hooks/claude.yaml`.
+ * a plugin may carry a hand-authored one, and its `.generated` name may be taken by another tool.
+ * The build only replaces the pair when it is provably toolkit-owned:
+ * - a sidecar, if present, must carry this toolkit's sentinel for the hooks YAML. The build writes
+ *   the sidecar before the body, so a build interrupted between the two still owns the pair;
+ * - with no sidecar, the body must carry the inline `_generated` sentinel that earlier toolkit
+ *   versions wrote on the in-plugin Gemini copy.
+ * Both paths must be regular files: writing through a symbolic link would change a file outside
+ * the plugin. Anything else would be silently discarded, so the build fails and the author ports
+ * it into `hooks/claude.yaml`.
  *
- * @throws {Error} If the build would replace a `hooks/hooks.json` it cannot prove it owns.
+ * @throws {Error} If the build would replace a file it cannot prove it owns.
  */
 function assertClaudeHooksFileOwned(
   pluginDir: string,
   hookArtifacts: readonly PluginHookArtifact[],
 ): void {
   const hooksJson = path.join(pluginDir, 'hooks', CLAUDE_HOOKS_FILENAME);
-  const artifact = hookArtifacts.find((a) => a.absPath === hooksJson);
-  if (artifact === undefined || !fs.existsSync(hooksJson)) return;
+  if (!hookArtifacts.some((a) => a.absPath === hooksJson)) return;
   const sidecar = sidecarPath(hooksJson);
+  const plugin = path.basename(pluginDir);
+  for (const candidate of [hooksJson, sidecar]) {
+    const stat = fs.lstatSync(candidate, { throwIfNoEntry: false });
+    if (stat !== undefined && !stat.isFile()) {
+      throw new Error(
+        `${plugin}: ${path.relative(pluginDir, candidate)} is not a regular file, so aipm build will not ` +
+          `write to it. Replace it with a regular file (or remove it) and rebuild.`,
+      );
+    }
+  }
+  if (fs.existsSync(sidecar)) {
+    if (isToolkitSentinelFor(fs.readFileSync(sidecar, 'utf-8'), 'sidecar', CLAUDE_HOOKS_SOURCES)) {
+      return;
+    }
+    throw new Error(
+      `${plugin}: hooks/hooks.json.generated exists and was not written by aipm, so building would ` +
+        `overwrite it. Remove or rename it, then rebuild.`,
+    );
+  }
+  if (!fs.existsSync(hooksJson)) return;
   if (
-    fs.existsSync(sidecar) &&
-    isToolkitSentinelFor(fs.readFileSync(sidecar, 'utf-8'), 'sidecar', CLAUDE_HOOKS_SOURCES)
+    isToolkitSentinelFor(fs.readFileSync(hooksJson, 'utf-8'), 'json-field', CLAUDE_HOOKS_SOURCES)
   ) {
     return;
   }
-  const body = fs.readFileSync(hooksJson, 'utf-8');
-  if (body === artifact.expectedContent) return;
-  if (isToolkitSentinelFor(body, 'json-field', CLAUDE_HOOKS_SOURCES)) return;
   throw new Error(
-    `${path.basename(pluginDir)}: hooks/hooks.json exists and was not generated by aipm, so building ` +
-      `would overwrite it. Move its hooks into hooks/claude.yaml, then delete hooks/hooks.json and rebuild.`,
+    `${plugin}: hooks/hooks.json exists and was not generated by aipm, so building would overwrite ` +
+      `it. Port its hooks into hooks/claude.yaml, check the rebuilt file, and only then delete the original.`,
   );
 }
 

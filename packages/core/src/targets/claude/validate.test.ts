@@ -599,6 +599,8 @@ describe('validateClaudePlugin', () => {
       ['an array', '[]'],
       ['a non-object hooks field', '{"hooks":42}'],
       ['an event that is not an array', '{"hooks":{"Stop":{}}}'],
+      ['a null matcher group', '{"hooks":{"Stop":[null]}}'],
+      ['a matcher group whose hooks is not an array', '{"hooks":{"Stop":[{"hooks":42}]}}'],
     ])('emits a HARD finding when a hand-written hooks/hooks.json is %s', (_label, body) => {
       // Regression: an unmarked hooks/hooks.json skipped every shape check, so a file Claude Code
       // cannot read passed validation.
@@ -609,6 +611,31 @@ describe('validateClaudePlugin', () => {
 
       expect(findings).toHaveLength(1);
       expect(findings[0]?.severity).toBe('hard');
+    });
+
+    it('emits a HARD finding instead of throwing when hooks/hooks.json is a directory', () => {
+      writeFile(tmpDir, '.claude-plugin/plugin.json', MINIMAL_MANIFEST);
+      fs.mkdirSync(path.join(tmpDir, 'hooks', 'hooks.json'), { recursive: true });
+
+      const findings = validateClaudePlugin(tmpDir);
+
+      expect(findings).toHaveLength(1);
+      expect(findings[0]?.message).toContain('not a regular file');
+    });
+
+    it('still detects an orphaned generated hooks/hooks.json after a CRLF checkout', () => {
+      writeFile(tmpDir, '.claude-plugin/plugin.json', MINIMAL_MANIFEST);
+      writeFile(tmpDir, 'hooks/hooks.json', VALID_HOOKS_JSON);
+      writeFile(
+        tmpDir,
+        'hooks/hooks.json.generated',
+        sidecarContent('hooks/claude.yaml', '0.11.0').replace(/\n/g, '\r\n'),
+      );
+
+      const findings = validateClaudePlugin(tmpDir);
+
+      expect(findings).toHaveLength(1);
+      expect(findings[0]?.message).toContain('no longer exists');
     });
 
     it('does not treat a sidecar another tool wrote as a generated hooks/hooks.json', () => {

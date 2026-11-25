@@ -235,11 +235,12 @@ function readJsonSentinelSource(content: string): string | undefined {
 }
 
 /**
- * Read the `source` from an inline/sidecar comment block. Returns `undefined` if the content
- * does not begin with the canonical two-line preamble followed by a `# source:` line.
+ * Read the `source` from an inline/sidecar comment block (LF or CRLF line endings). Returns
+ * `undefined` if the content does not begin with the canonical two-line preamble followed by a `# source:` line.
  */
 function readInlineSentinelSource(content: string): string | undefined {
-  const lines = content.split('\n');
+  // Accept CRLF too: a checkout with core.autocrlf rewrites committed sidecars that way.
+  const lines = content.split(/\r?\n/);
   if (lines[0] !== INLINE_LINE_1 || lines[1] !== INLINE_LINE_2) return undefined;
   const sourceLine = lines[2];
   if (!sourceLine?.startsWith(INLINE_SOURCE_PREFIX)) return undefined;
@@ -253,7 +254,7 @@ function readInlineSentinelSource(content: string): string | undefined {
  */
 function readInlineSentinelVersion(content: string): string | undefined {
   if (readInlineSentinelSource(content) === undefined) return undefined;
-  const versionLine = content.split('\n')[3];
+  const versionLine = content.split(/\r?\n/)[3];
   if (!versionLine?.startsWith(INLINE_VERSION_PREFIX)) return undefined;
   return versionLine.slice(INLINE_VERSION_PREFIX.length);
 }

@@ -9,7 +9,7 @@
  * marketplace-registration, freshness) are out of scope for this module.
  *
  * @see docs/specs/architecture.md §10 (validation contract), §8.1 (Finding types)
- * @see docs/specs/architecture.md §10.1.5 (auto-loaded `hooks/hooks.json`)
+ * @see docs/specs/architecture.md §10.1.5 (Claude hooks live in `hooks/hooks.json`)
  * @see docs/specs/architecture.md §12.5 (internal module shape)
  */
 
@@ -29,6 +29,8 @@ import {
   claudeHooksFileSchema,
   claudePluginManifestSchema,
 } from './schemas.js';
+import { isToolkitSentinelFor, sidecarPath } from '../../pipeline/sentinel.js';
+import { CLAUDE_HOOKS_FILENAME, CLAUDE_HOOKS_SOURCES } from './transform.js';
 
 // ---------------------------------------------------------------------------
 // Internal helpers
@@ -336,13 +338,58 @@ function validateAgentFrontmatter(pluginDir: string, pluginName: string): Findin
 // Hooks file validation
 // ---------------------------------------------------------------------------
 
+/** Plugin-relative POSIX path of the hooks file Claude Code loads on its own. */
+const CLAUDE_HOOKS_PATH = `hooks/${CLAUDE_HOOKS_FILENAME}`;
+
 /**
- * If `hooks/claude.json` exists, validate it parses as JSON and matches
- * `claudeHooksFileSchema`. Missing file → no finding (the file is optional).
+ * Plugin-relative POSIX path of the retired Claude hooks artifact. Earlier toolkit versions wrote
+ * Claude's hooks here and wired them in through the manifest `hooks` field.
+ */
+const RETIRED_CLAUDE_HOOKS_PATH = 'hooks/claude.json';
+
+/**
+ * Top-level keys a Claude `hooks/hooks.json` may carry. The Claude desktop app leaves the whole
+ * `hooks/` folder out of its remote (SSH) plugin sync when the file has any other key, so a plugin
+ * that works locally would silently lose its hooks on remote hosts.
+ */
+const CLAUDE_HOOKS_FILE_KEYS: ReadonlySet<string> = new Set(['$schema', 'description', 'hooks']);
+
+/** Whether the hooks file at `hooksPath` has a `.generated` sidecar this toolkit wrote. */
+function hasToolkitSidecar(hooksPath: string): boolean {
+  const sidecar = sidecarPath(hooksPath);
+  return (
+    isRegularFile(sidecar) &&
+    isToolkitSentinelFor(fs.readFileSync(sidecar, 'utf-8'), 'sidecar', CLAUDE_HOOKS_SOURCES)
+  );
+}
+
+/** Whether `absPath` is a regular file (not missing, a directory, or another kind of entry). */
+function isRegularFile(absPath: string): boolean {
+  return fs.statSync(absPath, { throwIfNoEntry: false })?.isFile() === true;
+}
+
+/**
+ * If `hooks/hooks.json` exists, validate it parses as JSON and carries only the keys Claude hosts
+ * accept. Missing file → no finding (the file is optional).
+ *
+ * Claude Code auto-loads this file whoever wrote it, so the JSON and key checks apply to a
+ * hand-written one too, along with the object shape Claude Code reads. Only a toolkit-generated
+ * file (its `.generated` sidecar carries this toolkit's sentinel) is checked
+ * against `claudeHooksFileSchema`: that schema is the YAML compiler's source contract, which is
+ * narrower than the events and handler forms Claude Code accepts in a hand-written file.
  */
 function validateHooksFile(pluginDir: string, pluginName: string): Finding[] {
-  const hooksPath = path.join(pluginDir, 'hooks', 'claude.json');
+  const hooksPath = path.join(pluginDir, ...CLAUDE_HOOKS_PATH.split('/'));
   if (!fs.existsSync(hooksPath)) return [];
+  if (!isRegularFile(hooksPath)) {
+    return [
+      hardFinding(
+        pluginName,
+        `${CLAUDE_HOOKS_PATH} is not a regular file`,
+        `replace ${CLAUDE_HOOKS_PATH} with a JSON file, or remove it`,
+      ),
+    ];
+  }
 
   let raw: unknown;
   try {
@@ -351,21 +398,65 @@ function validateHooksFile(pluginDir: string, pluginName: string): Finding[] {
     return [
       hardFinding(
         pluginName,
-        `hooks/claude.json is not valid JSON`,
-        `fix the JSON syntax in hooks/claude.json or regenerate it with \`aipm build\``,
+        `${CLAUDE_HOOKS_PATH} is not valid JSON`,
+        `fix the JSON syntax in ${CLAUDE_HOOKS_PATH} or regenerate it with \`aipm build\``,
       ),
     ];
   }
 
-  // `hooks/claude.json` is a toolkit-generated, JSON-field-sentinel carrier (§4.3): the build
-  // writes a top-level `_generated` marker onto it. The hooks schema is `.strict()`, so we drop
-  // that toolkit-owned key before schema validation — it is not part of the Claude hooks format.
-  if (typeof raw === 'object' && raw !== null && !Array.isArray(raw) && '_generated' in raw) {
-    const { _generated: _ignored, ...rest } = raw as Record<string, unknown>;
-    raw = rest;
+  if (typeof raw !== 'object' || raw === null || Array.isArray(raw)) {
+    return [
+      hardFinding(
+        pluginName,
+        `${CLAUDE_HOOKS_PATH} must be a JSON object with a hooks field`,
+        `wrap the hooks in { "hooks": { ... } } or regenerate ${CLAUDE_HOOKS_PATH} with \`aipm build\``,
+      ),
+    ];
   }
+  const extra = Object.keys(raw).filter((k) => !CLAUDE_HOOKS_FILE_KEYS.has(k));
+  if (extra.length > 0) {
+    return [
+      hardFinding(
+        pluginName,
+        `${CLAUDE_HOOKS_PATH} has top-level key(s) ${extra.join(', ')}: the Claude desktop app drops hooks from its remote plugin sync unless the file has only $schema, description and hooks`,
+        `remove ${extra.join(', ')} from ${CLAUDE_HOOKS_PATH}, or regenerate it with \`aipm build\` (generated files keep their marker in ${CLAUDE_HOOKS_PATH}.generated)`,
+      ),
+    ];
+  }
+  // Claude Code reads `hooks` as an object mapping each event to an array of matcher groups, each
+  // an object with a `hooks` array of handlers. Event names and handler forms are left to the host.
+  const hooks = (raw as Record<string, unknown>)['hooks'];
+  const isObject = (v: unknown): v is Record<string, unknown> =>
+    typeof v === 'object' && v !== null && !Array.isArray(v);
+  // Every handler names its `type`; a command handler also needs the `command` it runs.
+  const isHandler = (h: unknown): boolean =>
+    isObject(h) &&
+    typeof h['type'] === 'string' &&
+    (h['type'] !== 'command' || typeof h['command'] === 'string');
+  const isMatcherGroup = (g: unknown): boolean =>
+    isObject(g) && Array.isArray(g['hooks']) && g['hooks'].every(isHandler);
+  const badEvents = isObject(hooks)
+    ? Object.entries(hooks)
+        .filter(([, groups]) => !Array.isArray(groups) || !groups.every(isMatcherGroup))
+        .map(([event]) => event)
+    : undefined;
+  if (badEvents === undefined || badEvents.length > 0) {
+    return [
+      hardFinding(
+        pluginName,
+        badEvents === undefined
+          ? `${CLAUDE_HOOKS_PATH} has no hooks object`
+          : `${CLAUDE_HOOKS_PATH} event(s) ${badEvents.join(', ')} must each hold an array of matcher groups, each with a hooks array of handlers that have a type (and a command, for command handlers)`,
+        `give ${CLAUDE_HOOKS_PATH} the shape { "hooks": { "<Event>": [ { "hooks": [ { "type": "command", "command": "..." } ] } ] } }, or regenerate it with \`aipm build\``,
+      ),
+    ];
+  }
+  // `description` is accepted by Claude hosts but is not part of the hooks schema proper.
+  const { description: _description, $schema: _schema, ...rest } = raw as Record<string, unknown>;
 
-  const result = claudeHooksFileSchema.safeParse(raw);
+  if (!hasToolkitSidecar(hooksPath)) return [];
+
+  const result = claudeHooksFileSchema.safeParse(rest);
   if (!result.success) {
     const issues = result.error.issues
       .map((i) => `${i.path.join('.') || '(root)'}: ${i.message}`)
@@ -373,7 +464,7 @@ function validateHooksFile(pluginDir: string, pluginName: string): Finding[] {
     return [
       hardFinding(
         pluginName,
-        `hooks/claude.json does not match the hooks schema — ${issues}`,
+        `${CLAUDE_HOOKS_PATH} does not match the hooks schema — ${issues}`,
         `check that hooks use only known event names (PreToolUse, PostToolUse, Stop, UserPromptSubmit) and regenerate with \`aipm build\``,
       ),
     ];
@@ -382,49 +473,64 @@ function validateHooksFile(pluginDir: string, pluginName: string): Finding[] {
   return [];
 }
 
-// ---------------------------------------------------------------------------
-// Auto-loaded hooks/hooks.json duplicate-reference validation
-// ---------------------------------------------------------------------------
-
 /**
- * The plugin-relative path Claude Code loads automatically, in POSIX form.
- *
- * Claude Code auto-loads `<pluginDir>/hooks/hooks.json` when the file is present; a manifest
- * `hooks` reference to that same file is a *duplicate* registration and Claude Code hard-errors
- * ("Duplicate hooks file detected … The standard hooks/hooks.json is loaded automatically, so
- * manifest.hooks should only reference additional hook files").
- *
- * @see https://code.claude.com/docs/en/plugins-reference — Hooks component location:
- * "`hooks/hooks.json` in plugin root, or inline in plugin.json"; the manifest `hooks` field
- * names *additional* hook config paths (`"./my-extra-hooks.json"`).
+ * Flag a generated `hooks/hooks.json` whose source `hooks/claude.yaml` is gone. Claude Code would
+ * keep loading hooks the author deleted, and freshness cannot see it because no source produces
+ * the file any more.
  */
-const CLAUDE_AUTOLOADED_HOOKS_PATH = 'hooks/hooks.json';
-
-/**
- * Normalize a manifest path ref for comparison against a plugin-relative POSIX path:
- * backslashes → `/`, collapse `.` segments and duplicate separators, strip a leading `./`.
- * Returns `null` for a ref that escapes the plugin dir (`../…`), which is rejected elsewhere.
- */
-function toPluginRelativePosix(ref: string): string | null {
-  const normalized = path.posix.normalize(ref.replace(/\\/g, '/'));
-  if (normalized === '..' || normalized.startsWith('../')) return null;
-  return normalized.replace(/^\.\//, '');
+function validateOrphanedHooksFile(pluginDir: string, pluginName: string): Finding[] {
+  if (!hasToolkitSidecar(path.join(pluginDir, ...CLAUDE_HOOKS_PATH.split('/')))) return [];
+  const hasSource = ['claude.yaml', 'claude.yml'].some((name) =>
+    fs.existsSync(path.join(pluginDir, 'hooks', name)),
+  );
+  if (hasSource) return [];
+  return [
+    hardFinding(
+      pluginName,
+      `${CLAUDE_HOOKS_PATH} was generated from hooks/claude.yaml, which no longer exists, so Claude Code still loads the deleted hooks`,
+      `restore hooks/claude.yaml and run \`aipm build\`; if these hooks are no longer wanted, delete ${CLAUDE_HOOKS_PATH} and ${CLAUDE_HOOKS_PATH}.generated`,
+    ),
+  ];
 }
 
 /**
- * Reject a manifest `hooks` reference that resolves to the plugin's auto-loaded
- * `hooks/hooks.json`.
- *
- * This is not a filesystem-existence problem (that is {@link checkRef}'s job) — it is a
- * *duplicate registration*: Claude Code loads `hooks/hooks.json` on its own, so naming it in the
- * manifest makes the host refuse to load the plugin. In this toolkit `hooks/hooks.json` is the
- * shared Codex/Gemini artifact and `hooks/claude.json` is Claude's, so a manifest pointing at
- * `hooks/hooks.json` is always wrong for the Claude target.
- *
- * Reads the manifest JSON directly rather than the schema-parsed value so an array-valued `hooks`
- * field — legal in Claude Code, not modeled by `claudePluginManifestSchema` — is still caught.
+ * Flag a leftover `hooks/claude.json` from an earlier toolkit version. Nothing loads it any more,
+ * so keeping it only invites a manifest reference that would break remote sync.
  */
-function validateHooksAutoloadDuplicate(pluginDir: string, pluginName: string): Finding[] {
+function validateRetiredHooksFile(pluginDir: string, pluginName: string): Finding[] {
+  if (!fs.existsSync(path.join(pluginDir, ...RETIRED_CLAUDE_HOOKS_PATH.split('/')))) return [];
+  return [
+    hardFinding(
+      pluginName,
+      `${RETIRED_CLAUDE_HOOKS_PATH} is no longer generated or loaded; Claude's hooks now live in ${CLAUDE_HOOKS_PATH}`,
+      `run \`aipm build\` to write ${CLAUDE_HOOKS_PATH} from hooks/claude.yaml (port the hooks there first if it is missing); point a Cursor manifest that names ${RETIRED_CLAUDE_HOOKS_PATH} at ./hooks/cursor.json and a Codex manifest at ./${CLAUDE_HOOKS_PATH}; then delete ${RETIRED_CLAUDE_HOOKS_PATH}`,
+    ),
+  ];
+}
+
+// ---------------------------------------------------------------------------
+// Manifest hooks field validation
+// ---------------------------------------------------------------------------
+
+/**
+ * Reject any `hooks` field in `.claude-plugin/plugin.json`, whether a path, an array of paths, or
+ * an inline object (including one under `experimental`).
+ *
+ * Two host behaviors make the field wrong for toolkit plugins:
+ *
+ * - Claude Code auto-loads `hooks/hooks.json`, and naming that file in the manifest is a duplicate
+ *   registration that makes it refuse the plugin ("Duplicate hooks file detected").
+ * - The Claude desktop app refuses to sync a plugin to remote (SSH) hosts when its manifest has a
+ *   `hooks` field at all ("refusing plugin that relocates hooks via manifest"), so the plugin is
+ *   missing from every remote session.
+ *
+ * Reads the manifest JSON directly rather than the schema-parsed value so an array-valued or
+ * inline `hooks` field, legal in Claude Code but not modeled by `claudePluginManifestSchema`, is
+ * still caught.
+ *
+ * @see https://code.claude.com/docs/en/plugins-reference
+ */
+function validateManifestHooksField(pluginDir: string, pluginName: string): Finding[] {
   const manifestPath = path.join(pluginDir, '.claude-plugin', 'plugin.json');
   if (!fs.existsSync(manifestPath)) return [];
 
@@ -437,27 +543,23 @@ function validateHooksAutoloadDuplicate(pluginDir: string, pluginName: string): 
   }
 
   if (typeof raw !== 'object' || raw === null || Array.isArray(raw)) return [];
-  const hooksField = (raw as Record<string, unknown>)['hooks'];
+  const manifest = raw as Record<string, unknown>;
+  const experimental = manifest['experimental'];
+  const inExperimental =
+    typeof experimental === 'object' &&
+    experimental !== null &&
+    !Array.isArray(experimental) &&
+    'hooks' in experimental;
+  if (!('hooks' in manifest) && !inExperimental) return [];
 
-  const refs: string[] = [];
-  if (typeof hooksField === 'string') {
-    refs.push(hooksField);
-  } else if (Array.isArray(hooksField)) {
-    refs.push(...hooksField.filter((v): v is string => typeof v === 'string'));
-  }
-
-  const findings: Finding[] = [];
-  for (const ref of refs) {
-    if (toPluginRelativePosix(ref) !== CLAUDE_AUTOLOADED_HOOKS_PATH) continue;
-    findings.push(
-      hardFinding(
-        pluginName,
-        `.claude-plugin/plugin.json hooks references ${ref}: Claude Code auto-loads ${CLAUDE_AUTOLOADED_HOOKS_PATH} and errors on a duplicate manifest reference`,
-        `remove the ${ref} entry from the manifest hooks field (drop the field entirely if it names nothing else) — ${CLAUDE_AUTOLOADED_HOOKS_PATH} is loaded automatically. Claude's own hooks artifact is ./hooks/claude.json; the manifest hooks field may only name additional hook files.`,
-      ),
-    );
-  }
-  return findings;
+  const field = inExperimental && !('hooks' in manifest) ? 'experimental.hooks' : 'hooks';
+  return [
+    hardFinding(
+      pluginName,
+      `.claude-plugin/plugin.json has a ${field} field: Claude Code loads ${CLAUDE_HOOKS_PATH} on its own, and the Claude desktop app will not sync a plugin whose manifest names hooks to remote (SSH) hosts`,
+      `remove the ${field} field from .claude-plugin/plugin.json; author hooks in hooks/claude.yaml and run \`aipm build\`, which writes ${CLAUDE_HOOKS_PATH}`,
+    ),
+  ];
 }
 
 // ---------------------------------------------------------------------------
@@ -480,7 +582,9 @@ export function validateClaudePlugin(pluginDir: string): Finding[] {
     ...validateManifestFileRefs(pluginDir, pluginName),
     ...validateAgentFrontmatter(pluginDir, pluginName),
     ...validateHooksFile(pluginDir, pluginName),
-    ...validateHooksAutoloadDuplicate(pluginDir, pluginName),
+    ...validateRetiredHooksFile(pluginDir, pluginName),
+    ...validateOrphanedHooksFile(pluginDir, pluginName),
+    ...validateManifestHooksField(pluginDir, pluginName),
     ...validateOpenPluginsConformance(pluginDir, pluginName),
   ];
 }

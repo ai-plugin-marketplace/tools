@@ -4,7 +4,7 @@
  * (`targets/claude/schemas.ts`'s `claudeHookEventSchema`).
  *
  * This is a real event-name check on the pre-build YAML source, distinct from the schema-level
- * check the build already applies when compiling to `hooks/claude.json` (that one rejects the
+ * check the build already applies when compiling to `hooks/hooks.json` (that one rejects the
  * whole file with a generic Zod shape error; this one names the specific offending event key with
  * a range into the YAML source).
  */

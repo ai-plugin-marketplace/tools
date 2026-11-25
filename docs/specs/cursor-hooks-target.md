@@ -10,7 +10,7 @@ The toolkit models hooks with a single canonical source authored in Claude's dia
 (`computePluginHookArtifacts`, `packages/core/src/pipeline/build.ts`), gated on each plugin's
 envelope:
 
-- `claude` → `hooks/claude.json`
+- `claude` → `hooks/hooks.json` (was `hooks/claude.json` before architecture.md 0.4.5)
 - `gemini` → `hooks/hooks.json` (tool-name matchers translated PascalCase → snake_case)
 - `cursor` → **nothing**
 

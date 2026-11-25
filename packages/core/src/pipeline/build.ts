@@ -7,8 +7,10 @@
  * `targets/<id>/` (§7.2). Cross-target imports between `targets/<X>` and `targets/<Y>` are
  * forbidden, but the pipeline is permitted to orchestrate all of them.
  *
- * **Sentinel scope (§4.3).** Only the in-plugin-dir generated hook JSONs (`hooks/claude.json`,
- * `hooks/hooks.json`, `hooks/cursor.json`) carry a `_generated` JSON sentinel. The `dist/**` bundle trees are
+ * **Sentinel scope (§4.3).** Only the in-plugin-dir generated hook files carry a sentinel:
+ * `hooks/cursor.json` inline as a `_generated` JSON field, and `hooks/hooks.json` (Claude) in a
+ * `hooks/hooks.json.generated` sidecar, because Claude hosts accept no extra keys in that file. The
+ * `dist/**` bundle trees are
  * wholly-generated and stay sentinel-less so they remain byte-identical to the committed
  * template oracle; freshness for those is a whole-tree regeneration compare (§10.5).
  *
@@ -18,16 +20,21 @@
 import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
+import { randomUUID } from 'node:crypto';
 import { performance } from 'node:perf_hooks';
 
 import { PAYLOAD_ADAPTER_FILENAME, PAYLOAD_ADAPTER_SOURCE } from '../hooks/payload-adapter.js';
-import { parseClaudeHooksYaml } from '../targets/claude/transform.js';
+import {
+  CLAUDE_HOOKS_FILENAME,
+  CLAUDE_HOOKS_SOURCES,
+  parseClaudeHooksYaml,
+  serializeClaudeHooksJson,
+} from '../targets/claude/transform.js';
 import {
   convertClaudeHooksYamlToCursorJson,
   cursorDocHasGatingHook,
 } from '../targets/cursor/transform.js';
 import { CURSOR_SHIM_FILENAME, CURSOR_SHIM_RUNNER_SOURCE } from '../targets/cursor/shim-runner.js';
-import { convertClaudeHooksYamlToGeminiJson } from '../targets/gemini/transform.js';
 import { bundleGeminiPlugin } from '../targets/gemini/bundle.js';
 import { bundleKiroPlugin } from '../targets/kiro/bundle.js';
 
@@ -41,7 +48,13 @@ import {
 } from './generator-version.js';
 import { createConfigCache, loadPluginConfig, loadWorkspaceConfig } from './load-config.js';
 import type { ConfigCache } from './load-config.js';
-import { applyJsonSentinel, readSentinelVersion, sidecarContent, sidecarPath } from './sentinel.js';
+import {
+  applyJsonSentinel,
+  isToolkitSentinelFor,
+  readSentinelVersion,
+  sidecarContent,
+  sidecarPath,
+} from './sentinel.js';
 import type { SentinelMode } from './sentinel.js';
 import { runValidate } from './validate.js';
 import type {
@@ -104,8 +117,14 @@ function findHooksYaml(pluginDir: string): { absPath: string; source: string } |
  *   envelope declares — the adapter is useful to any handler, gating or not — but it IS skipped
  *   for a hooks YAML whose `hooks:` map is empty (`{}`): nothing could ever invoke it, so emitting
  *   the adapter would be dead weight (issue #58, nit 1).
- * - `claude` in envelope + a hooks YAML present → `hooks/claude.json` (Claude JSON + sentinel).
- * - `gemini` in envelope + a hooks YAML present → `hooks/hooks.json` (Gemini JSON + sentinel).
+ * - `claude` in envelope + a hooks YAML present → `hooks/hooks.json` (Claude JSON, sentinel-free)
+ *   and its `hooks/hooks.json.generated` sidecar. Claude Code auto-loads `hooks/hooks.json`, so the
+ *   manifest names no hooks file; the Claude desktop app refuses to sync a plugin to remote (SSH)
+ *   hosts when its manifest has a `hooks` field, and drops `hooks/hooks.json` from the sync when it
+ *   has any top-level key besides `$schema`, `description` and `hooks`
+ *   (docs/specs/hooks-json-autoload-collision.md, Option 4b).
+ * - `gemini` emits no in-plugin hook file: Gemini is emitted-installed and reads the
+ *   `dist/gemini/<plugin>/hooks/hooks.json` its bundler writes (same doc, Option 4a).
  * - `cursor` in envelope + a hooks YAML present → `hooks/cursor.json` (Cursor JSON + sentinel), plus
  *   — when ≥1 gating-event hook is present — the fail-closed shim runner `hooks/cursor-shim.mjs`
  *   (static JS, sidecar-carried sentinel) and its `hooks/cursor-shim.mjs.generated` sidecar
@@ -137,7 +156,7 @@ export function computePluginHookArtifacts(
   // Parsed+validated once, up front, regardless of envelope: `hooks/claude.yaml` is always
   // authored in the Claude Code dialect (this module's own doc), so this is the single source of
   // truth both for gating payload-adapter emission below (issue #58 nit 1) and, when 'claude' is
-  // declared, for `hooks/claude.json` — the YAML is never parsed twice.
+  // declared, for `hooks/hooks.json` — the YAML is never parsed twice.
   const parsed = parseClaudeHooksYaml(yamlContent);
   const hasHooks = Object.keys(parsed.hooks).length > 0;
 
@@ -170,27 +189,27 @@ export function computePluginHookArtifacts(
   }
 
   if (envelopeSet.has('claude')) {
+    // Claude reads `hooks/hooks.json` with no manifest reference. The file holds only the parsed
+    // hooks document; its sentinel lives in the sidecar, because the desktop app's remote plugin
+    // sync drops a hooks.json that carries any other top-level key (such as `_generated`).
+    const claudeHooksAbsPath = path.join(pluginDir, 'hooks', CLAUDE_HOOKS_FILENAME);
+    // The sidecar goes first: if the build stops between the two writes, the sidecar still marks
+    // the pair as toolkit-owned and the next build completes it.
     artifacts.push({
-      absPath: path.join(pluginDir, 'hooks', 'claude.json'),
+      absPath: sidecarPath(claudeHooksAbsPath),
       source: yaml.source,
-      sentinelMode: 'json-field',
+      sentinelMode: 'sidecar',
       target: 'claude',
-      expectedContent: applyJsonSentinel(parsed, yaml.source, version),
+      expectedContent: sidecarContent(yaml.source, version),
     });
-  }
-
-  if (envelopeSet.has('gemini')) {
-    // The Gemini transform returns a serialized string; parse it back to an object so the
-    // sentinel sits at the top level. applyJsonSentinel re-serializes 2-space + newline,
-    // matching the transform's own format, so the body round-trips byte-for-byte.
-    const geminiJson = convertClaudeHooksYamlToGeminiJson(yamlContent);
-    const geminiObj = JSON.parse(geminiJson) as unknown;
     artifacts.push({
-      absPath: path.join(pluginDir, 'hooks', 'hooks.json'),
+      absPath: claudeHooksAbsPath,
       source: yaml.source,
-      sentinelMode: 'json-field',
-      target: 'gemini',
-      expectedContent: applyJsonSentinel(geminiObj, yaml.source, version),
+      sentinelMode: 'sidecar',
+      target: 'claude',
+      // Only `hooks` is written: `schemaVersion` is a source-only key, and Claude hosts reject any
+      // top-level key in this file beyond $schema, description and hooks.
+      expectedContent: serializeClaudeHooksJson({ hooks: parsed.hooks }),
     });
   }
 
@@ -859,6 +878,114 @@ function writeFileEnsuringDir(absPath: string, content: string): void {
 }
 
 /**
+ * Refuse to write a hook artifact anywhere but a regular file inside the plugin: through a
+ * `hooks/` directory that resolves outside it, or to a path that is a symbolic link or other
+ * non-file entry. Writing there would change a file the plugin does not own.
+ *
+ * @throws {Error} If any planned hook artifact would be written outside a regular in-plugin file.
+ */
+function assertHookArtifactsInsidePlugin(
+  pluginDir: string,
+  hookArtifacts: readonly PluginHookArtifact[],
+): void {
+  const plugin = path.basename(pluginDir);
+  // `.native` returns the on-disk spelling, so case-insensitive aliases compare equal.
+  const realPlugin = fs.realpathSync.native(pluginDir);
+  for (const dir of new Set(hookArtifacts.map((a) => path.dirname(a.absPath)))) {
+    if (!fs.existsSync(dir)) continue;
+    const rel = path.relative(realPlugin, fs.realpathSync.native(dir));
+    if (rel === '..' || rel.startsWith(`..${path.sep}`) || path.isAbsolute(rel)) {
+      throw new Error(
+        `${plugin}: ${path.relative(pluginDir, dir)}/ resolves outside the plugin directory, so ` +
+          `aipm build will not write into it. Replace the link with a real directory and rebuild.`,
+      );
+    }
+  }
+  for (const { absPath } of hookArtifacts) {
+    const stat = fs.lstatSync(absPath, { throwIfNoEntry: false });
+    if (stat !== undefined && !stat.isFile()) {
+      throw new Error(
+        `${plugin}: ${path.relative(pluginDir, absPath)} is not a regular file, so aipm build will ` +
+          `not write to it. Replace it with a regular file (or remove it) and rebuild.`,
+      );
+    }
+  }
+}
+
+/**
+ * Write `content` to `absPath` by way of a new temporary sibling and a rename, so a failed or
+ * short write never leaves a partial file at `absPath`. Used for the ownership marker the next
+ * build trusts: a truncated marker would make the build refuse its own output. An unchanged file
+ * is left alone, and a replaced one keeps its permission bits.
+ */
+function writeFileReplacing(absPath: string, content: string): void {
+  const existing = fs.statSync(absPath, { throwIfNoEntry: false });
+  if (existing !== undefined && fs.readFileSync(absPath, 'utf-8') === content) return;
+  fs.mkdirSync(path.dirname(absPath), { recursive: true });
+  const temp = `${absPath}.${String(process.pid)}.${randomUUID()}.tmp`;
+  // `wx` creates the temporary file or fails, so cleanup only ever removes a file this call made.
+  // Writing through that descriptor works even when the mode is read-only. A new file gets the
+  // usual umask-filtered mode; a replaced one gets the old file's exact mode.
+  const fd = fs.openSync(temp, 'wx', existing?.mode ?? 0o666);
+  try {
+    try {
+      fs.writeFileSync(fd, content, 'utf-8');
+      if (existing !== undefined) fs.fchmodSync(fd, existing.mode);
+    } finally {
+      fs.closeSync(fd);
+    }
+    fs.renameSync(temp, absPath);
+  } finally {
+    fs.rmSync(temp, { force: true });
+  }
+}
+
+/**
+ * Refuse to overwrite a `hooks/hooks.json` or its sidecar that the toolkit did not write.
+ *
+ * `hooks/hooks.json` is a host-native default (Claude Code, Codex and Open Plugins all read it), so
+ * a plugin may carry a hand-authored one, and its `.generated` name may be taken by another tool.
+ * The build only replaces the pair when it is provably toolkit-owned:
+ * - a sidecar, if present, must carry this toolkit's sentinel for the hooks YAML. The build writes
+ *   the sidecar before the body, so a build interrupted between the two still owns the pair;
+ * - with no sidecar, the body must carry the inline `_generated` sentinel that earlier toolkit
+ *   versions wrote on the in-plugin Gemini copy.
+ * ({@link assertHookArtifactsInsidePlugin} has already refused links and non-file paths.) Anything
+ * else would be silently discarded, so the build fails and the author ports it into
+ * `hooks/claude.yaml`.
+ *
+ * @throws {Error} If the build would replace a file it cannot prove it owns.
+ */
+function assertClaudeHooksFileOwned(
+  pluginDir: string,
+  hookArtifacts: readonly PluginHookArtifact[],
+): void {
+  const hooksJson = path.join(pluginDir, 'hooks', CLAUDE_HOOKS_FILENAME);
+  if (!hookArtifacts.some((a) => a.absPath === hooksJson)) return;
+  const sidecar = sidecarPath(hooksJson);
+  const plugin = path.basename(pluginDir);
+  if (fs.existsSync(sidecar)) {
+    if (isToolkitSentinelFor(fs.readFileSync(sidecar, 'utf-8'), 'sidecar', CLAUDE_HOOKS_SOURCES)) {
+      return;
+    }
+    throw new Error(
+      `${plugin}: hooks/hooks.json.generated exists and was not written by aipm, so building would ` +
+        `overwrite it. Remove or rename it, then rebuild.`,
+    );
+  }
+  if (!fs.existsSync(hooksJson)) return;
+  if (
+    isToolkitSentinelFor(fs.readFileSync(hooksJson, 'utf-8'), 'json-field', CLAUDE_HOOKS_SOURCES)
+  ) {
+    return;
+  }
+  throw new Error(
+    `${plugin}: hooks/hooks.json exists and was not generated by aipm, so building would overwrite ` +
+      `it. Port its hooks into hooks/claude.yaml, check the rebuilt file, and only then delete the original.`,
+  );
+}
+
+/**
  * Build a single plugin: load envelope, emit in-plugin hook JSONs and dist bundles, and return
  * the `BuildResult` (without running validation — the caller orchestrates §5.4 validation once).
  */
@@ -876,8 +1003,17 @@ async function buildOnePlugin(
   const artifacts: GeneratedFile[] = [];
 
   // ── In-plugin-dir generated hook JSONs (sentinel-carrying) ────────────────
-  for (const hookArtifact of computePluginHookArtifacts(pluginDir, envelope)) {
-    writeFileEnsuringDir(hookArtifact.absPath, hookArtifact.expectedContent);
+  const hookArtifacts = computePluginHookArtifacts(pluginDir, envelope);
+  assertHookArtifactsInsidePlugin(pluginDir, hookArtifacts);
+  assertClaudeHooksFileOwned(pluginDir, hookArtifacts);
+  for (const hookArtifact of hookArtifacts) {
+    if (
+      hookArtifact.absPath === sidecarPath(path.join(pluginDir, 'hooks', CLAUDE_HOOKS_FILENAME))
+    ) {
+      writeFileReplacing(hookArtifact.absPath, hookArtifact.expectedContent);
+    } else {
+      writeFileEnsuringDir(hookArtifact.absPath, hookArtifact.expectedContent);
+    }
     if (hookArtifact.executable) {
       // writeFileSync's mode argument only applies at file creation, so an existing file (e.g. a
       // stale non-executable copy from before this artifact carried `executable: true`) would
@@ -952,6 +1088,19 @@ async function collectStampedArtifacts(
         path: path.relative(repoRoot, artifact.absPath),
         version,
       });
+    }
+    // Earlier toolkit versions stamped the in-plugin Gemini `hooks/hooks.json` inline
+    // (`_generated.version`). When this build replaces that file with Claude's hooks, a newer
+    // toolkit stamp there must still block an older generator. Another tool's marker is ignored.
+    const hooksJson = path.join(pluginDir, 'hooks', CLAUDE_HOOKS_FILENAME);
+    if (artifacts.some((a) => a.absPath === hooksJson) && fs.existsSync(hooksJson)) {
+      const onDisk = fs.readFileSync(hooksJson, 'utf-8');
+      const version = isToolkitSentinelFor(onDisk, 'json-field', CLAUDE_HOOKS_SOURCES)
+        ? readSentinelVersion(onDisk, 'json-field')
+        : undefined;
+      if (version !== undefined) {
+        stamped.push({ path: path.relative(repoRoot, hooksJson), version });
+      }
     }
   }
   return stamped;

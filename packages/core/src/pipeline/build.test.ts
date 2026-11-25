@@ -25,10 +25,10 @@ import { PAYLOAD_ADAPTER_FILENAME, PAYLOAD_ADAPTER_SOURCE } from '../hooks/paylo
 import { convertClaudeHooksYamlToJson } from '../targets/claude/transform.js';
 import { convertClaudeHooksYamlToCursorJson } from '../targets/cursor/transform.js';
 import { CURSOR_SHIM_FILENAME, CURSOR_SHIM_RUNNER_SOURCE } from '../targets/cursor/shim-runner.js';
-import { convertClaudeHooksYamlToGeminiJson } from '../targets/gemini/transform.js';
 import { computePluginHookArtifacts, runBuild } from './build.js';
 import { GeneratorDowngradeError, getGeneratorVersion } from './generator-version.js';
 import {
+  applyJsonSentinel,
   hasSentinel,
   readSentinelSource,
   readSentinelVersion,
@@ -129,44 +129,41 @@ describeMaybe('runBuild — in-plugin hook JSON sentinels (§4.3)', () => {
     repo.cleanup();
   });
 
-  it('writes hooks/claude.json with a json-field sentinel that strips to the Claude transform', async () => {
-    repo = synthPluginRepo(ALL_SYNTH_TARGETS);
-    await runBuild(repo.repoRoot);
-
-    const claudeJsonPath = path.join(repo.pluginDir, 'hooks', 'claude.json');
-    expect(fs.existsSync(claudeJsonPath)).toBe(true);
-
-    const onDisk = fs.readFileSync(claudeJsonPath, 'utf-8');
-    // §4.3: carries a json-field sentinel naming the author-authored source.
-    expect(hasSentinel(onDisk, 'json-field')).toBe(true);
-    expect(readSentinelSource(onDisk, 'json-field')).toBe('hooks/claude.yaml');
-
-    // §7.2: stripping the sentinel yields exactly the mechanical Claude transform output.
-    const yaml = fs.readFileSync(path.join(repo.pluginDir, 'hooks', 'claude.yaml'), 'utf-8');
-    expect(stripSentinel(onDisk, 'json-field')).toBe(convertClaudeHooksYamlToJson(yaml));
-  });
-
-  it('writes hooks/hooks.json (gemini) with a json-field sentinel that strips to the Gemini transform', async () => {
+  it('writes Claude hooks to hooks/hooks.json, sentinel-free, with a sidecar marker', async () => {
     repo = synthPluginRepo(ALL_SYNTH_TARGETS);
     await runBuild(repo.repoRoot);
 
     const hooksJsonPath = path.join(repo.pluginDir, 'hooks', 'hooks.json');
     expect(fs.existsSync(hooksJsonPath)).toBe(true);
 
+    // Claude hosts accept only $schema/description/hooks at the top level of hooks/hooks.json
+    // (the desktop app's remote sync drops anything else), so the body is exactly the Claude
+    // transform output and the sentinel lives in the sidecar.
     const onDisk = fs.readFileSync(hooksJsonPath, 'utf-8');
-    expect(hasSentinel(onDisk, 'json-field')).toBe(true);
-    expect(readSentinelSource(onDisk, 'json-field')).toBe('hooks/claude.yaml');
-
     const yaml = fs.readFileSync(path.join(repo.pluginDir, 'hooks', 'claude.yaml'), 'utf-8');
-    expect(stripSentinel(onDisk, 'json-field')).toBe(convertClaudeHooksYamlToGeminiJson(yaml));
+    expect(onDisk).toBe(convertClaudeHooksYamlToJson(yaml));
+    expect(Object.keys(JSON.parse(onDisk) as object)).toStrictEqual(['hooks']);
+
+    const sidecar = fs.readFileSync(sidecarPath(hooksJsonPath), 'utf-8');
+    expect(hasSentinel(sidecar, 'sidecar')).toBe(true);
+    expect(readSentinelSource(sidecar, 'sidecar')).toBe('hooks/claude.yaml');
   });
 
-  it('does NOT emit gemini hooks.json when gemini is absent from the envelope', async () => {
-    repo = synthPluginRepo(['claude']);
+  it('never writes the retired hooks/claude.json', async () => {
+    repo = synthPluginRepo(ALL_SYNTH_TARGETS);
+    await runBuild(repo.repoRoot);
+    expect(fs.existsSync(path.join(repo.pluginDir, 'hooks', 'claude.json'))).toBe(false);
+  });
+
+  it('writes no in-plugin hooks/hooks.json for a gemini-only envelope (Gemini reads its dist bundle)', async () => {
+    repo = synthPluginRepo(['gemini']);
     await runBuild(repo.pluginDir);
     expect(fs.existsSync(path.join(repo.pluginDir, 'hooks', 'hooks.json'))).toBe(false);
-    // claude.json IS emitted because claude is declared.
-    expect(fs.existsSync(path.join(repo.pluginDir, 'hooks', 'claude.json'))).toBe(true);
+    expect(
+      fs.existsSync(
+        path.join(repo.repoRoot, 'dist', 'gemini', SYNTH_PLUGIN_NAME, 'hooks', 'hooks.json'),
+      ),
+    ).toBe(true);
   });
 
   it('writes hooks/cursor.json (cursor) with a json-field sentinel that strips to the Cursor transform', async () => {
@@ -212,7 +209,7 @@ describeMaybe('runBuild — BuildResult shape (§8.1)', () => {
     const [result] = await runBuild(repo.repoRoot);
 
     const claudeArtifact = result?.artifacts.find(
-      (a) => a.path === path.join(repo.pluginDir, 'hooks', 'claude.json'),
+      (a) => a.path === path.join(repo.pluginDir, 'hooks', 'hooks.json'),
     );
     expect(claudeArtifact).toBeDefined();
     expect(claudeArtifact?.target).toBe('claude');
@@ -254,7 +251,7 @@ describeMaybe('runBuild — BuildResult shape (§8.1)', () => {
     const [result] = await runBuild(repo.pluginDir);
     // No dist trees: cursor/vercel have no bundle step.
     expect(fs.existsSync(path.join(repo.repoRoot, 'dist'))).toBe(false);
-    // Neither claude nor gemini is declared → their hook JSONs are absent.
+    // Claude is not declared → its hook file is absent.
     expect(fs.existsSync(path.join(repo.pluginDir, 'hooks', 'claude.json'))).toBe(false);
     expect(fs.existsSync(path.join(repo.pluginDir, 'hooks', 'hooks.json'))).toBe(false);
     // cursor IS declared and a hooks YAML is present → hooks/cursor.json is emitted.
@@ -548,15 +545,13 @@ describe('computePluginHookArtifacts — payload adapter', () => {
     }
   });
 
-  it('still emits hooks/claude.json for a hookless plugin when `claude` is declared — only the adapter is skipped', () => {
+  it('still emits hooks/hooks.json for a hookless plugin when `claude` is declared — only the adapter is skipped', () => {
     const dir = writePluginWithHooks(HOOKLESS_HOOKS_YAML);
     pluginDir = dir;
     const artifacts = computePluginHookArtifacts(dir, ['claude']);
-    const claudeJson = artifacts.find((a) => a.absPath === path.join(dir, 'hooks', 'claude.json'));
+    const claudeJson = artifacts.find((a) => a.absPath === path.join(dir, 'hooks', 'hooks.json'));
     expect(claudeJson).toBeDefined();
-    expect(
-      JSON.parse(stripSentinel(claudeJson?.expectedContent ?? '', 'json-field')) as unknown,
-    ).toStrictEqual({ hooks: {} });
+    expect(JSON.parse(claudeJson?.expectedContent ?? '') as unknown).toStrictEqual({ hooks: {} });
   });
 
   it('still emits hooks/payload-adapter + its sidecar when the plugin declares ≥1 hook — issue #58 nit 1 positive case', () => {
@@ -803,5 +798,228 @@ describe('runBuild — plugin-shaped repo-root subdirectory missing aipm.config.
     );
 
     await expect(runBuild(repoRoot)).rejects.toThrow(/aipm\.config\.ts/);
+  });
+});
+
+/**
+ * Claude hooks layout: `hooks/hooks.json` replaces `hooks/claude.json`.
+ *
+ * @see docs/specs/architecture.md §10.1.5
+ * @see docs/specs/hooks-json-autoload-collision.md
+ */
+describe('runBuild — Claude hooks/hooks.json migration', () => {
+  let repoRoot: string | undefined;
+
+  afterEach(() => {
+    if (repoRoot && fs.existsSync(repoRoot)) fs.rmSync(repoRoot, { recursive: true });
+  });
+
+  /** Scaffold a single-plugin repo declaring `targets` with the given hooks YAML. */
+  function writePlugin(targets: string[], yaml: string): string {
+    repoRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'aipm-claude-hooks-'));
+    const pluginDir = path.join(repoRoot, 'plugins', 'hooks-plugin');
+    fs.mkdirSync(path.join(pluginDir, 'hooks'), { recursive: true });
+    fs.writeFileSync(
+      path.join(pluginDir, 'aipm.config.ts'),
+      `import { defineConfig } from '@ai-plugin-marketplace/core';\n\nexport default defineConfig({\n  version: '0.1.0',\n  targets: ${JSON.stringify(targets)},\n});\n`,
+      'utf-8',
+    );
+    fs.writeFileSync(path.join(pluginDir, 'hooks', 'claude.yaml'), yaml, 'utf-8');
+    return pluginDir;
+  }
+
+  const hooksJson = (pluginDir: string): string => path.join(pluginDir, 'hooks', 'hooks.json');
+
+  it('drops the source-only schemaVersion key from hooks/hooks.json', async () => {
+    // Claude hosts reject top-level keys beyond $schema/description/hooks in this file.
+    const pluginDir = writePlugin(['claude'], 'schemaVersion: "0.1.0"\nhooks: {}\n');
+    await runBuild(pluginDir);
+    expect(JSON.parse(fs.readFileSync(hooksJson(pluginDir), 'utf-8'))).toStrictEqual({ hooks: {} });
+  });
+
+  it('refuses to overwrite a hand-written hooks/hooks.json and leaves it untouched', async () => {
+    const pluginDir = writePlugin(['claude'], 'hooks: {}\n');
+    const handWritten =
+      '{"hooks":{"Stop":[{"hooks":[{"type":"command","command":"echo mine"}]}]}}\n';
+    fs.writeFileSync(hooksJson(pluginDir), handWritten, 'utf-8');
+
+    await expect(runBuild(pluginDir)).rejects.toThrow('was not generated by aipm');
+    expect(fs.readFileSync(hooksJson(pluginDir), 'utf-8')).toBe(handWritten);
+  });
+
+  it('replaces the inline-marked hooks/hooks.json that earlier versions wrote for Gemini', async () => {
+    const pluginDir = writePlugin(['claude'], 'hooks: {}\n');
+    fs.writeFileSync(
+      hooksJson(pluginDir),
+      applyJsonSentinel({ hooks: {} }, 'hooks/claude.yaml', getGeneratorVersion()),
+      'utf-8',
+    );
+    await runBuild(pluginDir);
+    expect(JSON.parse(fs.readFileSync(hooksJson(pluginDir), 'utf-8'))).toStrictEqual({ hooks: {} });
+    expect(fs.existsSync(sidecarPath(hooksJson(pluginDir)))).toBe(true);
+  });
+
+  it('leaves a legacy hooks/claude.json in place for the author to retire', async () => {
+    // The build does not delete it: another manifest (for example Codex's) may still point at it,
+    // and `aipm validate` reports it with the steps to retire it.
+    const pluginDir = writePlugin(['claude'], 'hooks: {}\n');
+    const retired = path.join(pluginDir, 'hooks', 'claude.json');
+    const legacy = applyJsonSentinel({ hooks: {} }, 'hooks/claude.yaml', getGeneratorVersion());
+    fs.writeFileSync(retired, legacy, 'utf-8');
+    await runBuild(pluginDir);
+    expect(fs.readFileSync(retired, 'utf-8')).toBe(legacy);
+  });
+
+  it('refuses to overwrite when the only marker is a sidecar another tool wrote', async () => {
+    // Regression: any hooks/hooks.json.generated file authorized the overwrite.
+    const pluginDir = writePlugin(['claude'], 'hooks: {}\n');
+    const handWritten = '{"hooks":{}}\n';
+    fs.writeFileSync(hooksJson(pluginDir), handWritten, 'utf-8');
+    fs.writeFileSync(sidecarPath(hooksJson(pluginDir)), '# generated by unrelated tooling\n');
+
+    await expect(runBuild(pluginDir)).rejects.toThrow('was not written by aipm');
+    expect(fs.readFileSync(hooksJson(pluginDir), 'utf-8')).toBe(handWritten);
+  });
+
+  it('refuses to overwrite when the inline marker names another generator', async () => {
+    // Regression: the inline check ignored `_generated.by`.
+    const pluginDir = writePlugin(['claude'], 'hooks: {}\n');
+    const foreign = JSON.stringify({
+      _generated: { by: 'other-tool', source: 'hooks/claude.yaml' },
+      hooks: {},
+    });
+    fs.writeFileSync(hooksJson(pluginDir), foreign, 'utf-8');
+
+    await expect(runBuild(pluginDir)).rejects.toThrow('was not generated by aipm');
+    expect(fs.readFileSync(hooksJson(pluginDir), 'utf-8')).toBe(foreign);
+  });
+
+  it('completes on retry when an earlier build wrote the sidecar but not hooks/hooks.json', async () => {
+    // Regression: an interrupted build left an unretryable state. The sidecar is written first,
+    // so whatever body is left beside it is still toolkit-owned.
+    const pluginDir = writePlugin(['claude'], 'hooks: {}\n');
+    await runBuild(pluginDir);
+    fs.writeFileSync(hooksJson(pluginDir), '{"hooks":{"Stop":[]}}\n', 'utf-8');
+
+    await runBuild(pluginDir);
+    expect(JSON.parse(fs.readFileSync(hooksJson(pluginDir), 'utf-8'))).toStrictEqual({ hooks: {} });
+  });
+
+  it('refuses to replace a sidecar another tool wrote even when hooks/hooks.json is absent', async () => {
+    const pluginDir = writePlugin(['claude'], 'hooks: {}\n');
+    const foreign = '# owned by unrelated tooling\n';
+    fs.writeFileSync(sidecarPath(hooksJson(pluginDir)), foreign, 'utf-8');
+
+    await expect(runBuild(pluginDir)).rejects.toThrow('was not written by aipm');
+    expect(fs.readFileSync(sidecarPath(hooksJson(pluginDir)), 'utf-8')).toBe(foreign);
+  });
+
+  it('refuses to write through a symlinked hooks/hooks.json', async () => {
+    // Regression: the build could adopt a link to a shared file and later rewrite that file.
+    const pluginDir = writePlugin(['claude'], 'hooks: {}\n');
+    const shared = path.join(repoRoot ?? '', 'shared-hooks.json');
+    fs.writeFileSync(shared, '{"hooks":{}}\n', 'utf-8');
+    fs.symlinkSync(shared, hooksJson(pluginDir));
+
+    await expect(runBuild(pluginDir)).rejects.toThrow('is not a regular file');
+    expect(fs.readFileSync(shared, 'utf-8')).toBe('{"hooks":{}}\n');
+  });
+
+  it('refuses to write hooks/hooks.json through a symlinked hooks directory', async () => {
+    // Regression: only the leaf paths were checked, so a linked hooks/ let the build rewrite
+    // files outside the plugin.
+    const pluginDir = writePlugin(['claude'], 'hooks: {}\n');
+    const outside = path.join(repoRoot ?? '', 'shared-hooks');
+    fs.renameSync(path.join(pluginDir, 'hooks'), outside);
+    fs.symlinkSync(outside, path.join(pluginDir, 'hooks'), 'dir');
+
+    await expect(runBuild(pluginDir)).rejects.toThrow('resolves outside the plugin directory');
+    expect(fs.existsSync(path.join(outside, 'hooks.json'))).toBe(false);
+  });
+
+  it('refuses to write Cursor hooks through a symlinked hooks directory', async () => {
+    // Regression: the containment check only ran when Claude output was planned.
+    const pluginDir = writePlugin(['cursor'], 'hooks: {}\n');
+    const outside = path.join(repoRoot ?? '', 'shared-hooks');
+    fs.renameSync(path.join(pluginDir, 'hooks'), outside);
+    fs.symlinkSync(outside, path.join(pluginDir, 'hooks'), 'dir');
+
+    await expect(runBuild(pluginDir)).rejects.toThrow('resolves outside the plugin directory');
+    expect(fs.existsSync(path.join(outside, 'cursor.json'))).toBe(false);
+  });
+
+  it('refuses to write through a symlinked hooks/cursor.json', async () => {
+    // Regression: only parent directories were checked, so a linked leaf let the build rewrite
+    // an authored file outside the plugin.
+    const pluginDir = writePlugin(['cursor'], 'hooks: {}\n');
+    const outside = path.join(repoRoot ?? '', 'authored-cursor.json');
+    fs.writeFileSync(outside, '{"version":1,"hooks":{}}\n', 'utf-8');
+    fs.symlinkSync(outside, path.join(pluginDir, 'hooks', 'cursor.json'));
+
+    await expect(runBuild(pluginDir)).rejects.toThrow('is not a regular file');
+    expect(fs.readFileSync(outside, 'utf-8')).toBe('{"version":1,"hooks":{}}\n');
+  });
+
+  it.each([0o600, 0o444])(
+    'keeps hooks sidecar mode %o when it rewrites the sidecar',
+    async (mode) => {
+      const pluginDir = writePlugin(['claude'], 'hooks: {}\n');
+      await runBuild(pluginDir);
+      const sidecar = sidecarPath(hooksJson(pluginDir));
+      fs.writeFileSync(
+        sidecar,
+        fs.readFileSync(sidecar, 'utf-8').replace(/# version: .*/, '# version: 0.0.1'),
+      );
+      fs.chmodSync(sidecar, mode);
+
+      await runBuild(pluginDir);
+      expect(fs.statSync(sidecar).mode & 0o777).toBe(mode);
+      expect(fs.readFileSync(sidecar, 'utf-8')).not.toContain('0.0.1');
+    },
+  );
+
+  it('leaves no temporary files beside the hooks sidecar', async () => {
+    const pluginDir = writePlugin(['claude'], 'hooks: {}\n');
+    await runBuild(pluginDir);
+    await runBuild(pluginDir);
+    expect(fs.readdirSync(path.join(pluginDir, 'hooks')).filter((f) => f.endsWith('.tmp'))).toEqual(
+      [],
+    );
+  });
+
+  it('rebuilds a generated pair whose line endings a checkout converted to CRLF', async () => {
+    // Regression: the sidecar reader only accepted LF, so a CRLF checkout rejected its own output.
+    const pluginDir = writePlugin(['claude'], 'hooks: {}\n');
+    await runBuild(pluginDir);
+    for (const file of [hooksJson(pluginDir), sidecarPath(hooksJson(pluginDir))]) {
+      fs.writeFileSync(file, fs.readFileSync(file, 'utf-8').replace(/\n/g, '\r\n'), 'utf-8');
+    }
+
+    await expect(runBuild(pluginDir)).resolves.toBeDefined();
+  });
+
+  it('a newer inline stamp on the legacy Gemini hooks/hooks.json still blocks an older generator', async () => {
+    const pluginDir = writePlugin(['claude'], 'hooks: {}\n');
+    fs.writeFileSync(
+      hooksJson(pluginDir),
+      applyJsonSentinel({ hooks: {} }, 'hooks/claude.yaml', '999.0.0'),
+      'utf-8',
+    );
+    await expect(runBuild(pluginDir)).rejects.toBeInstanceOf(GeneratorDowngradeError);
+  });
+
+  it('ignores a foreign version stamp on a hooks/hooks.json the build leaves alone', async () => {
+    // Regression: a Codex-only plugin's native hooks.json with a foreign `_generated.version`
+    // raised GeneratorDowngradeError although the build never touches that file.
+    const pluginDir = writePlugin(['codex'], 'hooks: {}\n');
+    fs.writeFileSync(
+      hooksJson(pluginDir),
+      JSON.stringify({
+        _generated: { by: 'other-tool', source: 'other.yaml', version: '999.0.0' },
+        hooks: {},
+      }),
+      'utf-8',
+    );
+    await expect(runBuild(pluginDir)).resolves.toBeDefined();
   });
 });

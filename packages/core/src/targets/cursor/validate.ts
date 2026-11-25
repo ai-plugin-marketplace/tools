@@ -195,6 +195,42 @@ function rejectPathTraversal(pluginName: string, field: string, value: unknown):
 }
 
 // ---------------------------------------------------------------------------
+// Retired hooks reference (hooks/claude.json)
+// ---------------------------------------------------------------------------
+
+/**
+ * Flag a Cursor manifest whose `hooks` field names `hooks/claude.json`. Earlier toolkit versions
+ * generated that file for Claude; it is no longer written (Claude's hooks moved to the auto-loaded
+ * `hooks/hooks.json`), so the reference dangles and Cursor loads no hooks. Cursor's own generated
+ * artifact is `hooks/cursor.json`.
+ */
+function validateRetiredHooksRef(pluginDir: string, pluginName: string): Finding[] {
+  const manifestPath = path.join(pluginDir, '.cursor-plugin', 'plugin.json');
+  if (!fs.existsSync(manifestPath)) return [];
+  let raw: unknown;
+  try {
+    raw = JSON.parse(fs.readFileSync(manifestPath, 'utf-8'));
+  } catch {
+    return []; // reported by validateManifestFileRefs
+  }
+  if (typeof raw !== 'object' || raw === null || Array.isArray(raw)) return [];
+  const hooks = (raw as Record<string, unknown>)['hooks'];
+  const refs = typeof hooks === 'string' ? [hooks] : Array.isArray(hooks) ? hooks : [];
+  const retired = refs.filter(
+    (r): r is string =>
+      typeof r === 'string' &&
+      path.posix.normalize(r.replace(/\\/g, '/')).replace(/^\.\//, '') === 'hooks/claude.json',
+  );
+  return retired.map((ref) =>
+    makeInvalid(
+      pluginName,
+      `.cursor-plugin/plugin.json hooks references ${ref}, which the toolkit no longer generates`,
+      'point the hooks field at ./hooks/cursor.json, the Cursor hooks file `aipm build` writes',
+    ),
+  );
+}
+
+// ---------------------------------------------------------------------------
 // Generated hooks-file validation (hooks/cursor.json)
 // ---------------------------------------------------------------------------
 
@@ -331,6 +367,7 @@ export function validateCursorPlugin(pluginDir: string): Finding[] {
   const pluginName = path.basename(pluginDir);
   return [
     ...validateManifestFileRefs(pluginDir, pluginName),
+    ...validateRetiredHooksRef(pluginDir, pluginName),
     ...validateCursorHooksFile(pluginDir, pluginName),
     ...validateCursorRules(pluginDir, pluginName),
     ...validateOpenPluginsConformance(pluginDir, pluginName),

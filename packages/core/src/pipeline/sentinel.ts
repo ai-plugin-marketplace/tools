@@ -235,11 +235,12 @@ function readJsonSentinelSource(content: string): string | undefined {
 }
 
 /**
- * Read the `source` from an inline/sidecar comment block. Returns `undefined` if the content
- * does not begin with the canonical two-line preamble followed by a `# source:` line.
+ * Read the `source` from an inline/sidecar comment block (LF or CRLF line endings). Returns
+ * `undefined` if the content does not begin with the canonical two-line preamble followed by a `# source:` line.
  */
 function readInlineSentinelSource(content: string): string | undefined {
-  const lines = content.split('\n');
+  // Accept CRLF too: a checkout with core.autocrlf rewrites committed sidecars that way.
+  const lines = content.split(/\r?\n/);
   if (lines[0] !== INLINE_LINE_1 || lines[1] !== INLINE_LINE_2) return undefined;
   const sourceLine = lines[2];
   if (!sourceLine?.startsWith(INLINE_SOURCE_PREFIX)) return undefined;
@@ -253,7 +254,7 @@ function readInlineSentinelSource(content: string): string | undefined {
  */
 function readInlineSentinelVersion(content: string): string | undefined {
   if (readInlineSentinelSource(content) === undefined) return undefined;
-  const versionLine = content.split('\n')[3];
+  const versionLine = content.split(/\r?\n/)[3];
   if (!versionLine?.startsWith(INLINE_VERSION_PREFIX)) return undefined;
   return versionLine.slice(INLINE_VERSION_PREFIX.length);
 }
@@ -284,6 +285,37 @@ function readJsonSentinelVersion(content: string): string | undefined {
  */
 export function hasSentinel(content: string, mode: SentinelMode): boolean {
   return readSentinelSource(content, mode) !== undefined;
+}
+
+/**
+ * Whether `content` carries a sentinel this toolkit wrote for one of `sources`.
+ *
+ * {@link hasSentinel} only checks the carrier's shape, and the JSON carrier's shape says nothing
+ * about who wrote it. This also checks the generator identity (`_generated.by` for the JSON
+ * carrier; the inline and sidecar preamble already names {@link GENERATOR_ID}) and the recorded
+ * source. Another tool's marker, or a stray marker file, therefore never makes a file look
+ * toolkit-owned. Check this before replacing a file, deleting it, telling an author to delete it,
+ * or trusting its version stamp.
+ *
+ * @param content - File content to inspect (artifact body, or sidecar body for `'sidecar'`).
+ * @param mode - Which carrier to read.
+ * @param sources - Source paths (relative to the plugin dir) the file may have been generated from.
+ * @returns `true` iff the file carries this toolkit's sentinel for one of `sources`.
+ */
+export function isToolkitSentinelFor(
+  content: string,
+  mode: SentinelMode,
+  sources: readonly string[],
+): boolean {
+  const source = readSentinelSource(content, mode);
+  if (source === undefined || !sources.includes(source)) return false;
+  if (mode !== 'json-field') return true;
+  const generated = parseJsonObject(content)?.['_generated'];
+  return (
+    typeof generated === 'object' &&
+    generated !== null &&
+    (generated as Record<string, unknown>)['by'] === GENERATOR_ID
+  );
 }
 
 /**

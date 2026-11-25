@@ -1,12 +1,14 @@
 # ai-plugin-marketplace — Architecture Specification
 
 **Status:** Draft
-**Spec version:** 0.4.4
+**Spec version:** 0.4.5
 **Supersedes:** 0.4.3 (generator-version stamp + downgrade guard)
 **Last updated:** 2026-08-27
 **Scope:** Umbrella architecture for the `ai-plugin-marketplace/template` and `ai-plugin-marketplace/tools` repositories and the `@ai-plugin-marketplace/*` npm packages.
 
 > **Note to future readers.** This spec is durable documentation. It describes not only what the system does but _why_ each decision exists, which invariants must hold, and which capabilities are deferred with what hooks reserved so they can be added later without breaking changes. When the design evolves, update this document in the same change that moves the code.
+
+> **What changed from 0.4.4 → 0.4.5.** Claude's generated hooks move from `hooks/claude.json` (wired in through the manifest) to the auto-loaded `hooks/hooks.json`, with its sentinel in a `hooks/hooks.json.generated` sidecar. §10.1.5 now rejects any manifest `hooks` field and any leftover `hooks/claude.json`, because the Claude desktop app refuses to sync a plugin whose manifest names hooks to remote (SSH) hosts. The in-plugin Gemini `hooks/hooks.json` is no longer written. See Appendix B, 0.4.5.
 
 > **What changed from 0.4.3 → 0.4.4.** §10.1 gains a fifth validator category — **host-contract checks** — with its first rule, §10.1.5: a Claude manifest `hooks` reference that resolves to the auto-loaded `hooks/hooks.json` is a hard `schema-invalid`, because Claude Code loads that file automatically and errors on the duplicate. See Appendix B, 0.4.4.
 
@@ -88,7 +90,7 @@ Deterministic, lookup-table-driven, lossless transformations (tool-name mappings
 
 ### P5 — Both authored sources and generated outputs are committed [Active]
 
-Authors commit both hand-authored files and toolkit-generated files (`hooks/claude.json` from `hooks/claude.yaml`, `dist/gemini/*`, `dist/kiro/*`). CI enforces a freshness check (§10.5). Keeps plugins browsable on GitHub without running the toolkit; keeps PR diffs honest.
+Authors commit both hand-authored files and toolkit-generated files (`hooks/hooks.json` from `hooks/claude.yaml`, `dist/gemini/*`, `dist/kiro/*`). CI enforces a freshness check (§10.5). Keeps plugins browsable on GitHub without running the toolkit; keeps PR diffs honest.
 
 ### P6 — TypeScript end-to-end [Active]
 
@@ -200,7 +202,8 @@ plugins/<plugin-name>/
 ├── commands/                  # Commands (.md and .toml, hand-authored)
 ├── hooks/
 │   ├── claude.yaml            # YAML source (hand-authored)
-│   └── claude.json            # Toolkit-generated from .yaml
+│   ├── hooks.json             # Toolkit-generated from .yaml; Claude loads it automatically
+│   └── hooks.json.generated   # Sentinel sidecar for hooks.json
 ├── skills/
 │   └── <skill>/SKILL.md       # Skills (hand-authored)
 ├── steering/                  # Kiro steering (hand-authored)
@@ -376,7 +379,7 @@ A transformation is mechanical iff it is a **pure function driven by a committed
 | ---------------------------------------------------------------------- | ----------- | ----------------------------------------------- |
 | `Read`/`Edit`/`Grep`/… → `read_file`/`replace`/`search_file_content`/… | Gemini CLI  | `core/src/targets/gemini/tool-names.ts`         |
 | `Read`/`Edit`/`Grep`/… → `read`/`write`/`grep`/…                       | Kiro        | `core/src/targets/kiro/tool-names.ts`           |
-| `hooks/claude.yaml` → `hooks/claude.json`                              | Claude Code | `core/src/targets/claude/hooks.ts` (structural) |
+| `hooks/claude.yaml` → `hooks/hooks.json`                               | Claude Code | `core/src/targets/claude/hooks.ts` (structural) |
 | Agent `.md` → `.kiro/agents/<name>.json`                               | Kiro        | `core/src/targets/kiro/agents.ts`               |
 | Plugin dir → `dist/gemini/<plugin>/`                                   | Gemini CLI  | `core/src/targets/gemini/bundle.ts`             |
 | Plugin dir → `dist/kiro/<plugin>/`                                     | Kiro        | `core/src/targets/kiro/bundle.ts`               |
@@ -609,18 +612,29 @@ Validators run in defined order; each either passes or emits findings:
    - Marketplace registration: the plugin is listed in `.claude-plugin/marketplace.json` iff `claude` is in the envelope; likewise for Cursor.
 5. **Host-contract checks** — per-target rules that encode a host's own loading behavior rather than a schema shape. Currently one, for `claude` (§10.1.5).
 
-#### 10.1.5 Claude — no manifest reference to the auto-loaded `hooks/hooks.json` (hard)
+#### 10.1.5 Claude — hooks live in the auto-loaded `hooks/hooks.json`; the manifest names none (hard)
 
-Claude Code **auto-loads** `<pluginDir>/hooks/hooks.json` when that file is present; the manifest `hooks` field (`string | array | object`) names only _additional_ hook config files. Naming the auto-loaded file in the manifest is a duplicate registration and Claude Code refuses to load the plugin:
+Claude Code **auto-loads** `<pluginDir>/hooks/hooks.json` when that file is present. Naming that file in the manifest `hooks` field is a duplicate registration, and Claude Code refuses to load the plugin:
 
 ```
 Duplicate hooks file detected … The standard hooks/hooks.json is loaded automatically,
 so manifest.hooks should only reference additional hook files.
 ```
 
-> **Normative.** If `.claude-plugin/plugin.json`'s `hooks` field — the string value, or **any** string entry when it is an array — resolves (after normalizing a leading `./` and `.` segments) to the plugin-relative path `hooks/hooks.json`, `aipm validate` emits a **hard** `schema-invalid` finding. The hint is to remove the manifest reference, because the file is auto-loaded. Claude's toolkit-generated hooks artifact is `hooks/claude.json` (§7.2), which the manifest may reference normally.
+The Claude desktop app adds two stricter rules when it syncs a local plugin to a remote (SSH) host:
 
-The rule is deliberately about the _reference_, not the file: a plugin may legitimately carry `hooks/hooks.json` as the shared Codex/Gemini artifact (`adapter-system.md` D6) with no manifest reference at all, and that alone draws no finding here. The broader collision — Claude Code auto-loading a Gemini-format `hooks/hooks.json`, or double-loading Codex's copy of Claude's content — is a separate, unresolved design question tracked outside this section.
+- it refuses the whole plugin when `.claude-plugin/plugin.json` has a `hooks` field in any form (path, array, inline object, or under `experimental`): "refusing plugin that relocates hooks via manifest";
+- it syncs hooks only as `hooks/hooks.json`, and leaves `hooks/` out when that file has a top-level key other than `$schema`, `description` and `hooks`.
+
+So the toolkit writes Claude's hooks to `hooks/hooks.json` (§7.2), keeps that file's sentinel in a `hooks/hooks.json.generated` sidecar (§4.3), and never relies on the manifest field.
+
+> **Normative.** `aipm validate` emits a **hard** `schema-invalid` finding when:
+>
+> 1. `.claude-plugin/plugin.json` has a `hooks` field, or an `experimental.hooks` field, of any type;
+> 2. `hooks/hooks.json` has a top-level key other than `$schema`, `description` and `hooks`, or does not match the Claude hooks schema;
+> 3. `hooks/claude.json` exists (the artifact earlier toolkit versions wrote; nothing loads it).
+
+Gemini reads the `hooks/hooks.json` in its emitted `dist/gemini/<plugin>/` bundle, so the toolkit no longer writes a Gemini-dialect `hooks/hooks.json` into the plugin directory, where Claude Code would have auto-loaded it. The decision and the options weighed are in [`hooks-json-autoload-collision.md`](./hooks-json-autoload-collision.md).
 
 Implemented in `packages/core/src/targets/claude/validate.ts`; regression coverage in `validate.test.ts`.
 
@@ -630,7 +644,7 @@ Reference: [Claude Code plugins reference](https://code.claude.com/docs/en/plugi
 
 - Envelope, schema, and adherence errors are **hard**.
 - Cross-target consistency mismatches are **hard**.
-- Host-contract violations (§10.1.5) are **hard** — the host refuses to load the plugin.
+- Host-contract violations (§10.1.5) are **hard** — the host refuses to load or sync the plugin.
 - Freshness mismatches (see §10.5) are **hard** in CI, **soft** locally.
 - `ValidationResult.passed` is `true` iff no hard findings were emitted. Soft findings do not flip it.
 
@@ -878,3 +892,4 @@ How do authors test their plugins? A `@ai-plugin-marketplace/testing` package (o
 | 0.4.2   | 2026-07-15 | Reintroduced `'shared'` to `GeneratedFile.target` (now `GeneratedFileTarget = TargetId \| 'shared'`), 0.4.0 having dropped it as unused. Two build-internal artifacts genuinely have no single owning target — the payload adapter (and its sidecar), emitted for any plugin authoring hooks regardless of envelope, and the generated-root sidecar manifest, which spans every emitted single-artifact-host/registry owner — and had each been attributed to an arbitrary, deterministically-chosen single target as a workaround. Both now report `target: 'shared'` honestly instead. Breaking change to the `@public` `GeneratedFile.target` field. |
 | 0.4.3   | 2026-07-18 | Added the generator-version stamp + downgrade guard (§4.3.1): sentinel-carrying artifacts now record the producing `@ai-plugin-marketplace/core` version (`_generated.version` / `# version:` line), and `aipm build` refuses (non-zero exit, or `--force-downgrade`) when the installed toolkit is older than a stamped version — closing the silent-revert failure mode where a stale `node_modules` reverts committed artifacts to an older generator's output. Freshness (§10.5) compares modulo the version stamp so a version bump alone is not "stale". New `BuildOptions.forceDowngrade`.                                                       |
 | 0.4.4   | 2026-08-27 | Added §10.1 category 5, **host-contract checks**, and its first rule §10.1.5: Claude Code auto-loads `<pluginDir>/hooks/hooks.json` and hard-errors when the plugin manifest's `hooks` field also names it, so `aipm validate` now emits a hard `schema-invalid` when that field — string, or any string entry of an array — normalizes to `hooks/hooks.json`. §10.2 records host-contract violations as hard. Notes the still-open collision between this auto-load and the shared Codex/Gemini `hooks/hooks.json` artifact (`adapter-system.md` D6).                                                                                                  |
+| 0.4.5   | 2026-11-25 | Claude's generated hooks move from `hooks/claude.json` to the auto-loaded `hooks/hooks.json`, with the sentinel in a `hooks/hooks.json.generated` sidecar, because the Claude desktop app refuses to sync plugins whose manifest has a `hooks` field to remote hosts and drops a `hooks/hooks.json` with extra top-level keys. §10.1.5 now rejects any manifest `hooks` field, extra keys in `hooks/hooks.json`, and a leftover `hooks/claude.json`. The in-plugin Gemini `hooks/hooks.json` is no longer written; Gemini reads its dist bundle. Implements Option 4 of `hooks-json-autoload-collision.md`.                                             |

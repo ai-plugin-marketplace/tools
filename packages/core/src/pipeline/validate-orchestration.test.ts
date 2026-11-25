@@ -167,12 +167,12 @@ describeMaybe('runValidate — freshness (§10.5, §10.2)', () => {
     repo.cleanup();
   });
 
-  it('a hand-edited hooks/claude.json is a HARD freshness finding under ci:true', async () => {
+  it('a hand-edited hooks/hooks.json is a HARD freshness finding under ci:true', async () => {
     repo = synthPluginRepo(ALL_SYNTH_TARGETS);
     await runBuild(repo.repoRoot);
 
     // Schema-valid hand-edit: change a command string so ONLY freshness (not schema) fires.
-    const claudeJsonPath = path.join(repo.pluginDir, 'hooks', 'claude.json');
+    const claudeJsonPath = path.join(repo.pluginDir, 'hooks', 'hooks.json');
     const obj = JSON.parse(fs.readFileSync(claudeJsonPath, 'utf-8')) as {
       hooks: Record<string, { hooks: { command: string }[] }[]>;
     };
@@ -194,7 +194,7 @@ describeMaybe('runValidate — freshness (§10.5, §10.2)', () => {
     repo = synthPluginRepo(ALL_SYNTH_TARGETS);
     await runBuild(repo.repoRoot);
 
-    const claudeJsonPath = path.join(repo.pluginDir, 'hooks', 'claude.json');
+    const claudeJsonPath = path.join(repo.pluginDir, 'hooks', 'hooks.json');
     const obj = JSON.parse(fs.readFileSync(claudeJsonPath, 'utf-8')) as {
       hooks: Record<string, { hooks: { command: string }[] }[]>;
     };
@@ -247,48 +247,47 @@ describeMaybe('runValidate — freshness (§10.5, §10.2)', () => {
     expect(result.passed).toBe(false);
   });
 
-  it('a formatting-only (reindented) hooks/claude.json is still a HARD freshness finding (§4.3.1)', async () => {
+  it('a formatting-only (reindented) hooks/hooks.json is still a HARD freshness finding (§4.3.1)', async () => {
     // The generator-version normalization strips ONLY the version stamp, not formatting — so a
     // whitespace-only hand-edit of a generated JSON artifact (same data, same version, reindented)
     // must still be flagged as stale, not masked (Copilot #81).
     repo = synthPluginRepo(ALL_SYNTH_TARGETS);
     await runBuild(repo.repoRoot);
 
-    const claudeJsonPath = path.join(repo.pluginDir, 'hooks', 'claude.json');
+    const claudeJsonPath = path.join(repo.pluginDir, 'hooks', 'hooks.json');
     const obj = JSON.parse(fs.readFileSync(claudeJsonPath, 'utf-8')) as unknown;
     // Re-serialize with 4-space indent: identical data and version, different bytes only.
     fs.writeFileSync(claudeJsonPath, JSON.stringify(obj, null, 4) + '\n', 'utf-8');
 
     const result = await runValidate(repo.repoRoot, { ci: true });
     const fresh = ofCode(result.findings, 'freshness');
-    expect(fresh.some((f) => f.message.includes('claude.json'))).toBe(true);
+    expect(fresh.some((f) => f.message.includes('hooks.json'))).toBe(true);
     expect(result.passed).toBe(false);
   });
 
-  it('a pure generator-version bump in hooks/claude.json is NOT flagged (§4.3.1)', async () => {
+  it('a pure generator-version bump in the hooks/hooks.json sidecar is NOT flagged (§4.3.1)', async () => {
     // Conversely, an artifact that differs from a fresh build ONLY in its stamped version is fresh:
-    // a version bump alone must not mark every committed artifact stale.
+    // a version bump alone must not mark every committed artifact stale. Claude's hooks.json keeps
+    // its stamp in the `.generated` sidecar, so the bump is made there.
     repo = synthPluginRepo(ALL_SYNTH_TARGETS);
     await runBuild(repo.repoRoot);
 
-    const claudeJsonPath = path.join(repo.pluginDir, 'hooks', 'claude.json');
-    const obj = JSON.parse(fs.readFileSync(claudeJsonPath, 'utf-8')) as {
-      _generated: Record<string, unknown>;
-    };
-    // Bump only the stamp to a newer version, preserving canonical formatting.
-    obj._generated['version'] = '999.0.0';
-    fs.writeFileSync(claudeJsonPath, JSON.stringify(obj, null, 2) + '\n', 'utf-8');
+    const sidecar = path.join(repo.pluginDir, 'hooks', 'hooks.json.generated');
+    const before = fs.readFileSync(sidecar, 'utf-8');
+    const bumped = before.replace(/^(# version: ).*$/m, '$1999.0.0');
+    expect(bumped).not.toBe(before);
+    fs.writeFileSync(sidecar, bumped, 'utf-8');
 
     const result = await runValidate(repo.repoRoot, { ci: true });
     const fresh = ofCode(result.findings, 'freshness');
-    expect(fresh.some((f) => f.message.includes('claude.json'))).toBe(false);
+    expect(fresh.some((f) => f.message.includes('hooks.json'))).toBe(false);
   });
 
   it('skipFreshness suppresses the freshness check entirely', async () => {
     repo = synthPluginRepo(ALL_SYNTH_TARGETS);
     await runBuild(repo.repoRoot);
 
-    const claudeJsonPath = path.join(repo.pluginDir, 'hooks', 'claude.json');
+    const claudeJsonPath = path.join(repo.pluginDir, 'hooks', 'hooks.json');
     fs.appendFileSync(claudeJsonPath, ' ');
 
     const result = await runValidate(repo.repoRoot, { ci: true, skipFreshness: true });

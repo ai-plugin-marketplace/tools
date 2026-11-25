@@ -50,7 +50,8 @@ import {
 import type { ConfigCache } from './load-config.js';
 import type { AipmWorkspace } from '../config.js';
 import type { Finding, TargetId, ValidateOptions, ValidationResult } from './types.js';
-import { withoutGeneratorVersion } from './sentinel.js';
+import { isToolkitSentinelFor, withoutGeneratorVersion } from './sentinel.js';
+import { CLAUDE_HOOKS_SOURCES } from '../targets/claude/transform.js';
 import { createRuleContext } from '../lint/context.js';
 import { diagnosticToFinding } from '../lint/diagnostic.js';
 import {
@@ -82,6 +83,7 @@ const TARGET_OWNED_ARTIFACTS: Record<TargetId, string[]> = {
     '.claude-plugin/plugin.json',
     '.claude-plugin',
     'hooks/claude.yaml',
+    'hooks/hooks.json.generated',
     'hooks/claude.json',
   ],
   codex: ['.codex-plugin/plugin.json', '.codex-plugin'],
@@ -95,9 +97,13 @@ const TARGET_OWNED_ARTIFACTS: Record<TargetId, string[]> = {
 /**
  * Shared artifacts that require at least one of the listed targets in the envelope.
  * `.mcp.json` is the Claude/Cursor/Codex MCP config format, shared between those targets.
+ * `hooks/hooks.json` is the hooks file those hosts read by default.
  */
 const SHARED_ARTIFACTS: { file: string; anyOf: TargetId[] }[] = [
   { file: '.mcp.json', anyOf: ['claude', 'codex', 'cursor', 'open-plugins'] },
+  // The native default hooks file for Claude Code, Codex and Open Plugins. Its toolkit-generated
+  // form is marked by the Claude-owned `hooks/hooks.json.generated` sidecar.
+  { file: 'hooks/hooks.json', anyOf: ['claude', 'codex', 'open-plugins'] },
 ];
 
 /**
@@ -538,6 +544,35 @@ export function validateEnvelopeAdherence(
         ),
       );
     }
+  }
+
+  // Earlier toolkit versions wrote a Gemini-dialect copy of the hooks to hooks/hooks.json, which
+  // Claude Code, Codex and Open Plugins all load by default. Gemini now reads the copy in its dist
+  // bundle, and a Claude build replaces this file, so a copy still marked this way is stale.
+  const hooksJson = path.join(pluginDir, 'hooks', 'hooks.json');
+  const hooksJsonStat = fs.statSync(hooksJson, { throwIfNoEntry: false });
+  if (hooksJsonStat !== undefined && !hooksJsonStat.isFile()) {
+    findings.push(
+      hard(
+        'envelope-adherence',
+        pluginName,
+        `'hooks/hooks.json' is not a regular file; Claude Code, Codex and Open Plugins read hooks from it.`,
+        `Replace 'hooks/hooks.json' with a JSON hooks file, or remove it.`,
+      ),
+    );
+  }
+  if (
+    hooksJsonStat?.isFile() === true &&
+    isToolkitSentinelFor(fs.readFileSync(hooksJson, 'utf-8'), 'json-field', CLAUDE_HOOKS_SOURCES)
+  ) {
+    findings.push(
+      hard(
+        'envelope-adherence',
+        pluginName,
+        `'hooks/hooks.json' is the Gemini hooks copy an earlier aipm build wrote; Claude Code, Codex and Open Plugins load it by default.`,
+        `Make sure hooks/claude.yaml holds these hooks (port them from 'hooks/hooks.json' if it is missing). With the claude target, \`aipm build\` replaces the file with Claude's hooks. Without it, Gemini reads its hooks from dist/gemini/, so a Codex or Open Plugins plugin that needs hooks/hooks.json should add the claude target, or keep a hand-written hooks/hooks.json in its own format with no _generated key.`,
+      ),
+    );
   }
 
   // Check minimum required artifacts for targets IN the envelope
@@ -1192,8 +1227,8 @@ function freshnessFinding(
  * Freshness check for one plugin (§10.5). A generated file is stale when re-running `aipm build`
  * would change it. Two carriers:
  *
- * 1. **In-plugin hook JSONs** (`hooks/claude.json`, `hooks/hooks.json`) — recompute the expected
- *    bytes (transform + `_generated` sentinel) and compare to disk. A missing file, an absent or
+ * 1. **In-plugin hook files** (`hooks/hooks.json` + its `.generated` sidecar, `hooks/cursor.json`)
+ *    — recompute the expected bytes (transform + sentinel) and compare to disk. A missing file, an absent or
  *    altered sentinel, or any byte difference (e.g. a hand-edit) is stale.
  * 2. **`dist/**` bundle trees** — regenerate into a temp dir and byte-compare the whole tree
  *    (file set + contents). Any divergence names the offending path.

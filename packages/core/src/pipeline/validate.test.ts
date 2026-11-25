@@ -1420,6 +1420,23 @@ describe('validatePerTargetSchemas() — Kiro mcp.json server entries', () => {
     expect(validatePerTargetSchemas(pluginDir, ['kiro'])).toStrictEqual([]);
   });
 
+  it('accepts the Kiro CLI timeoutMs alias on its own', () => {
+    const pluginDir = kiroPluginWithServers({ local: { command: 'node', timeoutMs: 30000 } });
+
+    expect(validatePerTargetSchemas(pluginDir, ['kiro'])).toStrictEqual([]);
+  });
+
+  it('rejects a root $schema key', () => {
+    const pluginDir = kiroPluginWithServers({ local: { command: 'node' } });
+    write(pluginDir, 'mcp.json', {
+      $schema: 'https://agent-plugins.org/schemas/1.0.0/mcp.schema.json',
+      mcpServers: { local: { command: 'node' } },
+    });
+
+    const findings = validatePerTargetSchemas(pluginDir, ['kiro']);
+    expect(findings.some((f) => f.code === 'schema-invalid' && f.severity === 'hard')).toBe(true);
+  });
+
   it('rejects a server that sets both command and url', () => {
     const pluginDir = kiroPluginWithServers({
       both: { command: 'node', url: 'https://mcp.example.com/mcp' },

@@ -1,8 +1,7 @@
-# DRAFT (not an accepted spec) — `hooks/hooks.json` vs. Claude Code's auto-load
+# `hooks/hooks.json` vs. Claude Code's auto-load
 
-**Status:** Decision document. Nothing here is implemented.
-**Audience:** Mike, to pick a resolution.
-**Date:** 2026-08-25
+**Status:** Decided. Option 4 is adopted: 4a and the Claude half of 4b are implemented (architecture.md 0.4.5, §10.1.5). Codex keeps its own `hooks/codex.json` until VT-A is settled.
+**Date:** 2026-08-25, decided 2026-11-25
 **Companion change:** `architecture.md` §10.1.5 + `targets/claude/validate.ts` (the _guard_, already
 implemented) — this document is about the _root cause_ that guard papers over.
 
@@ -58,6 +57,14 @@ So the real, present-day failure is:
 
 The §10.1.5 guard catches the _loud_ variant (duplicate manifest reference). It does not catch the
 quiet ones (wrong-dialect auto-load, double-load from two files with identical content).
+
+---
+
+### 1.3 The remote-sync constraint (found 2026-11-25)
+
+The Claude desktop app syncs a user's local plugins to remote (SSH) hosts. Its sync refuses any plugin whose `.claude-plugin/plugin.json` has a `hooks` field, in any form ("refusing plugin that relocates hooks via manifest"), and syncs hooks only as `hooks/hooks.json` with no top-level keys besides `$schema`, `description` and `hooks`. Every toolkit plugin wired as `"hooks": "./hooks/claude.json"` was therefore missing from remote sessions, including plugins whose hooks file was empty.
+
+This rules out Option 1 for Claude (it depends on the manifest field) and makes Option 4b required rather than preferred. It also means the `_generated` sentinel cannot sit inside `hooks/hooks.json`, so the Claude artifact uses the sidecar carrier.
 
 ---
 

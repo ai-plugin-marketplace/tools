@@ -18,7 +18,7 @@
 
 Author-once is honored today by **faithful projection** (§7) + **omission** of what a target can't take (P2). Two realities make that insufficient — but **not** the one 0.1.0 assumed (per-host frontmatter rewriting):
 
-1. **Hosts read the same intent from different _locations_.** A skill's agent-vs-user invocation policy lives in `SKILL.md` frontmatter on Claude/Cursor (`disable-model-invocation`) but in a **sidecar `agents/openai.yaml`** (`policy.allow_implicit_invocation`, inverted) on Codex. Hooks live in `hooks/claude.json` on Claude, `hooks/hooks.json` on Codex. Author-once means the toolkit must **emit each host's native sidecar from the shared source** — not omit the capability.
+1. **Hosts read the same intent from different _locations_.** A skill's agent-vs-user invocation policy lives in `SKILL.md` frontmatter on Claude/Cursor (`disable-model-invocation`) but in a **sidecar `agents/openai.yaml`** (`policy.allow_implicit_invocation`, inverted) on Codex. Hooks live in the auto-loaded `hooks/hooks.json` on Claude, `hooks/codex.json` (or `hooks/hooks.json`) on Codex. Author-once means the toolkit must **emit each host's native sidecar from the shared source** — not omit the capability.
 2. **Single-artifact hosts can't represent a multi-plugin marketplace.** Gemini/Kiro install one extension/power per repo (`dogfood-marketplace-and-native-install.md` §3); a 12-plugin marketplace gets **zero** representation there today — dropped, not degraded.
 
 **Explicitly _not_ a driver (corrected from 0.1.0):** per-host `SKILL.md` frontmatter rewriting. Claude, Cursor, and Codex are all **lenient at runtime** — they require only `name`+`description` and tolerate unknown keys; the only load-fatal frontmatter defect is **invalid YAML**, which is a _validate-time gate on the source_ (`frontmatter-invalid`, already shipped in core 0.5.0), not an adaptation. (Evidence: `liaison` failed to load on Codex purely on a YAML parse error — an unquoted `": "` — not on any key; `dream` loaded fine on Codex carrying `arguments`/`user-invocable`.)
@@ -75,7 +75,7 @@ A bounded **adapter layer**: pure, lookup/rule-driven functions that, from **sha
 
 | Target | Install mode | What the adapter emits                                       |
 | ------ | ------------ | ------------------------------------------------------------ |
-| claude | source       | `hooks/claude.json`                                          |
+| claude | source       | `hooks/hooks.json` (auto-loaded, no manifest reference)      |
 | cursor | source       | hook sidecar (mechanism = **verify task T1**)                |
 | codex  | source       | `hooks/codex.json`, `agents/openai.yaml` (invocation policy) |
 | gemini | emitted      | `dist/gemini/…` bundle(s); unifier if `aggregate`            |
@@ -104,7 +104,7 @@ The agent-vs-user invocation controls do **not** live in the same place across h
 
 ### 4.2 Hooks adapter
 
-> **D6 (normative).** **Plugin-level hooks are the standard.** These are plugin marketplaces; the plugin is the install/enable unit. The shared hook source (`hooks/claude.yaml`) projects to each host's plugin-bundled hook artifact: `hooks/claude.json` (Claude), `hooks/hooks.json` or `hooks/codex.json` (Codex; verified plugin-bundled), the Cursor equivalent (**verify task T1**). Dropped events/matchers (e.g. a Codex-unsupported event) emit a soft `hook-adapted` finding.
+> **D6 (normative).** **Plugin-level hooks are the standard.** These are plugin marketplaces; the plugin is the install/enable unit. The shared hook source (`hooks/claude.yaml`) projects to each host's plugin-bundled hook artifact: `hooks/hooks.json` (Claude; auto-loaded, never named in the manifest — architecture.md §10.1.5), `hooks/hooks.json` or `hooks/codex.json` (Codex; verified plugin-bundled), the Cursor equivalent (**verify task T1**). Dropped events/matchers (e.g. a Codex-unsupported event) emit a soft `hook-adapted` finding.
 
 **Verified:** both Codex and Cursor carry hooks **in the plugin construct** (Codex `developers.openai.com/codex/plugins/build.md`: `hooks/hooks.json` or the `hooks` manifest field, but **non-managed — Codex skips them until the user reviews & trusts**; Cursor `cursor.com/docs/plugins`: a plugin may bundle Hooks). So **no global/project agent-install is needed**, and the `## Initial setup` agent-as-runtime polyfill is **reserved** for a genuinely hookless host — we have none.
 

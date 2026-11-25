@@ -870,10 +870,21 @@ export function collectFilesRelative(dir: string): string[] {
 // Build one plugin
 // ---------------------------------------------------------------------------
 
-/** Write a file ensuring its parent directory exists. */
+/**
+ * Write a file, creating its parent directory, so that readers only ever see the old or the new
+ * content. The bytes go to a temporary sibling that is then renamed over the target: a failed or
+ * short write leaves the target untouched, and the rename gives the target a fresh inode instead
+ * of rewriting one a hard link may share with a file outside the plugin.
+ */
 function writeFileEnsuringDir(absPath: string, content: string): void {
   fs.mkdirSync(path.dirname(absPath), { recursive: true });
-  fs.writeFileSync(absPath, content, 'utf-8');
+  const temp = `${absPath}.${String(process.pid)}.tmp`;
+  try {
+    fs.writeFileSync(temp, content, 'utf-8');
+    fs.renameSync(temp, absPath);
+  } finally {
+    fs.rmSync(temp, { force: true });
+  }
 }
 
 /**
@@ -900,6 +911,17 @@ function assertClaudeHooksFileOwned(
   if (!hookArtifacts.some((a) => a.absPath === hooksJson)) return;
   const sidecar = sidecarPath(hooksJson);
   const plugin = path.basename(pluginDir);
+  // The hooks directory itself must not lead outside the plugin (a symlinked hooks/).
+  const hooksDir = path.dirname(hooksJson);
+  if (fs.existsSync(hooksDir)) {
+    const rel = path.relative(fs.realpathSync(pluginDir), fs.realpathSync(hooksDir));
+    if (rel === '..' || rel.startsWith(`..${path.sep}`) || path.isAbsolute(rel)) {
+      throw new Error(
+        `${plugin}: hooks/ resolves outside the plugin directory, so aipm build will not write ` +
+          `hooks/hooks.json into it. Replace the link with a real directory and rebuild.`,
+      );
+    }
+  }
   for (const candidate of [hooksJson, sidecar]) {
     const stat = fs.lstatSync(candidate, { throwIfNoEntry: false });
     if (stat !== undefined && !stat.isFile()) {

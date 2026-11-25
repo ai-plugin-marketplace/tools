@@ -428,8 +428,13 @@ function validateHooksFile(pluginDir: string, pluginName: string): Finding[] {
   const hooks = (raw as Record<string, unknown>)['hooks'];
   const isObject = (v: unknown): v is Record<string, unknown> =>
     typeof v === 'object' && v !== null && !Array.isArray(v);
+  // Every handler names its `type`; a command handler also needs the `command` it runs.
+  const isHandler = (h: unknown): boolean =>
+    isObject(h) &&
+    typeof h['type'] === 'string' &&
+    (h['type'] !== 'command' || typeof h['command'] === 'string');
   const isMatcherGroup = (g: unknown): boolean =>
-    isObject(g) && Array.isArray(g['hooks']) && g['hooks'].every(isObject);
+    isObject(g) && Array.isArray(g['hooks']) && g['hooks'].every(isHandler);
   const badEvents = isObject(hooks)
     ? Object.entries(hooks)
         .filter(([, groups]) => !Array.isArray(groups) || !groups.every(isMatcherGroup))
@@ -441,8 +446,8 @@ function validateHooksFile(pluginDir: string, pluginName: string): Finding[] {
         pluginName,
         badEvents === undefined
           ? `${CLAUDE_HOOKS_PATH} has no hooks object`
-          : `${CLAUDE_HOOKS_PATH} event(s) ${badEvents.join(', ')} must each hold an array of matcher groups, each with a hooks array of handler objects`,
-        `give ${CLAUDE_HOOKS_PATH} the shape { "hooks": { "<Event>": [ { "hooks": [ { ... } ] } ] } }, or regenerate it with \`aipm build\``,
+          : `${CLAUDE_HOOKS_PATH} event(s) ${badEvents.join(', ')} must each hold an array of matcher groups, each with a hooks array of handlers that have a type (and a command, for command handlers)`,
+        `give ${CLAUDE_HOOKS_PATH} the shape { "hooks": { "<Event>": [ { "hooks": [ { "type": "command", "command": "..." } ] } ] } }, or regenerate it with \`aipm build\``,
       ),
     ];
   }
@@ -498,7 +503,7 @@ function validateRetiredHooksFile(pluginDir: string, pluginName: string): Findin
     hardFinding(
       pluginName,
       `${RETIRED_CLAUDE_HOOKS_PATH} is no longer generated or loaded; Claude's hooks now live in ${CLAUDE_HOOKS_PATH}`,
-      `run \`aipm build\` to write ${CLAUDE_HOOKS_PATH} from hooks/claude.yaml (port the hooks there first if it is missing), point any manifest that names ${RETIRED_CLAUDE_HOOKS_PATH} at the new file, then delete ${RETIRED_CLAUDE_HOOKS_PATH}`,
+      `run \`aipm build\` to write ${CLAUDE_HOOKS_PATH} from hooks/claude.yaml (port the hooks there first if it is missing); point a Cursor manifest that names ${RETIRED_CLAUDE_HOOKS_PATH} at ./hooks/cursor.json and a Codex manifest at ./${CLAUDE_HOOKS_PATH}; then delete ${RETIRED_CLAUDE_HOOKS_PATH}`,
     ),
   ];
 }

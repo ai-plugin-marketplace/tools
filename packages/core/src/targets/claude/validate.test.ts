@@ -601,6 +601,8 @@ describe('validateClaudePlugin', () => {
       ['an event that is not an array', '{"hooks":{"Stop":{}}}'],
       ['a null matcher group', '{"hooks":{"Stop":[null]}}'],
       ['a matcher group whose hooks is not an array', '{"hooks":{"Stop":[{"hooks":42}]}}'],
+      ['a handler with no type', '{"hooks":{"Stop":[{"hooks":[{}]}]}}'],
+      ['a command handler with no command', '{"hooks":{"Stop":[{"hooks":[{"type":"command"}]}]}}'],
     ])('emits a HARD finding when a hand-written hooks/hooks.json is %s', (_label, body) => {
       // Regression: an unmarked hooks/hooks.json skipped every shape check, so a file Claude Code
       // cannot read passed validation.

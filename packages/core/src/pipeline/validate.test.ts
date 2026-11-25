@@ -218,6 +218,15 @@ describe('validateEnvelopeAdherence()', () => {
     },
   );
 
+  it('flags a directory at hooks/hooks.json in a codex-only plugin', () => {
+    const pluginDir = path.join(tmpDir, 'my-plugin');
+    write(pluginDir, '.codex-plugin/plugin.json', { name: 'my-plugin' });
+    fs.mkdirSync(path.join(pluginDir, 'hooks', 'hooks.json'), { recursive: true });
+    const findings = validateEnvelopeAdherence(pluginDir, ['codex']);
+    expect(findings).toHaveLength(1);
+    expect(findings[0]?.message).toContain('not a regular file');
+  });
+
   it('flags the Gemini hooks copy an earlier build left at hooks/hooks.json', () => {
     // Regression: in a Codex+Gemini plugin the stale copy (Gemini matchers such as write_file)
     // stayed at Codex's default hooks path and passed validation as a native file.

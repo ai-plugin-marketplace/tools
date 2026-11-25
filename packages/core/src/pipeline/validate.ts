@@ -550,8 +550,19 @@ export function validateEnvelopeAdherence(
   // Claude Code, Codex and Open Plugins all load by default. Gemini now reads the copy in its dist
   // bundle, and a Claude build replaces this file, so a copy still marked this way is stale.
   const hooksJson = path.join(pluginDir, 'hooks', 'hooks.json');
+  const hooksJsonStat = fs.statSync(hooksJson, { throwIfNoEntry: false });
+  if (hooksJsonStat !== undefined && !hooksJsonStat.isFile()) {
+    findings.push(
+      hard(
+        'envelope-adherence',
+        pluginName,
+        `'hooks/hooks.json' is not a regular file; Claude Code, Codex and Open Plugins read hooks from it.`,
+        `Replace 'hooks/hooks.json' with a JSON hooks file, or remove it.`,
+      ),
+    );
+  }
   if (
-    fs.statSync(hooksJson, { throwIfNoEntry: false })?.isFile() === true &&
+    hooksJsonStat?.isFile() === true &&
     isToolkitSentinelFor(fs.readFileSync(hooksJson, 'utf-8'), 'json-field', CLAUDE_HOOKS_SOURCES)
   ) {
     findings.push(
@@ -559,7 +570,7 @@ export function validateEnvelopeAdherence(
         'envelope-adherence',
         pluginName,
         `'hooks/hooks.json' is the Gemini hooks copy an earlier aipm build wrote; Claude Code, Codex and Open Plugins load it by default.`,
-        `Make sure hooks/claude.yaml holds these hooks (port them from 'hooks/hooks.json' if it is missing), then delete 'hooks/hooks.json' and run \`aipm build\`. Gemini reads its hooks from dist/gemini/; with the claude target the build writes Claude's hooks to 'hooks/hooks.json'.`,
+        `Make sure hooks/claude.yaml holds these hooks (port them from 'hooks/hooks.json' if it is missing). With the claude target, \`aipm build\` replaces the file with Claude's hooks. Without it, Gemini reads its hooks from dist/gemini/, so a Codex or Open Plugins plugin that needs hooks/hooks.json should add the claude target, or keep a hand-written hooks/hooks.json in its own format with no _generated key.`,
       ),
     );
   }

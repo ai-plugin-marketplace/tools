@@ -50,7 +50,8 @@ import {
 import type { ConfigCache } from './load-config.js';
 import type { AipmWorkspace } from '../config.js';
 import type { Finding, TargetId, ValidateOptions, ValidationResult } from './types.js';
-import { withoutGeneratorVersion } from './sentinel.js';
+import { isToolkitSentinelFor, withoutGeneratorVersion } from './sentinel.js';
+import { CLAUDE_HOOKS_SOURCES } from '../targets/claude/transform.js';
 import { createRuleContext } from '../lint/context.js';
 import { diagnosticToFinding } from '../lint/diagnostic.js';
 import {
@@ -543,6 +544,24 @@ export function validateEnvelopeAdherence(
         ),
       );
     }
+  }
+
+  // Earlier toolkit versions wrote a Gemini-dialect copy of the hooks to hooks/hooks.json, which
+  // Claude Code, Codex and Open Plugins all load by default. Gemini now reads the copy in its dist
+  // bundle, and a Claude build replaces this file, so a copy still marked this way is stale.
+  const hooksJson = path.join(pluginDir, 'hooks', 'hooks.json');
+  if (
+    fs.existsSync(hooksJson) &&
+    isToolkitSentinelFor(fs.readFileSync(hooksJson, 'utf-8'), 'json-field', CLAUDE_HOOKS_SOURCES)
+  ) {
+    findings.push(
+      hard(
+        'envelope-adherence',
+        pluginName,
+        `'hooks/hooks.json' is the Gemini hooks copy an earlier aipm build wrote; Claude Code, Codex and Open Plugins load it by default.`,
+        `Delete 'hooks/hooks.json' and run \`aipm build\` (Gemini reads its hooks from dist/gemini/; with the claude target the build writes Claude's hooks there).`,
+      ),
+    );
   }
 
   // Check minimum required artifacts for targets IN the envelope

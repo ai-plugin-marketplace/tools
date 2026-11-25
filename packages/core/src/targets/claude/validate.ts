@@ -29,7 +29,8 @@ import {
   claudeHooksFileSchema,
   claudePluginManifestSchema,
 } from './schemas.js';
-import { CLAUDE_HOOKS_FILENAME } from './transform.js';
+import { isToolkitSentinelFor, sidecarPath } from '../../pipeline/sentinel.js';
+import { CLAUDE_HOOKS_FILENAME, CLAUDE_HOOKS_SOURCES } from './transform.js';
 
 // ---------------------------------------------------------------------------
 // Internal helpers
@@ -353,12 +354,22 @@ const RETIRED_CLAUDE_HOOKS_PATH = 'hooks/claude.json';
  */
 const CLAUDE_HOOKS_FILE_KEYS: ReadonlySet<string> = new Set(['$schema', 'description', 'hooks']);
 
+/** Whether the hooks file at `hooksPath` has a `.generated` sidecar this toolkit wrote. */
+function hasToolkitSidecar(hooksPath: string): boolean {
+  const sidecar = sidecarPath(hooksPath);
+  return (
+    fs.existsSync(sidecar) &&
+    isToolkitSentinelFor(fs.readFileSync(sidecar, 'utf-8'), 'sidecar', CLAUDE_HOOKS_SOURCES)
+  );
+}
+
 /**
  * If `hooks/hooks.json` exists, validate it parses as JSON and carries only the keys Claude hosts
  * accept. Missing file → no finding (the file is optional).
  *
  * Claude Code auto-loads this file whoever wrote it, so the JSON and key checks apply to a
- * hand-written one too. Only a toolkit-generated file (its `.generated` sidecar exists) is checked
+ * hand-written one too, along with the object shape Claude Code reads. Only a toolkit-generated
+ * file (its `.generated` sidecar carries this toolkit's sentinel) is checked
  * against `claudeHooksFileSchema`: that schema is the YAML compiler's source contract, which is
  * narrower than the events and handler forms Claude Code accepts in a hand-written file.
  */
@@ -379,25 +390,50 @@ function validateHooksFile(pluginDir: string, pluginName: string): Finding[] {
     ];
   }
 
-  if (typeof raw === 'object' && raw !== null && !Array.isArray(raw)) {
-    const extra = Object.keys(raw).filter((k) => !CLAUDE_HOOKS_FILE_KEYS.has(k));
-    if (extra.length > 0) {
-      return [
-        hardFinding(
-          pluginName,
-          `${CLAUDE_HOOKS_PATH} has top-level key(s) ${extra.join(', ')}: the Claude desktop app drops hooks from its remote plugin sync unless the file has only $schema, description and hooks`,
-          `remove ${extra.join(', ')} from ${CLAUDE_HOOKS_PATH}, or regenerate it with \`aipm build\` (generated files keep their marker in ${CLAUDE_HOOKS_PATH}.generated)`,
-        ),
-      ];
-    }
-    // `description` is accepted by Claude hosts but is not part of the hooks schema proper.
-    const { description: _description, $schema: _schema, ...rest } = raw as Record<string, unknown>;
-    raw = rest;
+  if (typeof raw !== 'object' || raw === null || Array.isArray(raw)) {
+    return [
+      hardFinding(
+        pluginName,
+        `${CLAUDE_HOOKS_PATH} must be a JSON object with a hooks field`,
+        `wrap the hooks in { "hooks": { ... } } or regenerate ${CLAUDE_HOOKS_PATH} with \`aipm build\``,
+      ),
+    ];
   }
+  const extra = Object.keys(raw).filter((k) => !CLAUDE_HOOKS_FILE_KEYS.has(k));
+  if (extra.length > 0) {
+    return [
+      hardFinding(
+        pluginName,
+        `${CLAUDE_HOOKS_PATH} has top-level key(s) ${extra.join(', ')}: the Claude desktop app drops hooks from its remote plugin sync unless the file has only $schema, description and hooks`,
+        `remove ${extra.join(', ')} from ${CLAUDE_HOOKS_PATH}, or regenerate it with \`aipm build\` (generated files keep their marker in ${CLAUDE_HOOKS_PATH}.generated)`,
+      ),
+    ];
+  }
+  // Claude Code reads `hooks` as an object mapping each event to an array of matcher groups.
+  const hooks = (raw as Record<string, unknown>)['hooks'];
+  const badEvents =
+    typeof hooks === 'object' && hooks !== null && !Array.isArray(hooks)
+      ? Object.entries(hooks)
+          .filter(([, groups]) => !Array.isArray(groups))
+          .map(([event]) => event)
+      : undefined;
+  if (badEvents === undefined || badEvents.length > 0) {
+    return [
+      hardFinding(
+        pluginName,
+        badEvents === undefined
+          ? `${CLAUDE_HOOKS_PATH} has no hooks object`
+          : `${CLAUDE_HOOKS_PATH} event(s) ${badEvents.join(', ')} must each hold an array of matcher groups`,
+        `give ${CLAUDE_HOOKS_PATH} the shape { "hooks": { "<Event>": [ { "hooks": [ ... ] } ] } }, or regenerate it with \`aipm build\``,
+      ),
+    ];
+  }
+  // `description` is accepted by Claude hosts but is not part of the hooks schema proper.
+  const { description: _description, $schema: _schema, ...rest } = raw as Record<string, unknown>;
 
-  if (!fs.existsSync(`${hooksPath}.generated`)) return [];
+  if (!hasToolkitSidecar(hooksPath)) return [];
 
-  const result = claudeHooksFileSchema.safeParse(raw);
+  const result = claudeHooksFileSchema.safeParse(rest);
   if (!result.success) {
     const issues = result.error.issues
       .map((i) => `${i.path.join('.') || '(root)'}: ${i.message}`)
@@ -420,8 +456,7 @@ function validateHooksFile(pluginDir: string, pluginName: string): Finding[] {
  * the file any more.
  */
 function validateOrphanedHooksFile(pluginDir: string, pluginName: string): Finding[] {
-  const sidecar = path.join(pluginDir, 'hooks', `${CLAUDE_HOOKS_FILENAME}.generated`);
-  if (!fs.existsSync(sidecar)) return [];
+  if (!hasToolkitSidecar(path.join(pluginDir, ...CLAUDE_HOOKS_PATH.split('/')))) return [];
   const hasSource = ['claude.yaml', 'claude.yml'].some((name) =>
     fs.existsSync(path.join(pluginDir, 'hooks', name)),
   );

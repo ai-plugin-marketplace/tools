@@ -25,6 +25,12 @@ import { claudeHooksFileSchema } from './schemas.js';
 export const CLAUDE_HOOKS_FILENAME = 'hooks.json';
 
 /**
+ * The hooks sources, relative to the plugin dir, that the toolkit compiles into Claude's hooks
+ * file, in lookup order. A sentinel naming one of these marks a hooks file as toolkit-generated.
+ */
+export const CLAUDE_HOOKS_SOURCES: readonly string[] = ['hooks/claude.yaml', 'hooks/claude.yml'];
+
+/**
  * Parse YAML hook source and validate against the Claude hooks schema.
  * Pure — takes a string, returns validated data. Throws {@link ZodError} on bad shape.
  *

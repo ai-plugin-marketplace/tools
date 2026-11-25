@@ -287,6 +287,37 @@ export function hasSentinel(content: string, mode: SentinelMode): boolean {
 }
 
 /**
+ * Whether `content` carries a sentinel this toolkit wrote for one of `sources`.
+ *
+ * {@link hasSentinel} only checks the carrier's shape, and the JSON carrier's shape says nothing
+ * about who wrote it. This also checks the generator identity (`_generated.by` for the JSON
+ * carrier; the inline and sidecar preamble already names {@link GENERATOR_ID}) and the recorded
+ * source. Another tool's marker, or a stray marker file, therefore never makes a file look
+ * toolkit-owned. Check this before replacing a file, deleting it, telling an author to delete it,
+ * or trusting its version stamp.
+ *
+ * @param content - File content to inspect (artifact body, or sidecar body for `'sidecar'`).
+ * @param mode - Which carrier to read.
+ * @param sources - Source paths (relative to the plugin dir) the file may have been generated from.
+ * @returns `true` iff the file carries this toolkit's sentinel for one of `sources`.
+ */
+export function isToolkitSentinelFor(
+  content: string,
+  mode: SentinelMode,
+  sources: readonly string[],
+): boolean {
+  const source = readSentinelSource(content, mode);
+  if (source === undefined || !sources.includes(source)) return false;
+  if (mode !== 'json-field') return true;
+  const generated = parseJsonObject(content)?.['_generated'];
+  return (
+    typeof generated === 'object' &&
+    generated !== null &&
+    (generated as Record<string, unknown>)['by'] === GENERATOR_ID
+  );
+}
+
+/**
  * Extract the author-authored source path recorded in a sentinel, or `undefined` if no
  * well-formed sentinel of the given carrier is present (§10.5 uses this to identify the source
  * and to distinguish generated files from hand-authored ones).

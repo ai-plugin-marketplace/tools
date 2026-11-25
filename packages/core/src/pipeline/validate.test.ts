@@ -23,6 +23,7 @@ import {
   validateVersionConsistency,
 } from './validate.js';
 import { defineWorkspace } from '../config.js';
+import { applyJsonSentinel } from './sentinel.js';
 
 // ---------------------------------------------------------------------------
 // Test helpers
@@ -216,6 +217,26 @@ describe('validateEnvelopeAdherence()', () => {
       expect(validateEnvelopeAdherence(pluginDir, [target])).toHaveLength(0);
     },
   );
+
+  it('flags the Gemini hooks copy an earlier build left at hooks/hooks.json', () => {
+    // Regression: in a Codex+Gemini plugin the stale copy (Gemini matchers such as write_file)
+    // stayed at Codex's default hooks path and passed validation as a native file.
+    const pluginDir = path.join(tmpDir, 'my-plugin');
+    createMinimalPlugin(pluginDir, 'my-plugin', ['gemini']);
+    write(pluginDir, '.codex-plugin/plugin.json', { name: 'my-plugin' });
+    fs.mkdirSync(path.join(pluginDir, 'hooks'), { recursive: true });
+    fs.writeFileSync(
+      path.join(pluginDir, 'hooks', 'hooks.json'),
+      applyJsonSentinel(
+        { hooks: { AfterTool: [{ matcher: 'write_file', hooks: [] }] } },
+        'hooks/claude.yaml',
+        '0.11.0',
+      ),
+    );
+    const findings = validateEnvelopeAdherence(pluginDir, ['codex', 'gemini']);
+    expect(findings).toHaveLength(1);
+    expect(findings[0]?.message).toContain('Gemini hooks copy');
+  });
 
   it('flags hooks/hooks.json when no host that reads it is in the envelope', () => {
     const pluginDir = path.join(tmpDir, 'my-plugin');
@@ -890,6 +911,10 @@ describe.skipIf(!TEMPLATE_REPO_AVAILABLE)('parity: real skill-evaluator plugin',
 
     // Copy the real skill-evaluator plugin
     copyDir(SKILL_EVALUATOR_SRC, pluginDir);
+    // The pinned template still commits the Gemini-dialect hooks/hooks.json that earlier toolkit
+    // versions wrote; this toolkit's build replaces it with Claude's hooks. Drop it so the copy
+    // matches the plugin as this toolkit would leave it, rather than an older build's output.
+    fs.rmSync(path.join(pluginDir, 'hooks', 'hooks.json'), { force: true });
 
     // Copy both real marketplace files
     copyDir(path.join(TEMPLATE_REPO, '.claude-plugin'), path.join(repoRoot, '.claude-plugin'));

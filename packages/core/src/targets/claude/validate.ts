@@ -354,11 +354,13 @@ const RETIRED_CLAUDE_HOOKS_PATH = 'hooks/claude.json';
 const CLAUDE_HOOKS_FILE_KEYS: ReadonlySet<string> = new Set(['$schema', 'description', 'hooks']);
 
 /**
- * If `hooks/hooks.json` exists, validate it parses as JSON, carries only the keys Claude hosts
- * accept, and matches `claudeHooksFileSchema`. Missing file → no finding (the file is optional).
+ * If `hooks/hooks.json` exists, validate it parses as JSON and carries only the keys Claude hosts
+ * accept. Missing file → no finding (the file is optional).
  *
- * Claude Code auto-loads this file whoever wrote it, so a hand-added one is checked the same way as
- * a generated one.
+ * Claude Code auto-loads this file whoever wrote it, so the JSON and key checks apply to a
+ * hand-written one too. Only a toolkit-generated file (its `.generated` sidecar exists) is checked
+ * against `claudeHooksFileSchema`: that schema is the YAML compiler's source contract, which is
+ * narrower than the events and handler forms Claude Code accepts in a hand-written file.
  */
 function validateHooksFile(pluginDir: string, pluginName: string): Finding[] {
   const hooksPath = path.join(pluginDir, ...CLAUDE_HOOKS_PATH.split('/'));
@@ -393,6 +395,8 @@ function validateHooksFile(pluginDir: string, pluginName: string): Finding[] {
     raw = rest;
   }
 
+  if (!fs.existsSync(`${hooksPath}.generated`)) return [];
+
   const result = claudeHooksFileSchema.safeParse(raw);
   if (!result.success) {
     const issues = result.error.issues
@@ -408,6 +412,27 @@ function validateHooksFile(pluginDir: string, pluginName: string): Finding[] {
   }
 
   return [];
+}
+
+/**
+ * Flag a generated `hooks/hooks.json` whose source `hooks/claude.yaml` is gone. Claude Code would
+ * keep loading hooks the author deleted, and freshness cannot see it because no source produces
+ * the file any more.
+ */
+function validateOrphanedHooksFile(pluginDir: string, pluginName: string): Finding[] {
+  const sidecar = path.join(pluginDir, 'hooks', `${CLAUDE_HOOKS_FILENAME}.generated`);
+  if (!fs.existsSync(sidecar)) return [];
+  const hasSource = ['claude.yaml', 'claude.yml'].some((name) =>
+    fs.existsSync(path.join(pluginDir, 'hooks', name)),
+  );
+  if (hasSource) return [];
+  return [
+    hardFinding(
+      pluginName,
+      `${CLAUDE_HOOKS_PATH} was generated from hooks/claude.yaml, which no longer exists, so Claude Code still loads the deleted hooks`,
+      `delete ${CLAUDE_HOOKS_PATH} and ${CLAUDE_HOOKS_PATH}.generated, or restore hooks/claude.yaml and run \`aipm build\``,
+    ),
+  ];
 }
 
 /**
@@ -500,6 +525,7 @@ export function validateClaudePlugin(pluginDir: string): Finding[] {
     ...validateAgentFrontmatter(pluginDir, pluginName),
     ...validateHooksFile(pluginDir, pluginName),
     ...validateRetiredHooksFile(pluginDir, pluginName),
+    ...validateOrphanedHooksFile(pluginDir, pluginName),
     ...validateManifestHooksField(pluginDir, pluginName),
     ...validateOpenPluginsConformance(pluginDir, pluginName),
   ];

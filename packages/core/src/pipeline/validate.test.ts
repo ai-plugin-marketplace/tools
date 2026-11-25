@@ -206,6 +206,25 @@ describe('validateEnvelopeAdherence()', () => {
     ).toBe(true);
   });
 
+  it.each(['codex', 'open-plugins'] as const)(
+    'accepts a native hooks/hooks.json in a %s-only plugin (shared default hooks file)',
+    (target) => {
+      const pluginDir = path.join(tmpDir, 'my-plugin');
+      const manifest = target === 'codex' ? '.codex-plugin/plugin.json' : '.plugin/plugin.json';
+      write(pluginDir, manifest, { name: 'my-plugin' });
+      write(pluginDir, 'hooks/hooks.json', { hooks: {} });
+      expect(validateEnvelopeAdherence(pluginDir, [target])).toHaveLength(0);
+    },
+  );
+
+  it('flags hooks/hooks.json when no host that reads it is in the envelope', () => {
+    const pluginDir = path.join(tmpDir, 'my-plugin');
+    createMinimalPlugin(pluginDir, 'my-plugin', ['cursor']);
+    write(pluginDir, 'hooks/hooks.json', { hooks: {} });
+    const findings = validateEnvelopeAdherence(pluginDir, ['cursor']);
+    expect(findings.some((f) => f.message.includes('hooks/hooks.json'))).toBe(true);
+  });
+
   it('emits envelope-adherence when minimum required artifact is missing', () => {
     const pluginDir = path.join(tmpDir, 'my-plugin');
     // Create plugin dir without the claude artifact

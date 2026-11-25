@@ -82,7 +82,6 @@ const TARGET_OWNED_ARTIFACTS: Record<TargetId, string[]> = {
     '.claude-plugin/plugin.json',
     '.claude-plugin',
     'hooks/claude.yaml',
-    'hooks/hooks.json',
     'hooks/hooks.json.generated',
     'hooks/claude.json',
   ],
@@ -97,9 +96,13 @@ const TARGET_OWNED_ARTIFACTS: Record<TargetId, string[]> = {
 /**
  * Shared artifacts that require at least one of the listed targets in the envelope.
  * `.mcp.json` is the Claude/Cursor/Codex MCP config format, shared between those targets.
+ * `hooks/hooks.json` is the hooks file those hosts read by default.
  */
 const SHARED_ARTIFACTS: { file: string; anyOf: TargetId[] }[] = [
   { file: '.mcp.json', anyOf: ['claude', 'codex', 'cursor', 'open-plugins'] },
+  // The native default hooks file for Claude Code, Codex and Open Plugins. Its toolkit-generated
+  // form is marked by the Claude-owned `hooks/hooks.json.generated` sidecar.
+  { file: 'hooks/hooks.json', anyOf: ['claude', 'codex', 'open-plugins'] },
 ];
 
 /**

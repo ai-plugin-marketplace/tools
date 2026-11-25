@@ -435,6 +435,9 @@ describe('validateClaudePlugin', () => {
   describe('hooks file', () => {
     it('emits schema-invalid when hooks/hooks.json uses an unknown event name', () => {
       writeFile(tmpDir, '.claude-plugin/plugin.json', MINIMAL_MANIFEST);
+      // The schema check applies to toolkit-generated files, marked by the sidecar.
+      writeFile(tmpDir, 'hooks/hooks.json.generated', '# generated\n');
+      writeFile(tmpDir, 'hooks/claude.yaml', 'hooks: {}\n');
       writeFile(
         tmpDir,
         'hooks/hooks.json',
@@ -470,6 +473,9 @@ describe('validateClaudePlugin', () => {
 
     it('emits schema-invalid when hooks/hooks.json has invalid hook entry shape', () => {
       writeFile(tmpDir, '.claude-plugin/plugin.json', MINIMAL_MANIFEST);
+      // The schema check applies to toolkit-generated files, marked by the sidecar.
+      writeFile(tmpDir, 'hooks/hooks.json.generated', '# generated\n');
+      writeFile(tmpDir, 'hooks/claude.yaml', 'hooks: {}\n');
       writeFile(
         tmpDir,
         'hooks/hooks.json',
@@ -546,6 +552,33 @@ describe('validateClaudePlugin', () => {
       );
 
       expect(validateClaudePlugin(tmpDir)).toHaveLength(0);
+    });
+
+    it('accepts a hand-written hooks/hooks.json with events the YAML compiler does not model', () => {
+      // Claude Code accepts SessionStart (and more) natively; only generated files are held to the
+      // compiler's source schema.
+      writeFile(tmpDir, '.claude-plugin/plugin.json', MINIMAL_MANIFEST);
+      writeFile(
+        tmpDir,
+        'hooks/hooks.json',
+        JSON.stringify({
+          hooks: { SessionStart: [{ hooks: [{ type: 'command', command: 'echo hi' }] }] },
+        }),
+      );
+
+      expect(validateClaudePlugin(tmpDir)).toHaveLength(0);
+    });
+
+    it('emits a HARD finding for a generated hooks/hooks.json whose hooks/claude.yaml is gone', () => {
+      writeFile(tmpDir, '.claude-plugin/plugin.json', MINIMAL_MANIFEST);
+      writeFile(tmpDir, 'hooks/hooks.json', VALID_HOOKS_JSON);
+      writeFile(tmpDir, 'hooks/hooks.json.generated', '# generated\n');
+
+      const findings = validateClaudePlugin(tmpDir);
+
+      expect(findings).toHaveLength(1);
+      expect(findings[0]?.severity).toBe('hard');
+      expect(findings[0]?.message).toContain('no longer exists');
     });
 
     it('emits a HARD finding for a leftover hooks/claude.json', () => {

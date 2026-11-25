@@ -299,6 +299,19 @@ The engine's unit of output.
 </td></tr>
 <tr><td>
 
+[FeatureOutcome](./core.featureoutcome.md)
+
+
+</td><td>
+
+How one authored feature of a plugin is delivered on one target: the per-feature, per-host outcome the unified content model defines.
+
+`implementation` says how the target delivers the feature: `native` (the host has it), `projection` (a substitute built from what the host offers) or `unavailable` (nothing in the target's output delivers it). `fidelity` lists every way the delivered form departs from what the author stated; an empty list means it is honoured in full, and `unavailable` always carries exactly `omitted`<!-- -->. The findings that explain a departure are reported with the build's other findings.
+
+
+</td></tr>
+<tr><td>
+
 [Finding](./core.finding.md)
 
 
@@ -503,6 +516,21 @@ Options for [scaffold()](./core.scaffold.md)<!-- -->.
 </td><td>
 
 Diagnostic report from [checkSupport()](./core.checksupport.md) describing a plugin's support envelope.
+
+
+</td></tr>
+<tr><td>
+
+[TargetBuildReport](./core.targetbuildreport.md)
+
+
+</td><td>
+
+What a build produced for one target of a plugin's envelope.
+
+`status` says what the target installs:
+
+- `authored` — the authored plugin directory, as written. It is already the target's form, and nothing is generated for the target. A target that can only install from the authored source (`installsAuthoredSource`<!-- -->) has this status even where its form would differ; the build's findings then say what it does not receive. - `bundled` — the bundle the build always generates for the target (Gemini, Kiro), exactly as bundled from the authored source: the plugin needed no change for this target. - `projected` — a form the build generated because it differs from the authored source: a tree of the target's own under the dist root, or the target's bundle with the differences applied. - `failed` — the target's form could not be built (a `hard` finding names the reason). Nothing is emitted for the target and no registry lists the plugin for it. A target with `installsAuthoredSource` cannot be withheld this way: it goes on installing the authored directory.
 
 
 </td></tr>

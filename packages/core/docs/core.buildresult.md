@@ -111,5 +111,24 @@ Absolute path to the plugin directory.
 
 
 </td></tr>
+<tr><td>
+
+[targets](./core.buildresult.targets.md)
+
+
+</td><td>
+
+
+</td><td>
+
+[TargetBuildReport](./core.targetbuildreport.md)<!-- -->\[\]
+
+
+</td><td>
+
+What the build produced for each target of the plugin's envelope, in envelope order: where the target's form of the plugin is, and how each authored feature is delivered there.
+
+
+</td></tr>
 </tbody></table>
 

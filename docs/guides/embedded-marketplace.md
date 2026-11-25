@@ -121,6 +121,8 @@ pnpm exec aipm build      # generate per-target artifacts and dist bundles
 pnpm exec aipm validate   # check schemas, envelope adherence, and marketplace registration
 ```
 
+When a skill's `audience` requires changes for a target such as Claude Code or Codex, the build writes a per-target plugin tree under `<distDir>/<target>/<name>/` and points that target's registry at it. Vercel's `skills` CLI also follows entries in `.claude-plugin/marketplace.json`. If an entry points at the generated Claude tree, a Vercel Skills installation can pick up the Claude copy. The Vercel line in `aipm build` shows the authored path, since the toolkit generates no Vercel-specific tree.
+
 Commit both your sources **and** the generated artifacts (CI enforces they stay in sync). Wire `aipm validate` into your existing CI alongside your software's tests.
 
 ### 7. Install from a host
@@ -135,7 +137,7 @@ Consumers add your repo as a marketplace and install plugins by name:
 codex plugin marketplace add <owner>/<repo>
 ```
 
-Each host reads its own registry at the repo root and follows each plugin's `source` into the relocated `agent-plugins/` tree.
+Each host reads its registry at the repo root and follows each plugin's `source` to the authored plugin directory or the generated tree for that target.
 
 ## Worked layout
 

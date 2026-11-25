@@ -82,6 +82,8 @@ const TARGET_OWNED_ARTIFACTS: Record<TargetId, string[]> = {
     '.claude-plugin/plugin.json',
     '.claude-plugin',
     'hooks/claude.yaml',
+    'hooks/hooks.json',
+    'hooks/hooks.json.generated',
     'hooks/claude.json',
   ],
   codex: ['.codex-plugin/plugin.json', '.codex-plugin'],
@@ -1192,8 +1194,8 @@ function freshnessFinding(
  * Freshness check for one plugin (§10.5). A generated file is stale when re-running `aipm build`
  * would change it. Two carriers:
  *
- * 1. **In-plugin hook JSONs** (`hooks/claude.json`, `hooks/hooks.json`) — recompute the expected
- *    bytes (transform + `_generated` sentinel) and compare to disk. A missing file, an absent or
+ * 1. **In-plugin hook files** (`hooks/hooks.json` + its `.generated` sidecar, `hooks/cursor.json`)
+ *    — recompute the expected bytes (transform + sentinel) and compare to disk. A missing file, an absent or
  *    altered sentinel, or any byte difference (e.g. a hand-edit) is stale.
  * 2. **`dist/**` bundle trees** — regenerate into a temp dir and byte-compare the whole tree
  *    (file set + contents). Any divergence names the offending path.

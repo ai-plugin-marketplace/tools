@@ -202,7 +202,7 @@ export const claudeHookMatcherSchema = z
   .strict();
 
 /**
- * Schema for `hooks/claude.json`.
+ * Schema for Claude's `hooks/hooks.json`.
  *
  * Top level: `{ hooks: Record<ClaudeHookEvent, ClaudeHookMatcher[]> }`. Strict.
  * `schemaVersion` accepted but not validated per §9.4 / §12.2.

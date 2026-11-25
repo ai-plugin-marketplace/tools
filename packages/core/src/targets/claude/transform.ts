@@ -13,6 +13,18 @@ import type { ClaudeHooksFile } from './schemas.js';
 import { claudeHooksFileSchema } from './schemas.js';
 
 /**
+ * Plugin-relative file name (under `hooks/`) of the Claude hooks artifact.
+ *
+ * Claude Code loads `<pluginDir>/hooks/hooks.json` on its own, so the toolkit writes Claude's
+ * hooks there and the manifest carries no `hooks` field. That is also the only layout the Claude
+ * desktop app syncs to remote (SSH) hosts: it refuses a plugin whose manifest has a `hooks` field.
+ *
+ * @see https://code.claude.com/docs/en/plugins-reference
+ * @see docs/specs/hooks-json-autoload-collision.md
+ */
+export const CLAUDE_HOOKS_FILENAME = 'hooks.json';
+
+/**
  * Parse YAML hook source and validate against the Claude hooks schema.
  * Pure — takes a string, returns validated data. Throws {@link ZodError} on bad shape.
  *

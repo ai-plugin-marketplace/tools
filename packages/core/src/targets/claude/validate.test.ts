@@ -7,7 +7,8 @@
  *
  * @see docs/specs/architecture.md §10 (validation contract)
  * @see docs/specs/architecture.md §8.1 (Finding, FindingCode types)
- * @see docs/specs/architecture.md §10.1.5 (auto-loaded `hooks/hooks.json`)
+ * @see docs/specs/architecture.md §10.1.5 (Claude hooks live in the auto-loaded `hooks/hooks.json`)
+ * @see docs/specs/hooks-json-autoload-collision.md — why the manifest carries no `hooks` field
  * @see https://code.claude.com/docs/en/plugins-reference — plugin manifest `hooks` field
  *   (`string|array|object`, e.g. `"./my-extra-hooks.json"`) and the Hooks component's
  *   auto-loaded location: "`hooks/hooks.json` in plugin root, or inline in plugin.json".
@@ -25,6 +26,7 @@ import * as path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
 import type { Finding } from '../../pipeline/types.js';
+import { stripGeneratedArtifacts } from '../../test-support/synth-plugin.js';
 import { TEMPLATE_REPO, TEMPLATE_REPO_AVAILABLE } from '../../test-support/template-repo.js';
 import { validateClaudePlugin } from './validate.js';
 
@@ -173,13 +175,12 @@ describe('validateClaudePlugin', () => {
           skills: ['./skills/my-skill'],
           agents: ['./agents/my-agent.md'],
           commands: ['./commands/run.md'],
-          hooks: './hooks/claude.json',
         }),
       );
       makeDir(tmpDir, 'skills/my-skill');
       writeFile(tmpDir, 'agents/my-agent.md', VALID_AGENT_MD);
       writeFile(tmpDir, 'commands/run.md', '# Command');
-      writeFile(tmpDir, 'hooks/claude.json', VALID_HOOKS_JSON);
+      writeFile(tmpDir, 'hooks/hooks.json', VALID_HOOKS_JSON);
 
       const findings = validateClaudePlugin(tmpDir);
 
@@ -195,9 +196,9 @@ describe('validateClaudePlugin', () => {
       expect(findings).toHaveLength(0);
     });
 
-    it('returns zero findings when hooks/claude.json does not exist', () => {
+    it('returns zero findings when hooks/hooks.json does not exist', () => {
       writeFile(tmpDir, '.claude-plugin/plugin.json', MINIMAL_MANIFEST);
-      // hooks/claude.json is optional — absence must not produce a finding
+      // hooks/hooks.json is optional — absence must not produce a finding
 
       const findings = validateClaudePlugin(tmpDir);
 
@@ -274,11 +275,13 @@ describe('validateClaudePlugin', () => {
 
       const findings = validateClaudePlugin(tmpDir);
 
-      expect(findings).toHaveLength(1);
-      const [finding] = findings as [Finding];
-      expect(finding.severity).toBe('hard');
-      expect(finding.code).toBe('schema-invalid');
-      expect(finding.message).toContain('./hooks/claude.json');
+      // One finding for the missing path, one for the manifest hooks field itself.
+      expect(findings).toHaveLength(2);
+      const missing = findings.filter((f) => f.message.includes('non-existent path'));
+      expect(missing).toHaveLength(1);
+      expect(missing[0]?.severity).toBe('hard');
+      expect(missing[0]?.code).toBe('schema-invalid');
+      expect(missing[0]?.message).toContain('./hooks/claude.json');
     });
 
     it('emits schema-invalid for each missing ref (one per missing path)', () => {
@@ -300,7 +303,7 @@ describe('validateClaudePlugin', () => {
       }
     });
 
-    it('does not emit findings for inline hooks object (no path to check)', () => {
+    it('rejects an inline hooks object: no path to check, but the manifest must not name hooks', () => {
       writeFile(
         tmpDir,
         '.claude-plugin/plugin.json',
@@ -312,7 +315,8 @@ describe('validateClaudePlugin', () => {
 
       const findings = validateClaudePlugin(tmpDir);
 
-      expect(findings).toHaveLength(0);
+      expect(findings).toHaveLength(1);
+      expect(findings[0]?.message).toContain('has a hooks field');
     });
   });
 
@@ -429,11 +433,11 @@ describe('validateClaudePlugin', () => {
   // -------------------------------------------------------------------------
 
   describe('hooks file', () => {
-    it('emits schema-invalid when hooks/claude.json uses an unknown event name', () => {
+    it('emits schema-invalid when hooks/hooks.json uses an unknown event name', () => {
       writeFile(tmpDir, '.claude-plugin/plugin.json', MINIMAL_MANIFEST);
       writeFile(
         tmpDir,
-        'hooks/claude.json',
+        'hooks/hooks.json',
         JSON.stringify({
           hooks: {
             BadEvent: [{ hooks: [{ type: 'command', command: 'echo bad' }] }],
@@ -447,12 +451,12 @@ describe('validateClaudePlugin', () => {
       const [finding] = findings as [Finding];
       expect(finding.severity).toBe('hard');
       expect(finding.code).toBe('schema-invalid');
-      expect(finding.message).toContain('hooks/claude.json');
+      expect(finding.message).toContain('hooks/hooks.json');
     });
 
-    it('emits schema-invalid when hooks/claude.json is not valid JSON', () => {
+    it('emits schema-invalid when hooks/hooks.json is not valid JSON', () => {
       writeFile(tmpDir, '.claude-plugin/plugin.json', MINIMAL_MANIFEST);
-      writeFile(tmpDir, 'hooks/claude.json', 'not json {{{');
+      writeFile(tmpDir, 'hooks/hooks.json', 'not json {{{');
 
       const findings = validateClaudePlugin(tmpDir);
 
@@ -460,15 +464,15 @@ describe('validateClaudePlugin', () => {
       const [finding] = findings as [Finding];
       expect(finding.severity).toBe('hard');
       expect(finding.code).toBe('schema-invalid');
-      expect(finding.message).toContain('hooks/claude.json');
+      expect(finding.message).toContain('hooks/hooks.json');
       expect(finding.message).toContain('not valid JSON');
     });
 
-    it('emits schema-invalid when hooks/claude.json has invalid hook entry shape', () => {
+    it('emits schema-invalid when hooks/hooks.json has invalid hook entry shape', () => {
       writeFile(tmpDir, '.claude-plugin/plugin.json', MINIMAL_MANIFEST);
       writeFile(
         tmpDir,
-        'hooks/claude.json',
+        'hooks/hooks.json',
         JSON.stringify({
           hooks: {
             PreToolUse: [
@@ -491,32 +495,28 @@ describe('validateClaudePlugin', () => {
       expect(finding.code).toBe('schema-invalid');
     });
 
-    it('does not emit a finding when hooks/claude.json is absent', () => {
+    it('does not emit a finding when hooks/hooks.json is absent', () => {
       writeFile(tmpDir, '.claude-plugin/plugin.json', MINIMAL_MANIFEST);
-      // No hooks/claude.json — this is valid
+      // No hooks/hooks.json — this is valid
 
       const findings = validateClaudePlugin(tmpDir);
 
       expect(findings).toHaveLength(0);
     });
 
-    // Regression: the build writes a top-level `_generated` JSON sentinel onto the generated
-    // hooks/claude.json (§4.3, json-field carrier). The hooks schema is `.strict()`, so before
-    // this fix the validator rejected the sentinel as an unrecognized key, breaking the §5.4
-    // post-build validate. The validator must drop the toolkit-owned `_generated` key first.
-    it('tolerates the toolkit _generated sentinel on hooks/claude.json (§4.3 regression)', () => {
+    // The Claude desktop app drops hooks from its remote plugin sync when hooks/hooks.json has
+    // any top-level key besides $schema, description and hooks, so a `_generated` marker (the old
+    // json-field sentinel) must be rejected rather than tolerated.
+    it('rejects a _generated key on hooks/hooks.json (remote sync drops the file)', () => {
       writeFile(tmpDir, '.claude-plugin/plugin.json', MINIMAL_MANIFEST);
       writeFile(
         tmpDir,
-        'hooks/claude.json',
+        'hooks/hooks.json',
         JSON.stringify({
           _generated: { by: '@ai-plugin-marketplace/cli', source: 'hooks/claude.yaml' },
           hooks: {
             PostToolUse: [
-              {
-                matcher: 'Write',
-                hooks: [{ type: 'command', command: 'echo wrote' }],
-              },
+              { matcher: 'Write', hooks: [{ type: 'command', command: 'echo wrote' }] },
             ],
           },
         }),
@@ -524,25 +524,39 @@ describe('validateClaudePlugin', () => {
 
       const findings = validateClaudePlugin(tmpDir);
 
-      expect(findings).toHaveLength(0);
+      expect(findings).toHaveLength(1);
+      expect(findings[0]?.severity).toBe('hard');
+      expect(findings[0]?.message).toContain('_generated');
     });
 
-    it('still rejects an otherwise-invalid hooks/claude.json that also carries _generated', () => {
+    it('accepts $schema and description alongside hooks', () => {
       writeFile(tmpDir, '.claude-plugin/plugin.json', MINIMAL_MANIFEST);
       writeFile(
         tmpDir,
-        'hooks/claude.json',
+        'hooks/hooks.json',
         JSON.stringify({
-          _generated: { by: '@ai-plugin-marketplace/cli', source: 'hooks/claude.yaml' },
-          hooks: { BadEvent: [{ hooks: [{ type: 'command', command: 'echo bad' }] }] },
+          $schema: 'https://json.schemastore.org/claude-code-settings.json',
+          description: 'Example hooks',
+          hooks: {
+            PostToolUse: [
+              { matcher: 'Write', hooks: [{ type: 'command', command: 'echo wrote' }] },
+            ],
+          },
         }),
       );
+
+      expect(validateClaudePlugin(tmpDir)).toHaveLength(0);
+    });
+
+    it('emits a HARD finding for a leftover hooks/claude.json', () => {
+      writeFile(tmpDir, '.claude-plugin/plugin.json', MINIMAL_MANIFEST);
+      writeFile(tmpDir, 'hooks/claude.json', VALID_HOOKS_JSON);
 
       const findings = validateClaudePlugin(tmpDir);
 
       expect(findings).toHaveLength(1);
-      const [finding] = findings as [Finding];
-      expect(finding.code).toBe('schema-invalid');
+      expect(findings[0]?.severity).toBe('hard');
+      expect(findings[0]?.message).toContain('hooks/claude.json is no longer generated');
     });
   });
 
@@ -600,15 +614,13 @@ describe('validateClaudePlugin', () => {
 
   describe.skipIf(!TEMPLATE_REPO_AVAILABLE)('parity with skill-evaluator', () => {
     it('returns zero findings when run against a copy of the skill-evaluator plugin with generated artifacts', () => {
-      // Copy the real plugin into a temp directory so we can add the generated
-      // hooks/claude.json artifact without modifying the template repo.
+      // Copy the real plugin into a temp directory, drop whatever generated artifacts the
+      // template happens to commit (they track the template's own toolkit version), and add the
+      // Claude hooks file this toolkit's build writes from `hooks/claude.yaml`.
       const pluginCopy = path.join(tmpDir, 'skill-evaluator');
       copyDirRecursive(SKILL_EVALUATOR_DIR, pluginCopy);
-
-      // The manifest references `./hooks/claude.json`, which is a build artifact
-      // generated from `hooks/claude.yaml` by `aipm build`. Add it here to simulate
-      // a fully-built plugin directory.
-      writeFile(pluginCopy, 'hooks/claude.json', SKILL_EVALUATOR_HOOKS_JSON);
+      stripGeneratedArtifacts(pluginCopy);
+      writeFile(pluginCopy, 'hooks/hooks.json', SKILL_EVALUATOR_HOOKS_JSON);
 
       const findings = validateClaudePlugin(pluginCopy);
 
@@ -730,104 +742,63 @@ describe('validateClaudePlugin — mcpServers path traversal', () => {
 });
 
 // ---------------------------------------------------------------------------
-// Auto-loaded hooks/hooks.json duplicate manifest reference (architecture.md §10.1.5)
-//
-// Claude Code auto-loads `<pluginDir>/hooks/hooks.json` and hard-errors when the plugin manifest
-// also names it: "Duplicate hooks file detected … The standard hooks/hooks.json is loaded
-// automatically, so manifest.hooks should only reference additional hook files."
+// Manifest hooks field (architecture.md §10.1.5)
 // ---------------------------------------------------------------------------
+// Claude Code auto-loads `<pluginDir>/hooks/hooks.json` and hard-errors when the manifest also
+// names it ("Duplicate hooks file detected"). The Claude desktop app refuses to sync any plugin
+// whose manifest has a `hooks` field to remote (SSH) hosts ("refusing plugin that relocates hooks
+// via manifest"). So every form of the field is a HARD finding.
 
-describe('validateClaudePlugin — hooks/hooks.json auto-load duplicate reference', () => {
+describe('validateClaudePlugin — manifest hooks field', () => {
   let tmpDir: string;
+
   beforeEach(() => {
     tmpDir = makeTempDir();
   });
+
   afterEach(() => {
     fs.rmSync(tmpDir, { recursive: true, force: true });
   });
 
-  /** Findings whose message is about the auto-loaded hooks file. */
-  const duplicates = (findings: Finding[]): Finding[] =>
-    findings.filter((f) => f.message.includes('auto-loads hooks/hooks.json'));
+  const manifestHookFindings = (findings: Finding[]): Finding[] =>
+    findings.filter((f) => f.message.includes('hooks field'));
 
-  it('emits a HARD schema-invalid when the manifest hooks field is ./hooks/hooks.json', () => {
-    writeFile(
-      tmpDir,
-      '.claude-plugin/plugin.json',
-      JSON.stringify({ name: 'test-plugin', hooks: './hooks/hooks.json' }),
-    );
+  it.each([
+    ['./hooks/hooks.json', './hooks/hooks.json'],
+    ['./hooks/claude.json (the retired toolkit path)', './hooks/claude.json'],
+    ['a path written without "./"', 'hooks/./hooks.json'],
+    ['an array of paths', ['./hooks/extra.json', './hooks/hooks.json']],
+    ['an inline hooks object', { Stop: [] }],
+  ])('emits a HARD schema-invalid for %s', (_label, hooks) => {
+    writeFile(tmpDir, '.claude-plugin/plugin.json', JSON.stringify({ name: 'test-plugin', hooks }));
     writeFile(tmpDir, 'hooks/hooks.json', VALID_HOOKS_JSON);
-
-    const findings = validateClaudePlugin(tmpDir);
-    const dup = duplicates(findings);
-
-    expect(dup).toHaveLength(1);
-    expect(dup[0]?.severity).toBe('hard');
-    expect(dup[0]?.code).toBe('schema-invalid');
-    expect(dup[0]?.plugin).toBe(path.basename(tmpDir));
-    expect(dup[0]?.hint).toContain('loaded automatically');
-    // The reference is otherwise well-formed and the file exists, so this is the ONLY finding.
-    expect(findings).toHaveLength(1);
-  });
-
-  it('fires even when hooks/hooks.json is written without the "./" prefix', () => {
-    // Normalization must treat `hooks/hooks.json` and `./hooks/./hooks.json` as the same file.
-    writeFile(
-      tmpDir,
-      '.claude-plugin/plugin.json',
-      JSON.stringify({ name: 'test-plugin', hooks: 'hooks/./hooks.json' }),
-    );
-    writeFile(tmpDir, 'hooks/hooks.json', VALID_HOOKS_JSON);
-
-    expect(duplicates(validateClaudePlugin(tmpDir))).toHaveLength(1);
-  });
-
-  it('fires for an array-valued hooks field containing ./hooks/hooks.json', () => {
-    // Array form is legal in Claude Code and not modeled by claudePluginManifestSchema, so the
-    // check must read the raw manifest rather than the schema-parsed value.
-    writeFile(
-      tmpDir,
-      '.claude-plugin/plugin.json',
-      JSON.stringify({
-        name: 'test-plugin',
-        hooks: ['./hooks/extra.json', './hooks/hooks.json'],
-      }),
-    );
     writeFile(tmpDir, 'hooks/extra.json', VALID_HOOKS_JSON);
-    writeFile(tmpDir, 'hooks/hooks.json', VALID_HOOKS_JSON);
 
-    const dup = duplicates(validateClaudePlugin(tmpDir));
-    expect(dup).toHaveLength(1);
-    expect(dup[0]?.message).toContain('./hooks/hooks.json');
+    const found = manifestHookFindings(validateClaudePlugin(tmpDir));
+
+    expect(found).toHaveLength(1);
+    expect(found[0]?.severity).toBe('hard');
+    expect(found[0]?.code).toBe('schema-invalid');
+    expect(found[0]?.message).toContain('remote (SSH) hosts');
   });
 
-  it('emits NO finding when the manifest hooks field is ./hooks/claude.json', () => {
+  it('emits a HARD finding for hooks under experimental', () => {
     writeFile(
       tmpDir,
       '.claude-plugin/plugin.json',
-      JSON.stringify({ name: 'test-plugin', hooks: './hooks/claude.json' }),
+      JSON.stringify({ name: 'test-plugin', experimental: { hooks: './hooks/extra.json' } }),
     );
-    writeFile(tmpDir, 'hooks/claude.json', VALID_HOOKS_JSON);
 
-    expect(validateClaudePlugin(tmpDir)).toEqual([]);
+    const found = manifestHookFindings(validateClaudePlugin(tmpDir));
+
+    expect(found).toHaveLength(1);
+    expect(found[0]?.message).toContain('experimental.hooks field');
   });
 
-  it('emits NO finding when hooks/hooks.json exists but the manifest omits hooks', () => {
-    // The auto-loaded file on its own is fine — only the duplicate manifest reference errors.
-    writeFile(tmpDir, '.claude-plugin/plugin.json', MINIMAL_MANIFEST);
+  it('emits NO finding when hooks/hooks.json exists and the manifest omits hooks', () => {
+    writeFile(tmpDir, '.claude-plugin/plugin.json', JSON.stringify({ name: 'test-plugin' }));
     writeFile(tmpDir, 'hooks/hooks.json', VALID_HOOKS_JSON);
 
-    expect(validateClaudePlugin(tmpDir)).toEqual([]);
-  });
-
-  it('emits NO finding for a similarly-named file that is not the auto-loaded one', () => {
-    writeFile(
-      tmpDir,
-      '.claude-plugin/plugin.json',
-      JSON.stringify({ name: 'test-plugin', hooks: './hooks/extra-hooks.json' }),
-    );
-    writeFile(tmpDir, 'hooks/extra-hooks.json', VALID_HOOKS_JSON);
-
-    expect(validateClaudePlugin(tmpDir)).toEqual([]);
+    expect(validateClaudePlugin(tmpDir)).toHaveLength(0);
   });
 });

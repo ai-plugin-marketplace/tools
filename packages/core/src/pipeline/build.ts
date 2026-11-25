@@ -7,8 +7,10 @@
  * `targets/<id>/` (§7.2). Cross-target imports between `targets/<X>` and `targets/<Y>` are
  * forbidden, but the pipeline is permitted to orchestrate all of them.
  *
- * **Sentinel scope (§4.3).** Only the in-plugin-dir generated hook JSONs (`hooks/claude.json`,
- * `hooks/hooks.json`, `hooks/cursor.json`) carry a `_generated` JSON sentinel. The `dist/**` bundle trees are
+ * **Sentinel scope (§4.3).** Only the in-plugin-dir generated hook files carry a sentinel:
+ * `hooks/cursor.json` inline as a `_generated` JSON field, and `hooks/hooks.json` (Claude) in a
+ * `hooks/hooks.json.generated` sidecar, because Claude hosts accept no extra keys in that file. The
+ * `dist/**` bundle trees are
  * wholly-generated and stay sentinel-less so they remain byte-identical to the committed
  * template oracle; freshness for those is a whole-tree regeneration compare (§10.5).
  *
@@ -21,13 +23,16 @@ import * as path from 'node:path';
 import { performance } from 'node:perf_hooks';
 
 import { PAYLOAD_ADAPTER_FILENAME, PAYLOAD_ADAPTER_SOURCE } from '../hooks/payload-adapter.js';
-import { parseClaudeHooksYaml } from '../targets/claude/transform.js';
+import {
+  CLAUDE_HOOKS_FILENAME,
+  parseClaudeHooksYaml,
+  serializeClaudeHooksJson,
+} from '../targets/claude/transform.js';
 import {
   convertClaudeHooksYamlToCursorJson,
   cursorDocHasGatingHook,
 } from '../targets/cursor/transform.js';
 import { CURSOR_SHIM_FILENAME, CURSOR_SHIM_RUNNER_SOURCE } from '../targets/cursor/shim-runner.js';
-import { convertClaudeHooksYamlToGeminiJson } from '../targets/gemini/transform.js';
 import { bundleGeminiPlugin } from '../targets/gemini/bundle.js';
 import { bundleKiroPlugin } from '../targets/kiro/bundle.js';
 
@@ -104,8 +109,14 @@ function findHooksYaml(pluginDir: string): { absPath: string; source: string } |
  *   envelope declares — the adapter is useful to any handler, gating or not — but it IS skipped
  *   for a hooks YAML whose `hooks:` map is empty (`{}`): nothing could ever invoke it, so emitting
  *   the adapter would be dead weight (issue #58, nit 1).
- * - `claude` in envelope + a hooks YAML present → `hooks/claude.json` (Claude JSON + sentinel).
- * - `gemini` in envelope + a hooks YAML present → `hooks/hooks.json` (Gemini JSON + sentinel).
+ * - `claude` in envelope + a hooks YAML present → `hooks/hooks.json` (Claude JSON, sentinel-free)
+ *   and its `hooks/hooks.json.generated` sidecar. Claude Code auto-loads `hooks/hooks.json`, so the
+ *   manifest names no hooks file; the Claude desktop app refuses to sync a plugin to remote (SSH)
+ *   hosts when its manifest has a `hooks` field, and drops `hooks/hooks.json` from the sync when it
+ *   has any top-level key besides `$schema`, `description` and `hooks`
+ *   (docs/specs/hooks-json-autoload-collision.md, Option 4b).
+ * - `gemini` emits no in-plugin hook file: Gemini is emitted-installed and reads the
+ *   `dist/gemini/<plugin>/hooks/hooks.json` its bundler writes (same doc, Option 4a).
  * - `cursor` in envelope + a hooks YAML present → `hooks/cursor.json` (Cursor JSON + sentinel), plus
  *   — when ≥1 gating-event hook is present — the fail-closed shim runner `hooks/cursor-shim.mjs`
  *   (static JS, sidecar-carried sentinel) and its `hooks/cursor-shim.mjs.generated` sidecar
@@ -137,7 +148,7 @@ export function computePluginHookArtifacts(
   // Parsed+validated once, up front, regardless of envelope: `hooks/claude.yaml` is always
   // authored in the Claude Code dialect (this module's own doc), so this is the single source of
   // truth both for gating payload-adapter emission below (issue #58 nit 1) and, when 'claude' is
-  // declared, for `hooks/claude.json` — the YAML is never parsed twice.
+  // declared, for `hooks/hooks.json` — the YAML is never parsed twice.
   const parsed = parseClaudeHooksYaml(yamlContent);
   const hasHooks = Object.keys(parsed.hooks).length > 0;
 
@@ -170,27 +181,23 @@ export function computePluginHookArtifacts(
   }
 
   if (envelopeSet.has('claude')) {
+    // Claude reads `hooks/hooks.json` with no manifest reference. The file holds only the parsed
+    // hooks document; its sentinel lives in the sidecar, because the desktop app's remote plugin
+    // sync drops a hooks.json that carries any other top-level key (such as `_generated`).
+    const claudeHooksAbsPath = path.join(pluginDir, 'hooks', CLAUDE_HOOKS_FILENAME);
     artifacts.push({
-      absPath: path.join(pluginDir, 'hooks', 'claude.json'),
+      absPath: claudeHooksAbsPath,
       source: yaml.source,
-      sentinelMode: 'json-field',
+      sentinelMode: 'sidecar',
       target: 'claude',
-      expectedContent: applyJsonSentinel(parsed, yaml.source, version),
+      expectedContent: serializeClaudeHooksJson(parsed),
     });
-  }
-
-  if (envelopeSet.has('gemini')) {
-    // The Gemini transform returns a serialized string; parse it back to an object so the
-    // sentinel sits at the top level. applyJsonSentinel re-serializes 2-space + newline,
-    // matching the transform's own format, so the body round-trips byte-for-byte.
-    const geminiJson = convertClaudeHooksYamlToGeminiJson(yamlContent);
-    const geminiObj = JSON.parse(geminiJson) as unknown;
     artifacts.push({
-      absPath: path.join(pluginDir, 'hooks', 'hooks.json'),
+      absPath: sidecarPath(claudeHooksAbsPath),
       source: yaml.source,
-      sentinelMode: 'json-field',
-      target: 'gemini',
-      expectedContent: applyJsonSentinel(geminiObj, yaml.source, version),
+      sentinelMode: 'sidecar',
+      target: 'claude',
+      expectedContent: sidecarContent(yaml.source, version),
     });
   }
 

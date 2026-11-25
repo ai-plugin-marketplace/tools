@@ -25,7 +25,6 @@ import { PAYLOAD_ADAPTER_FILENAME, PAYLOAD_ADAPTER_SOURCE } from '../hooks/paylo
 import { convertClaudeHooksYamlToJson } from '../targets/claude/transform.js';
 import { convertClaudeHooksYamlToCursorJson } from '../targets/cursor/transform.js';
 import { CURSOR_SHIM_FILENAME, CURSOR_SHIM_RUNNER_SOURCE } from '../targets/cursor/shim-runner.js';
-import { convertClaudeHooksYamlToGeminiJson } from '../targets/gemini/transform.js';
 import { computePluginHookArtifacts, runBuild } from './build.js';
 import { GeneratorDowngradeError, getGeneratorVersion } from './generator-version.js';
 import {
@@ -129,44 +128,41 @@ describeMaybe('runBuild — in-plugin hook JSON sentinels (§4.3)', () => {
     repo.cleanup();
   });
 
-  it('writes hooks/claude.json with a json-field sentinel that strips to the Claude transform', async () => {
-    repo = synthPluginRepo(ALL_SYNTH_TARGETS);
-    await runBuild(repo.repoRoot);
-
-    const claudeJsonPath = path.join(repo.pluginDir, 'hooks', 'claude.json');
-    expect(fs.existsSync(claudeJsonPath)).toBe(true);
-
-    const onDisk = fs.readFileSync(claudeJsonPath, 'utf-8');
-    // §4.3: carries a json-field sentinel naming the author-authored source.
-    expect(hasSentinel(onDisk, 'json-field')).toBe(true);
-    expect(readSentinelSource(onDisk, 'json-field')).toBe('hooks/claude.yaml');
-
-    // §7.2: stripping the sentinel yields exactly the mechanical Claude transform output.
-    const yaml = fs.readFileSync(path.join(repo.pluginDir, 'hooks', 'claude.yaml'), 'utf-8');
-    expect(stripSentinel(onDisk, 'json-field')).toBe(convertClaudeHooksYamlToJson(yaml));
-  });
-
-  it('writes hooks/hooks.json (gemini) with a json-field sentinel that strips to the Gemini transform', async () => {
+  it('writes Claude hooks to hooks/hooks.json, sentinel-free, with a sidecar marker', async () => {
     repo = synthPluginRepo(ALL_SYNTH_TARGETS);
     await runBuild(repo.repoRoot);
 
     const hooksJsonPath = path.join(repo.pluginDir, 'hooks', 'hooks.json');
     expect(fs.existsSync(hooksJsonPath)).toBe(true);
 
+    // Claude hosts accept only $schema/description/hooks at the top level of hooks/hooks.json
+    // (the desktop app's remote sync drops anything else), so the body is exactly the Claude
+    // transform output and the sentinel lives in the sidecar.
     const onDisk = fs.readFileSync(hooksJsonPath, 'utf-8');
-    expect(hasSentinel(onDisk, 'json-field')).toBe(true);
-    expect(readSentinelSource(onDisk, 'json-field')).toBe('hooks/claude.yaml');
-
     const yaml = fs.readFileSync(path.join(repo.pluginDir, 'hooks', 'claude.yaml'), 'utf-8');
-    expect(stripSentinel(onDisk, 'json-field')).toBe(convertClaudeHooksYamlToGeminiJson(yaml));
+    expect(onDisk).toBe(convertClaudeHooksYamlToJson(yaml));
+    expect(Object.keys(JSON.parse(onDisk) as object)).toStrictEqual(['hooks']);
+
+    const sidecar = fs.readFileSync(sidecarPath(hooksJsonPath), 'utf-8');
+    expect(hasSentinel(sidecar, 'sidecar')).toBe(true);
+    expect(readSentinelSource(sidecar, 'sidecar')).toBe('hooks/claude.yaml');
   });
 
-  it('does NOT emit gemini hooks.json when gemini is absent from the envelope', async () => {
-    repo = synthPluginRepo(['claude']);
+  it('never writes the retired hooks/claude.json', async () => {
+    repo = synthPluginRepo(ALL_SYNTH_TARGETS);
+    await runBuild(repo.repoRoot);
+    expect(fs.existsSync(path.join(repo.pluginDir, 'hooks', 'claude.json'))).toBe(false);
+  });
+
+  it('writes no in-plugin hooks/hooks.json for a gemini-only envelope (Gemini reads its dist bundle)', async () => {
+    repo = synthPluginRepo(['gemini']);
     await runBuild(repo.pluginDir);
     expect(fs.existsSync(path.join(repo.pluginDir, 'hooks', 'hooks.json'))).toBe(false);
-    // claude.json IS emitted because claude is declared.
-    expect(fs.existsSync(path.join(repo.pluginDir, 'hooks', 'claude.json'))).toBe(true);
+    expect(
+      fs.existsSync(
+        path.join(repo.repoRoot, 'dist', 'gemini', SYNTH_PLUGIN_NAME, 'hooks', 'hooks.json'),
+      ),
+    ).toBe(true);
   });
 
   it('writes hooks/cursor.json (cursor) with a json-field sentinel that strips to the Cursor transform', async () => {
@@ -212,7 +208,7 @@ describeMaybe('runBuild — BuildResult shape (§8.1)', () => {
     const [result] = await runBuild(repo.repoRoot);
 
     const claudeArtifact = result?.artifacts.find(
-      (a) => a.path === path.join(repo.pluginDir, 'hooks', 'claude.json'),
+      (a) => a.path === path.join(repo.pluginDir, 'hooks', 'hooks.json'),
     );
     expect(claudeArtifact).toBeDefined();
     expect(claudeArtifact?.target).toBe('claude');
@@ -254,7 +250,7 @@ describeMaybe('runBuild — BuildResult shape (§8.1)', () => {
     const [result] = await runBuild(repo.pluginDir);
     // No dist trees: cursor/vercel have no bundle step.
     expect(fs.existsSync(path.join(repo.repoRoot, 'dist'))).toBe(false);
-    // Neither claude nor gemini is declared → their hook JSONs are absent.
+    // Claude is not declared → its hook file is absent.
     expect(fs.existsSync(path.join(repo.pluginDir, 'hooks', 'claude.json'))).toBe(false);
     expect(fs.existsSync(path.join(repo.pluginDir, 'hooks', 'hooks.json'))).toBe(false);
     // cursor IS declared and a hooks YAML is present → hooks/cursor.json is emitted.
@@ -548,15 +544,13 @@ describe('computePluginHookArtifacts — payload adapter', () => {
     }
   });
 
-  it('still emits hooks/claude.json for a hookless plugin when `claude` is declared — only the adapter is skipped', () => {
+  it('still emits hooks/hooks.json for a hookless plugin when `claude` is declared — only the adapter is skipped', () => {
     const dir = writePluginWithHooks(HOOKLESS_HOOKS_YAML);
     pluginDir = dir;
     const artifacts = computePluginHookArtifacts(dir, ['claude']);
-    const claudeJson = artifacts.find((a) => a.absPath === path.join(dir, 'hooks', 'claude.json'));
+    const claudeJson = artifacts.find((a) => a.absPath === path.join(dir, 'hooks', 'hooks.json'));
     expect(claudeJson).toBeDefined();
-    expect(
-      JSON.parse(stripSentinel(claudeJson?.expectedContent ?? '', 'json-field')) as unknown,
-    ).toStrictEqual({ hooks: {} });
+    expect(JSON.parse(claudeJson?.expectedContent ?? '') as unknown).toStrictEqual({ hooks: {} });
   });
 
   it('still emits hooks/payload-adapter + its sidecar when the plugin declares ≥1 hook — issue #58 nit 1 positive case', () => {

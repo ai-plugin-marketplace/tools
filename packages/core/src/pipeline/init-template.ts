@@ -59,7 +59,7 @@ export interface InitFile {
  *
  * Emitted as 2-space JSON with a trailing newline to match the repo's formatting conventions.
  */
-function renderPackageJson(name: string, cliVersion: string, coreVersion: string): string {
+function renderPackageJson(name: string, cliRange: string, coreVersion: string): string {
   const pkg = {
     name,
     private: true,
@@ -71,7 +71,7 @@ function renderPackageJson(name: string, cliVersion: string, coreVersion: string
       scaffold: 'aipm scaffold',
     },
     devDependencies: {
-      '@ai-plugin-marketplace/cli': `^${cliVersion}`,
+      '@ai-plugin-marketplace/cli': cliRange,
       '@ai-plugin-marketplace/core': `^${coreVersion}`,
     },
   };
@@ -248,7 +248,7 @@ export function buildManagedScaffoldFiles(): InitFile[] {
  *   `name`/`owner.name`. MUST be unique across marketplaces (a shared name collides on install).
  *   `runInit` resolves this default (`${USER}-ai-plugins`) at its I/O boundary and passes it in,
  *   keeping this function a pure function of its inputs (no environment reads).
- * - `cliVersion`/`coreVersion` — pinned as carets of the respective dev dependencies.
+ * - `cliRange`/`coreVersion` — the verified CLI range and the base version for the core caret.
  *
  * The set mirrors §3.2: `package.json`, the seed-only `.gitignore`, the
  * {@link buildManagedScaffoldFiles managed scaffold files} (CI workflow), `README.md`, all three
@@ -269,11 +269,11 @@ export function buildManagedScaffoldFiles(): InitFile[] {
 export function buildInitFiles(
   name: string,
   marketplaceName: string,
-  cliVersion: string,
+  cliRange: string,
   coreVersion: string,
 ): InitFile[] {
   return [
-    { path: 'package.json', content: renderPackageJson(name, cliVersion, coreVersion) },
+    { path: 'package.json', content: renderPackageJson(name, cliRange, coreVersion) },
     { path: '.gitignore', content: renderGitignore() },
     { path: 'README.md', content: renderReadme(name) },
     { path: '.claude-plugin/marketplace.json', content: renderEmptyMarketplace(marketplaceName) },

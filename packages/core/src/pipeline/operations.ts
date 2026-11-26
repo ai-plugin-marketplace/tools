@@ -65,14 +65,14 @@ export function validate(targetPath: string, opts?: ValidateOptions): Promise<Va
 /**
  * Scaffold a thin consumer repo that depends on `@ai-plugin-marketplace/cli` and holds plugin
  * sources only (§3.2, §11). The generated `package.json` uses caret ranges based on
- * {@link InitOptions.cliVersion} and the installed core version. Returns an {@link InitOutcome}
+ * verified CLI release metadata and the installed core version. Returns an {@link InitOutcome}
  * flagging an ancestor `pnpm-workspace.yaml`, if present.
  *
- * @throws If the CLI version is missing or invalid, or the target path is occupied.
+ * @throws If the CLI range cannot be verified or the target path is occupied.
  *
  * @public
  */
-export function init(targetDir: string, opts: InitOptions): Promise<InitOutcome> {
+export function init(targetDir: string, opts?: InitOptions): Promise<InitOutcome> {
   return runInit(targetDir, opts);
 }
 

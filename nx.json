@@ -54,6 +54,8 @@
         "default",
         "^production",
         "{workspaceRoot}/vitest.config.ts",
+        "{workspaceRoot}/docs/specs/architecture.md",
+        "{workspaceRoot}/RELEASING.md",
         "{workspaceRoot}/.github/template-repo.rev",
         { "env": "AIPM_TEMPLATE_REPO" },
         { "env": "AIPM_REQUIRE_TEMPLATE" }

@@ -69,7 +69,7 @@ describe('templated Markdown outputs never contain literal backslash-backtick by
     tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'templated-md-init-test-'));
     try {
       const repoDir = path.join(tmpDir, 'my-repo');
-      await runInit(repoDir, { cliVersion: '0.0.0' });
+      await runInit(repoDir);
 
       const mdFiles = collectMarkdownFiles(repoDir);
       expect(mdFiles).toContain('README.md');

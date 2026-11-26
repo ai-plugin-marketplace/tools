@@ -10,9 +10,8 @@
  * **Version pinning.** `cli` and `core` ship independently and may differ (e.g. `cli 0.1.1` ships
  * with `core 0.2.0`), so the generated `package.json` pins each to a caret of its *own* version.
  * `core`'s version is read at runtime from this package's `package.json` (resolved relative to
- * {@link import.meta.url}, exactly as `load-config.ts` resolves the package entrypoint); `cli`'s
- * version is supplied by the cli entrypoint via {@link InitOptions.cliVersion} (it reads its own
- * `package.json`). Programmatic callers supply the CLI version explicitly.
+ * {@link import.meta.url}); the default CLI release comes from the CLI manifest at build time.
+ * The CLI entrypoint supplies its own installed manifest.
  *
  * @see docs/specs/architecture.md §3.2 (template repo contents)
  * @see docs/specs/architecture.md §11 (template→toolkit dependency contract)
@@ -27,6 +26,45 @@ import { getGeneratorVersion } from './generator-version.js';
 import { buildInitFiles } from './init-template.js';
 import { writeScaffoldSidecar } from './scaffold-refresh.js';
 import type { InitOptions, InitOutcome } from './types.js';
+
+const CLI_PACKAGE_NAME = '@ai-plugin-marketplace/cli';
+
+function resolveCliRange(opts: InitOptions | undefined): string {
+  // The source uses the workspace manifest. The build ships the same release metadata with core.
+  const releaseFile =
+    opts?.cliPackageJson ??
+    new URL(
+      import.meta.url.endsWith('.ts') ? '../../../cli/package.json' : '../cli-release.json',
+      import.meta.url,
+    );
+  const release = JSON.parse(fs.readFileSync(releaseFile, 'utf8')) as {
+    name?: unknown;
+    version?: unknown;
+  } | null;
+  const cliRelease =
+    release?.name === CLI_PACKAGE_NAME && typeof release.version === 'string'
+      ? semver.valid(release.version)
+      : null;
+  if (cliRelease === null) {
+    throw new Error(
+      `Invalid CLI release metadata in '${releaseFile.href}': expected ${CLI_PACKAGE_NAME}.`,
+    );
+  }
+
+  const override = opts?.cliVersion;
+  const version = override === undefined ? cliRelease : semver.valid(override);
+  if (version === null) {
+    throw new Error("Invalid 'cliVersion': expected a semantic version.");
+  }
+  const range = `^${version}`;
+  if (!semver.satisfies(version, range)) {
+    throw new Error("Invalid 'cliVersion': expected a version that can be used as a caret range.");
+  }
+  if (!semver.satisfies(cliRelease, range)) {
+    throw new Error(`Invalid 'cliVersion': ${range} excludes ${CLI_PACKAGE_NAME}@${cliRelease}.`);
+  }
+  return range;
+}
 
 /**
  * Resolve the default marketplace name from the environment: `${USER}-ai-plugins`. Falls back to
@@ -117,12 +155,11 @@ function findAncestorPnpmWorkspace(dir: string): string | undefined {
  * is fine.
  *
  * @param targetDir - Absolute or relative path to the directory to scaffold into.
- * @param opts - Init options; `name` overrides the derived repo name, `marketplaceName` the
- *   default `${USER}-ai-plugins` marketplace name. `cliVersion` is the required CLI package version.
+ * @param opts - Name and CLI release overrides.
  * @returns An {@link InitOutcome}: `ancestorWorkspace`, set when an ancestor directory has a
  *   `pnpm-workspace.yaml` (issue #96 ancestor-contamination guard — see
  *   {@link findAncestorPnpmWorkspace}), is `undefined` otherwise.
- * @throws {Error} When the target cannot be scaffolded into or `cliVersion` is missing or invalid.
+ * @throws {Error} When the target cannot be scaffolded into or the CLI range cannot be verified.
  */
 export async function runInit(
   targetDir: string,
@@ -137,11 +174,7 @@ export async function runInit(
     );
   }
 
-  if (!opts || semver.valid(opts.cliVersion) === null) {
-    throw new Error(
-      "Invalid 'cliVersion': supply the version of @ai-plugin-marketplace/cli to scaffold.",
-    );
-  }
+  const cliRange = resolveCliRange(opts);
 
   // Detected before writing anything, since the check is independent of the scaffold write below
   // and cheap to do up front. Note this does NOT reach the caller if a later step throws (name
@@ -153,14 +186,14 @@ export async function runInit(
   // or whitespace-only value would otherwise produce an invalid `package.json` name and an empty
   // marketplace identity in the registries. The derived defaults (basename / env-resolved) are
   // trusted and not re-validated here.
-  const name = resolveProvidedName(opts.name, 'name') ?? path.basename(resolved);
+  const name = resolveProvidedName(opts?.name, 'name') ?? path.basename(resolved);
   // The marketplace name is the identity hosts register under and must be unique across
   // marketplaces (a shared name collides on install). Prefer an explicit `--name`, then the
   // env-derived `${USER}-ai-plugins`, resolved here so `buildInitFiles` stays pure.
   const marketplaceName =
-    resolveProvidedName(opts.marketplaceName, 'marketplaceName') ?? defaultMarketplaceName();
+    resolveProvidedName(opts?.marketplaceName, 'marketplaceName') ?? defaultMarketplaceName();
   const core = getGeneratorVersion();
-  const files = buildInitFiles(name, marketplaceName, opts.cliVersion, core);
+  const files = buildInitFiles(name, marketplaceName, cliRange, core);
 
   fs.mkdirSync(resolved, { recursive: true });
   for (const file of files) {

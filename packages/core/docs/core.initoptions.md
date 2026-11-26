@@ -37,7 +37,26 @@ Description
 </th></tr></thead>
 <tbody><tr><td>
 
-[cliVersion](./core.initoptions.cliversion.md)
+[cliPackageJson?](./core.initoptions.clipackagejson.md)
+
+
+</td><td>
+
+
+</td><td>
+
+URL
+
+
+</td><td>
+
+_(Optional)_ File URL of an installed CLI package's `package.json`<!-- -->. Defaults to the CLI release metadata shipped with core. The CLI command supplies its own manifest.
+
+
+</td></tr>
+<tr><td>
+
+[cliVersion?](./core.initoptions.cliversion.md)
 
 
 </td><td>
@@ -50,7 +69,7 @@ string
 
 </td><td>
 
-The CLI package's semver version. The scaffold uses it as the base of the generated `@ai-plugin-marketplace/cli` caret dependency. The CLI command supplies its installed version automatically. Programmatic callers supply the version they intend to install.
+_(Optional)_ Optional base version for the CLI dependency caret range. The range must include the CLI release identified by [InitOptions.cliPackageJson](./core.initoptions.clipackagejson.md) or by the metadata shipped with core.
 
 
 </td></tr>

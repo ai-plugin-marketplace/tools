@@ -312,11 +312,16 @@ export interface InitOptions {
   marketplaceName?: string;
 
   /**
-   * The CLI package's semver version. The scaffold uses it as the base of the generated
-   * `@ai-plugin-marketplace/cli` caret dependency. The CLI command supplies its installed
-   * version automatically. Programmatic callers supply the version they intend to install.
+   * Optional base version for the CLI dependency caret range. The range must include the CLI
+   * release identified by {@link InitOptions.cliPackageJson} or by the metadata shipped with core.
    */
-  cliVersion: string;
+  cliVersion?: string;
+
+  /**
+   * File URL of an installed CLI package's `package.json`. Defaults to the CLI release metadata
+   * shipped with core. The CLI command supplies its own manifest.
+   */
+  cliPackageJson?: URL;
 }
 
 /**

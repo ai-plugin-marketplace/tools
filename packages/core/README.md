@@ -51,9 +51,10 @@ import {
 | `addTarget`    | Scaffold skeleton files for a new target in an existing plugin     |
 | `listTargets`  | Return the `TargetId` values this toolkit version recognises       |
 
-For programmatic scaffolding, call `init(dir, { cliVersion })` with the version of
-`@ai-plugin-marketplace/cli` you intend to install. The generated manifest uses a caret range
-based on that version and a separate range for the installed core version.
+For programmatic scaffolding, `init(dir)` uses the CLI release metadata shipped with core.
+To scaffold for a different installed CLI release, pass its `package.json` file URL as
+`cliPackageJson`. An optional `cliVersion` sets the base of the CLI caret range, which must
+include the selected release. The core range comes from the installed core version.
 
 ### Key types
 

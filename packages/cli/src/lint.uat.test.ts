@@ -58,7 +58,7 @@ beforeAll(() => {
 
 beforeAll(async () => {
   cleanRepo = fs.mkdtempSync(path.join(os.tmpdir(), 'aipm-lint-uat-clean-'));
-  await init(cleanRepo, { cliVersion: '0.0.0' });
+  await init(cleanRepo);
 
   brokenRepo = fs.mkdtempSync(path.join(os.tmpdir(), 'aipm-lint-uat-broken-'));
   const pluginDir = path.join(brokenRepo, 'plugins', 'my-plugin');

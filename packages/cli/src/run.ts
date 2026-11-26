@@ -18,7 +18,6 @@
 
 import * as fs from 'node:fs';
 import * as path from 'node:path';
-import { fileURLToPath } from 'node:url';
 
 import {
   addTarget,
@@ -90,10 +89,11 @@ Options:
   --version, -V                 Print toolkit version
 `;
 
+const cliPackageJson = new URL('../package.json', import.meta.url);
+
 /** Read this package's version from its own package.json, resolved relative to the compiled file. */
 function toolkitVersion(): string {
-  const pkgPath = path.join(path.dirname(fileURLToPath(import.meta.url)), '..', 'package.json');
-  const pkg = JSON.parse(fs.readFileSync(pkgPath, 'utf-8')) as { version: string };
+  const pkg = JSON.parse(fs.readFileSync(cliPackageJson, 'utf-8')) as { version: string };
   return pkg.version;
 }
 
@@ -273,7 +273,7 @@ export async function run(argv: readonly string[], opts: RunOptions = {}): Promi
         // is the identity that matters (must be unique across marketplaces), and tying the repo
         // name to it reads cleanly for a freshly scaffolded repo.
         const outcome = await init(dir, {
-          cliVersion: toolkitVersion(),
+          cliPackageJson,
           ...(nameOpt !== undefined ? { name: nameOpt, marketplaceName: nameOpt } : {}),
         });
         const created = path.resolve(dir);

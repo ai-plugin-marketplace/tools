@@ -4,10 +4,10 @@
 
 ## InitOptions.cliVersion property
 
-The CLI package's semver version. The scaffold uses it as the base of the generated `@ai-plugin-marketplace/cli` caret dependency. The CLI command supplies its installed version automatically. Programmatic callers supply the version they intend to install.
+Optional base version for the CLI dependency caret range. The range must include the CLI release identified by [InitOptions.cliPackageJson](./core.initoptions.clipackagejson.md) or by the metadata shipped with core.
 
 **Signature:**
 
 ```typescript
-cliVersion: string;
+cliVersion?: string;
 ```

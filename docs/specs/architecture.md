@@ -422,7 +422,7 @@ export type AipmConfig = AipmConfigInput & { readonly [aipmConfigBrand]: 'AipmCo
 export function defineConfig(config: AipmConfigInput): AipmConfig;
 
 // Operations
-export function init(dir: string, opts: InitOptions): Promise<InitOutcome>;
+export function init(dir: string, opts?: InitOptions): Promise<InitOutcome>;
 export function build(path: string, opts?: BuildOptions): Promise<BuildResult[]>;
 export function validate(path: string, opts?: ValidateOptions): Promise<ValidationResult>;
 export function scaffold(name: string, opts: ScaffoldOptions): Promise<void>;
@@ -501,6 +501,9 @@ export interface MigrateResult {
 
 export interface InitOptions {
   name?: string; // repo name in the generated package.json; defaults to basename(dir)
+  marketplaceName?: string;
+  cliVersion?: string;
+  cliPackageJson?: URL;
 }
 
 export interface InitOutcome {
@@ -510,7 +513,7 @@ export interface InitOutcome {
 }
 ```
 
-**Why `init` lives in `core`.** `init` scaffolds the thin consumer repo described in §3.2. The generated `package.json` uses separate caret ranges for core and CLI. Core reads its own installed version. The CLI command supplies its installed version, and programmatic callers supply `opts.cliVersion`. The scaffold also writes the repo-root marketplace registries, an empty `plugins/`, a README, and a CI workflow that runs `aipm build` then `aipm validate` (§10.5). It refuses to write into a non-empty directory.
+**Why `init` lives in `core`.** `init` scaffolds the thin consumer repo described in §3.2. The generated `package.json` uses separate caret ranges for core and CLI. Core reads its own installed version and ships CLI release metadata for the default. The CLI command supplies its own manifest as `opts.cliPackageJson`. Programmatic callers can also pass an installed CLI manifest. If supplied, `opts.cliVersion` must produce a range that includes the release identified by the selected metadata. The scaffold also writes the repo-root marketplace registries, an empty `plugins/`, a README, and a CI workflow that runs `aipm build` then `aipm validate` (§10.5). It refuses to write into a non-empty directory.
 
 **Ancestor-workspace guard (issue #96).** `init` always writes a local `package.json`, but a directory nested under an ancestor `pnpm-workspace.yaml` can still have a later `pnpm install` swept into that ancestor workspace (shared lockfile/hoisting) instead of staying local. `init` walks up from the target directory looking for an ancestor `pnpm-workspace.yaml` and reports it via `InitOutcome.ancestorWorkspace`; the `aipm init` CLI surface prints a warning to stderr when it is set, before instructing the user to run `pnpm install`.
 
@@ -534,16 +537,16 @@ export interface InitOutcome {
 
 **Subcommands.**
 
-| Subcommand                          | Wraps                                          |
-| ----------------------------------- | ---------------------------------------------- |
-| `aipm init [dir]`                   | `core.init(dir, { cliVersion })` — default cwd |
-| `aipm build [path]`                 | `core.build(path)` — default cwd               |
-| `aipm validate [path]`              | `core.validate(path)`                          |
-| `aipm scaffold <name>`              | `core.scaffold(name)`                          |
-| `aipm migrate [path]`               | `core.migrate(path)` — no-op in v0.1.0         |
-| `aipm check-support <plugin>`       | `core.checkSupport(pluginDir)`                 |
-| `aipm add-target <plugin> <target>` | `core.addTarget(pluginDir, target)`            |
-| `aipm list-targets`                 | `core.listTargets()`                           |
+| Subcommand                          | Wraps                                              |
+| ----------------------------------- | -------------------------------------------------- |
+| `aipm init [dir]`                   | `core.init(dir, { cliPackageJson })` — default cwd |
+| `aipm build [path]`                 | `core.build(path)` — default cwd                   |
+| `aipm validate [path]`              | `core.validate(path)`                              |
+| `aipm scaffold <name>`              | `core.scaffold(name)`                              |
+| `aipm migrate [path]`               | `core.migrate(path)` — no-op in v0.1.0             |
+| `aipm check-support <plugin>`       | `core.checkSupport(pluginDir)`                     |
+| `aipm add-target <plugin> <target>` | `core.addTarget(pluginDir, target)`                |
+| `aipm list-targets`                 | `core.listTargets()`                               |
 
 **Naming convention.** CLI subcommand names are kebab-case; `core` exports are camelCase. The CLI handles the mapping at its argv boundary; downstream consumers never see the hyphenated form.
 
@@ -695,22 +698,24 @@ When additional packages are extracted (§12.4), the template will depend on a s
 
 ### 11.3 Upgrade flow
 
-Routine minor/patch:
+For releases within both existing dependency ranges:
 
-```
+```sh
 pnpm up @ai-plugin-marketplace/cli @ai-plugin-marketplace/core
 aipm build
-git commit -am "chore: upgrade @ai-plugin-marketplace to X.Y.Z"
 ```
 
-Major:
+To cross a caret boundary, including a pre-1.0 minor line, select versions for both packages.
+Choose a core version within the selected CLI release's core dependency range. For example, to
+move from CLI `^0.8.0` and core `^0.11.0` to CLI `0.8.1` and core `0.12.0`:
 
-```
-pnpm up @ai-plugin-marketplace/cli@latest
-aipm migrate
+```sh
+pnpm add -D @ai-plugin-marketplace/cli@0.8.1 @ai-plugin-marketplace/core@0.12.0
 aipm build
-git commit -am "chore: upgrade to @ai-plugin-marketplace vN"
 ```
+
+For a major upgrade that requires migration, run `aipm migrate` before `aipm build`.
+Commit the updated manifests, lockfile, and generated artifacts.
 
 ### 11.4 What the template may customize
 

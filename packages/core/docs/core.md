@@ -105,7 +105,7 @@ Validate and brand a workspace configuration. Throws a `ZodError` on invalid inp
 
 </td><td>
 
-Scaffold a thin consumer repo that depends on `@ai-plugin-marketplace/cli` and holds plugin sources only (§3.2, §11). The generated `package.json` uses caret ranges based on [InitOptions.cliVersion](./core.initoptions.cliversion.md) and the installed core version. Returns an [InitOutcome](./core.initoutcome.md) flagging an ancestor `pnpm-workspace.yaml`<!-- -->, if present.
+Scaffold a thin consumer repo that depends on `@ai-plugin-marketplace/cli` and holds plugin sources only (§3.2, §11). The generated `package.json` uses caret ranges based on verified CLI release metadata and the installed core version. Returns an [InitOutcome](./core.initoutcome.md) flagging an ancestor `pnpm-workspace.yaml`<!-- -->, if present.
 
 
 </td></tr>

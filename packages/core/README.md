@@ -51,9 +51,12 @@ import {
 | `addTarget`    | Scaffold skeleton files for a new target in an existing plugin     |
 | `listTargets`  | Return the `TargetId` values this toolkit version recognises       |
 
+`build()` returns `{ results, validation }`. With `failFast: true`, it rejects after writing
+artifacts and completing validation if there are hard findings.
+
 ### Key types
 
-`TargetId`, `BuildOptions`, `BuildResult`, `GeneratedFile`, `ValidateOptions`,
+`TargetId`, `BuildOptions`, `BuildOutcome`, `BuildResult`, `GeneratedFile`, `ValidateOptions`,
 `ValidationResult`, `Finding`, `FindingCode`, `ScaffoldOptions`, `InitOptions`,
 `MigrateOptions`, `MigrateResult`, `SupportReport`.
 

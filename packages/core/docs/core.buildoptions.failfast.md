@@ -4,7 +4,7 @@
 
 ## BuildOptions.failFast property
 
-Abort after the first hard validation finding. Default: false.
+Throw an error summarizing all hard findings after artifact generation and validation. Default: false.
 
 **Signature:**
 

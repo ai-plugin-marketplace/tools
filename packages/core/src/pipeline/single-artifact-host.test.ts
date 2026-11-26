@@ -172,7 +172,7 @@ describe('single-artifact-host — root emission (workspace present, N=1)', () =
   // of picking one of the actual owners.
   it("records the sidecar manifest artifact with target `'shared'` when multiple hosts emit", async () => {
     repo = synthRegistryRepo([geminiPlugin('gem'), kiroPlugin('kir')], WORKSPACE);
-    const results = await runBuild(repo.repoRoot);
+    const { results } = await runBuild(repo.repoRoot);
 
     const manifestAbs = path.join(repo.repoRoot, ...SIDECAR_REL);
     const sidecarArtifacts = results.flatMap((r) =>

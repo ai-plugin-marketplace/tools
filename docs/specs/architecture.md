@@ -314,7 +314,7 @@ Invoked by `aipm validate` (or as a subphase of `aipm build`). Inspects on-disk 
 ### 5.4 Phase invariants
 
 - Author produces inputs; Build produces outputs; Validate inspects both.
-- `aipm build` always runs `aipm validate` before returning success in CI; locally it emits warnings and continues.
+- Build runs validation once after writing artifacts and returns the findings with the per-plugin results. The CLI reports those findings and exits with status 1 for hard findings. Freshness findings are hard in CI and soft locally. Standalone validation also checks the published-surface boundary.
 - No phase calls another's internals; they communicate through on-disk state.
 
 ---
@@ -423,7 +423,7 @@ export function defineConfig(config: AipmConfigInput): AipmConfig;
 
 // Operations
 export function init(dir: string, opts?: InitOptions): Promise<InitOutcome>;
-export function build(path: string, opts?: BuildOptions): Promise<BuildResult[]>;
+export function build(path: string, opts?: BuildOptions): Promise<BuildOutcome>;
 export function validate(path: string, opts?: ValidateOptions): Promise<ValidationResult>;
 export function scaffold(name: string, opts: ScaffoldOptions): Promise<void>;
 export function migrate(path: string, opts?: MigrateOptions): Promise<MigrateResult>;
@@ -440,6 +440,11 @@ export type TargetId =
   | 'kiro'
   | 'open-plugins' // vendor-neutral Open Plugins standard (open-plugins.com); see open-plugins-target.md
   | 'vercel';
+
+export interface BuildOutcome {
+  results: BuildResult[];
+  validation: ValidationResult;
+}
 
 export interface BuildResult {
   plugin: string; // plugin name

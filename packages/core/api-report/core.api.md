@@ -63,12 +63,18 @@ export interface AipmWorkspaceInput {
 export function applyRuleSeverityOverrides(diagnostics: readonly Diagnostic[], overrides: ReadonlyMap<string, RuleSeverityOverride>): Diagnostic[];
 
 // @public
-export function build(targetPath: string, opts?: BuildOptions): Promise<BuildResult[]>;
+export function build(targetPath: string, opts?: BuildOptions): Promise<BuildOutcome>;
 
 // @public
 export interface BuildOptions {
     failFast?: boolean;
     forceDowngrade?: boolean;
+}
+
+// @public
+export interface BuildOutcome {
+    results: BuildResult[];
+    validation: ValidationResult;
 }
 
 // @public

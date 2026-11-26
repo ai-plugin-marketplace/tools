@@ -301,21 +301,18 @@ export async function run(argv: readonly string[], opts: RunOptions = {}): Promi
         // Resolve the target from the first non-flag positional so `aipm build --force-downgrade`
         // does not mistake the flag for a path.
         const target = rest.find((a) => !a.startsWith('-')) ?? process.cwd();
-        const results = await build(target, { forceDowngrade });
+        const { results, validation } = await build(target, { forceDowngrade });
         const artifactCount = results.reduce((n, r) => n + r.artifacts.length, 0);
         // §5.4: build runs validate before reporting success. The success summary is written
         // only when validate passes — printing it unconditionally would put a "Built N
         // plugin(s)" line ABOVE a hard finding that fails the run, misleading the user into
         // thinking the run succeeded (issue #97).
-        // The published-surface boundary check is left to `aipm validate`: an unmarked contributor
-        // skill elsewhere in the repo is not a reason for a build to fail.
-        const result = await validate(target, { skipPublishedSurfaceBoundary: true });
-        if (result.passed) {
+        if (validation.passed) {
           out.write(
             `Built ${String(results.length)} plugin(s), ${String(artifactCount)} artifact(s).\n`,
           );
         }
-        const passed = reportValidation(result, out);
+        const passed = reportValidation(validation, out);
         return passed ? 0 : 1;
       }
 

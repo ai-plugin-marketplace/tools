@@ -38,8 +38,8 @@ import {
   rootManifestPath,
   rootRegistryArtifactFiles,
   serializeRootManifest,
-} from './build.js';
-import type { RegistryArtifact } from './build.js';
+} from './artifacts.js';
+import type { RegistryArtifact } from './artifacts.js';
 import { discoverPlugins } from './discover.js';
 import {
   ConfigLoadError,
@@ -1488,7 +1488,7 @@ export async function checkRootArtifactFreshness(
   const findings: Finding[] = [];
 
   // 1. N=1 gate findings (always hard, own code). Surfaced regardless of `skipFreshness` so the
-  // post-build validate (which skips freshness) still fails fast on an ambiguous host declaration.
+  // structural check also runs when freshness is disabled.
   findings.push(...root.findings);
 
   // 2. Collision findings against the committed sidecar's tracked set (build's safety guard 3).
@@ -1793,9 +1793,8 @@ export async function runValidate(
   // single-plugin validate of a repo with sibling plugins compares against the same expected bytes.
   //
   // The registry block is freshness-only (gated on `!skipFreshness`). The root-artifact block runs
-  // whenever a workspace is present — even under `skipFreshness` — because its `single-artifact-host`
-  // / `root-artifact-collision` findings are structural gates (not drift), and `runBuild`'s
-  // post-build validate (which skips freshness) must still fail fast on them.
+  // whenever a workspace is present, including under `skipFreshness`, because its
+  // `single-artifact-host` and `root-artifact-collision` findings are structural gates.
   if (workspace !== undefined) {
     // For repo-root input, pluginDirs already covers the whole repo — reuse it (and the warm
     // config cache) rather than re-discovering and reloading. Single-plugin input needs a

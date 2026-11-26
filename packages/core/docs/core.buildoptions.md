@@ -50,7 +50,7 @@ boolean
 
 </td><td>
 
-_(Optional)_ Abort after the first hard validation finding. Default: false.
+_(Optional)_ Throw an error summarizing all hard findings after artifact generation and validation. Default: false.
 
 
 </td></tr>

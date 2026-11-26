@@ -25,7 +25,8 @@ import { PAYLOAD_ADAPTER_FILENAME, PAYLOAD_ADAPTER_SOURCE } from '../hooks/paylo
 import { convertClaudeHooksYamlToJson } from '../targets/claude/transform.js';
 import { convertClaudeHooksYamlToCursorJson } from '../targets/cursor/transform.js';
 import { CURSOR_SHIM_FILENAME, CURSOR_SHIM_RUNNER_SOURCE } from '../targets/cursor/shim-runner.js';
-import { computePluginHookArtifacts, runBuild } from './build.js';
+import { computePluginHookArtifacts } from './artifacts.js';
+import { runBuild } from './build.js';
 import { GeneratorDowngradeError, getGeneratorVersion } from './generator-version.js';
 import {
   applyJsonSentinel,
@@ -196,7 +197,7 @@ describeMaybe('runBuild — BuildResult shape (§8.1)', () => {
 
   it('returns a length-1 array for single-plugin input with the correct plugin name and dir', async () => {
     repo = synthPluginRepo(['claude', 'gemini']);
-    const results = await runBuild(repo.pluginDir);
+    const { results } = await runBuild(repo.pluginDir);
     expect(results).toHaveLength(1);
     expect(results[0]?.plugin).toBe(SYNTH_PLUGIN_NAME);
     expect(results[0]?.pluginDir).toBe(repo.pluginDir);
@@ -206,7 +207,9 @@ describeMaybe('runBuild — BuildResult shape (§8.1)', () => {
 
   it('records the claude hook JSON with target=claude and the right source', async () => {
     repo = synthPluginRepo(ALL_SYNTH_TARGETS);
-    const [result] = await runBuild(repo.repoRoot);
+    const {
+      results: [result],
+    } = await runBuild(repo.repoRoot);
 
     const claudeArtifact = result?.artifacts.find(
       (a) => a.path === path.join(repo.pluginDir, 'hooks', 'hooks.json'),
@@ -218,7 +221,9 @@ describeMaybe('runBuild — BuildResult shape (§8.1)', () => {
 
   it('records dist gemini and kiro bundle files with the right target', async () => {
     repo = synthPluginRepo(ALL_SYNTH_TARGETS);
-    const [result] = await runBuild(repo.repoRoot);
+    const {
+      results: [result],
+    } = await runBuild(repo.repoRoot);
     const artifacts = result?.artifacts ?? [];
 
     const geminiExt = artifacts.find(
@@ -236,7 +241,9 @@ describeMaybe('runBuild — BuildResult shape (§8.1)', () => {
 
   it('records the cursor hook JSON with target=cursor and the right source', async () => {
     repo = synthPluginRepo(ALL_SYNTH_TARGETS);
-    const [result] = await runBuild(repo.repoRoot);
+    const {
+      results: [result],
+    } = await runBuild(repo.repoRoot);
 
     const cursorArtifact = result?.artifacts.find(
       (a) => a.path === path.join(repo.pluginDir, 'hooks', 'cursor.json'),
@@ -248,7 +255,9 @@ describeMaybe('runBuild — BuildResult shape (§8.1)', () => {
 
   it('emits only hooks/cursor.json for cursor (no dist tree) and nothing for vercel', async () => {
     repo = synthPluginRepo(['cursor', 'vercel']);
-    const [result] = await runBuild(repo.pluginDir);
+    const {
+      results: [result],
+    } = await runBuild(repo.pluginDir);
     // No dist trees: cursor/vercel have no bundle step.
     expect(fs.existsSync(path.join(repo.repoRoot, 'dist'))).toBe(false);
     // Claude is not declared → its hook file is absent.
@@ -282,17 +291,31 @@ describeMaybe('runBuild — post-build validation (§5.4)', () => {
     );
   });
 
-  it('without failFast, returns results even though post-build validation has hard findings', async () => {
+  it('returns generated artifacts and hard post-build findings together', async () => {
     repo = synthPluginRepo(['claude']);
-    // Should NOT throw — the CLI decides the exit code from a separate validate call.
-    const results = await runBuild(repo.pluginDir);
+    const { results, validation } = await runBuild(repo.pluginDir);
+
     expect(results).toHaveLength(1);
+    expect(results[0]?.artifacts).toContainEqual({
+      path: path.join(repo.pluginDir, 'hooks', 'hooks.json'),
+      source: `${SYNTH_PLUGIN_NAME}/hooks/claude.yaml`,
+      target: 'claude',
+    });
+    expect(validation.passed).toBe(false);
+    expect(validation.findings).toContainEqual({
+      severity: 'hard',
+      code: 'envelope-adherence',
+      plugin: SYNTH_PLUGIN_NAME,
+      message:
+        "Artifact 'gemini-extension.json' exists but target 'gemini' is not in the support envelope.",
+      hint: "Remove 'gemini-extension.json' or add 'gemini' to the targets array in aipm.config.ts.",
+    });
   });
 
   it('a clean all-targets build passes post-build validation under failFast', async () => {
     repo = synthPluginRepo(ALL_SYNTH_TARGETS);
     // No throw means post-build validate found no hard findings.
-    const results = await runBuild(repo.repoRoot, { failFast: true });
+    const { results } = await runBuild(repo.repoRoot, { failFast: true });
     expect(results).toHaveLength(1);
   });
 });

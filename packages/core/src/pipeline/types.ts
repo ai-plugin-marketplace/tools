@@ -85,7 +85,10 @@ export const DEFAULT_SCAFFOLD_TARGETS = TARGET_IDS.filter(
  * @public
  */
 export interface BuildOptions {
-  /** Abort after the first hard validation finding. Default: false. */
+  /**
+   * Throw an error summarizing all hard findings after artifact generation and validation.
+   * Default: false.
+   */
   failFast?: boolean;
   /**
    * Override the generator-version downgrade guard (§4.3.1). By default a build whose installed
@@ -94,6 +97,18 @@ export interface BuildOptions {
    * this to proceed anyway and restamp with the older version. Default: false.
    */
   forceDowngrade?: boolean;
+}
+
+/**
+ * Artifacts and post-build diagnostics from {@link build}.
+ *
+ * @public
+ */
+export interface BuildOutcome {
+  /** One result per built plugin. */
+  results: BuildResult[];
+  /** Combined post-build validation, including repo-level findings. */
+  validation: ValidationResult;
 }
 
 /**

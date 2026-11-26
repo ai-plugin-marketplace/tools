@@ -13,7 +13,8 @@ import * as os from 'node:os';
 import * as path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import * as core from '@ai-plugin-marketplace/core';
 
 import { run } from './run.js';
 
@@ -335,15 +336,19 @@ describe('aipm build success-line ordering (issue #97)', () => {
     return pluginDir;
   }
 
-  it('does not print "Built N plugin(s)" when the post-build validate has a hard finding', async () => {
+  it('reports the build’s hard finding without calling standalone validate', async () => {
     const pluginDir = writeVersionMismatchedPlugin();
-    const { code, out } = await invoke(['build', pluginDir]);
+    const validate = vi.spyOn(core, 'validate');
+    try {
+      const { code, out } = await invoke(['build', pluginDir]);
 
-    expect(code).toBe(1);
-    expect(out).toContain('version-consistency');
-    // The success summary must never appear on a failing run (issue #97) — not merely reordered
-    // below the failure.
-    expect(out).not.toMatch(/Built \d+ plugin/);
+      expect(code).toBe(1);
+      expect(out).toContain('version-consistency');
+      expect(out).not.toMatch(/Built \d+ plugin/);
+      expect(validate).not.toHaveBeenCalled();
+    } finally {
+      validate.mockRestore();
+    }
   });
 
   it('still prints "Built N plugin(s)" before validation output on a clean run', async () => {

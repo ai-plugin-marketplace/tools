@@ -23,7 +23,7 @@ import { execFileSync } from 'node:child_process';
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 
-import { readRootManifestPaths } from '../pipeline/build.js';
+import { readRootManifestPaths } from '../pipeline/artifacts.js';
 import { discoverPlugins } from '../pipeline/discover.js';
 import { hasRepoConfig, loadRepoConfig } from '../pipeline/load-config.js';
 import type { RuleContext } from './types.js';

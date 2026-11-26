@@ -22,7 +22,7 @@ import { runValidate } from './validate.js';
 import type {
   AddTargetOutcome,
   BuildOptions,
-  BuildResult,
+  BuildOutcome,
   InitOptions,
   InitOutcome,
   MigrateOptions,
@@ -42,13 +42,16 @@ function isCi(): boolean {
 }
 
 /**
- * Build a single plugin or every plugin under a repo root. `path` may be a plugin directory
- * (contains `aipm.config.ts`) or a repo root (contains `plugins/`); the orchestrator detects
- * which and returns a length-1 array for single-plugin input. See §5.2, §8.1.
+ * Build a single plugin or every plugin under a repo root. Returns one result per built plugin
+ * along with post-build validation findings, including freshness (hard in CI, soft locally).
+ * The published-surface boundary check runs only in standalone {@link validate}.
+ *
+ * Setting {@link BuildOptions.failFast} rejects with a summary of hard findings after generation
+ * and validation complete. By default, the outcome includes those findings.
  *
  * @public
  */
-export function build(targetPath: string, opts?: BuildOptions): Promise<BuildResult[]> {
+export function build(targetPath: string, opts?: BuildOptions): Promise<BuildOutcome> {
   return runBuild(targetPath, opts);
 }
 

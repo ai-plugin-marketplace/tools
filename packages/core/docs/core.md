@@ -50,7 +50,9 @@ Apply `--rule` overrides to a diagnostic list: a diagnostic whose `ruleId` has a
 
 </td><td>
 
-Build a single plugin or every plugin under a repo root. `path` may be a plugin directory (contains `aipm.config.ts`<!-- -->) or a repo root (contains `plugins/`<!-- -->); the orchestrator detects which and returns a length-1 array for single-plugin input. See §5.2, §8.1.
+Build a single plugin or every plugin under a repo root. Returns one result per built plugin along with post-build validation findings, including freshness (hard in CI, soft locally). The published-surface boundary check runs only in standalone [validate()](./core.validate.md)<!-- -->.
+
+Setting [BuildOptions.failFast](./core.buildoptions.failfast.md) rejects with a summary of hard findings after generation and validation complete. By default, the outcome includes those findings.
 
 
 </td></tr>
@@ -272,6 +274,17 @@ Raw input shape accepted by `defineWorkspace`<!-- -->. Authored as `aipm.workspa
 </td><td>
 
 Options for [build()](./core.build.md)<!-- -->.
+
+
+</td></tr>
+<tr><td>
+
+[BuildOutcome](./core.buildoutcome.md)
+
+
+</td><td>
+
+Artifacts and post-build diagnostics from [build()](./core.build.md)<!-- -->.
 
 
 </td></tr>

@@ -1023,3 +1023,34 @@ describe('runBuild — Claude hooks/hooks.json migration', () => {
     await expect(runBuild(pluginDir)).resolves.toBeDefined();
   });
 });
+
+describe('runBuild — bundle destination ownership', () => {
+  let repoRoot: string | undefined;
+
+  afterEach(() => {
+    if (repoRoot !== undefined) fs.rmSync(repoRoot, { recursive: true });
+  });
+
+  it.each(['gemini', 'kiro'])('rejects a %s bundle that would replace its source', async (host) => {
+    repoRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'aipm-bundle-ownership-'));
+    const pluginDir = path.join(repoRoot, 'bundles', host, 'demo');
+    fs.mkdirSync(path.join(pluginDir, 'hooks'), { recursive: true });
+    const config = `export default { version: '0.1.0', targets: ['claude', '${host}'] };\n`;
+    const configPath = path.join(pluginDir, 'aipm.config.ts');
+    fs.writeFileSync(configPath, config);
+    fs.writeFileSync(
+      path.join(pluginDir, 'hooks', 'claude.yaml'),
+      'schemaVersion: "0.1.0"\nhooks: {}\n',
+    );
+    fs.writeFileSync(
+      path.join(repoRoot, 'aipm.repo.ts'),
+      `export default { pluginsRoot: 'bundles/${host}', distDir: 'bundles' };\n`,
+    );
+
+    await expect(runBuild(repoRoot)).rejects.toThrow(
+      `Bundle destination '${pluginDir}' overlaps plugin source directory '${pluginDir}'`,
+    );
+    expect(fs.readFileSync(configPath, 'utf-8')).toBe(config);
+    expect(fs.existsSync(path.join(pluginDir, 'hooks', 'hooks.json'))).toBe(false);
+  });
+});

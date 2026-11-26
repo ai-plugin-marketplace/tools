@@ -279,6 +279,10 @@ To prevent this, every sentinel-carrying artifact is **stamped** with the genera
 2. **Guard.** At the start of `aipm build`, the toolkit reads the stamped version of every existing (committed) sentinel-carrying artifact. If the installed core version is **older** (by semver precedence, not string comparison) than any stamped version, the build **refuses** with a non-zero exit and a message naming both versions and suggesting `pnpm install`. Equal-or-newer installs, unstamped/first-time trees, and an empty artifact set all proceed and (re)stamp with the installed version. The `--force-downgrade` flag overrides the guard, proceeding and restamping with the older version.
 3. **All-or-nothing.** The guard runs before any write, so a refusal leaves the whole tree untouched — including the **sentinel-less** artifacts (`dist/**` bundles, marketplace registries, single-artifact-host root files), which carry no stamp of their own but are protected transitively: as long as at least one stamped artifact reveals the downgrade, the build aborts and rewrites nothing. A repo whose hooks-authoring plugins all emit at least one stamped hook artifact is fully covered; the guard's coverage is the union of stamped artifacts across the repo.
 
+Before changing repository files, `aipm build` rejects any generated bundle directory that is equal to, contains, or lies within a discovered plugin source directory. This check uses the concrete bundle destinations, so shared ancestors of the configured roots are allowed when the individual trees are disjoint.
+
+Workspace builds also compare the planned bytes for each repo-root output path before emitting artifacts. Identical bytes are written once. Different bytes produce a hard `root-artifact-collision` naming the path and its contributors.
+
 ### 4.4 Marketplace registry
 
 The toolkit generates **four** repo-root marketplace registries, one per registry-backed target (each emitted only when at least one plugin declares that target): `.claude-plugin/marketplace.json` (Claude), `.cursor-plugin/marketplace.json` (Cursor), `.agents/plugins/marketplace.json` (Codex), and — as the 4th — a repo-root `marketplace.json` (Open Plugins, at the spec's lookup position 1; see `open-plugins-target.md` OP-D3). All live at the **template repo root**, not in any single plugin. They are template-level registries listing every plugin by name and source path. Each plugin contributes an entry; the registries themselves are owned and validated at the template level. Consistency between plugins and their registry entries is checked by §10.1.4. The repo-root `marketplace.json` is additionally collision-guarded via the generated-root sidecar (a pre-existing foreign file raises a hard `root-artifact-collision`).
@@ -477,7 +481,7 @@ export type FindingCode =
   | 'marketplace-registration' // plugin-to-registry projection is wrong
   | 'freshness' // generated file drifted from what `aipm build` would produce
   | 'single-artifact-host' // a single-artifact host (gemini/kiro) is declared by >1 plugin
-  | 'root-artifact-collision' // a generated repo-root path is occupied by a non-toolkit file
+  | 'root-artifact-collision' // a repo-root path has competing bytes or is occupied by a non-toolkit file
   | 'default-marketplace-name' // marketplace name/owner is still a template placeholder (always soft)
   | 'frontmatter-invalid' // a skill/agent/command/POWER.md frontmatter is not strict YAML
   | 'metadata-dir-isolation' // the Open Plugins `.plugin/` dir holds more than plugin.json (hard, open-plugins target)

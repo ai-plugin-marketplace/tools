@@ -235,6 +235,54 @@ describe('single-artifact-host — collision guard', () => {
     repo?.cleanup();
   });
 
+  it.each([false, true])(
+    'plans shared root skill bytes before emission (identical: %s)',
+    async (identical) => {
+      const skill = 'skills/review/SKILL.md';
+      const content = '---\nname: review\ndescription: Review changes\n---\n# Review\n';
+      const gemini = geminiPlugin('gem');
+      const kiro = kiroPlugin('kir');
+      repo = synthRegistryRepo(
+        [
+          { ...gemini, files: { ...gemini.files, [skill]: content } },
+          {
+            ...kiro,
+            files: {
+              ...kiro.files,
+              [skill]: identical ? content : content + 'Kiro instructions.\n',
+            },
+          },
+        ],
+        WORKSPACE,
+      );
+
+      if (!identical) {
+        await expect(runBuild(repo.repoRoot)).rejects.toThrow(
+          "root-artifact-collision: Cannot emit 'skills/review/SKILL.md': plugin 'gem' (gemini) and plugin 'kir' (kiro) produce different bytes.",
+        );
+        expect(exists(repo.repoRoot, 'dist')).toBe(false);
+        expect(exists(repo.repoRoot, 'skills')).toBe(false);
+        expect(exists(repo.repoRoot, ...SIDECAR_REL)).toBe(false);
+        const validation = await runValidate(repo.repoRoot, { ci: true });
+        expect(ofCode(validation.findings, 'root-artifact-collision')).toEqual([
+          expect.objectContaining({ severity: 'hard' }),
+        ]);
+        return;
+      }
+
+      const results = await runBuild(repo.repoRoot);
+      const destination = path.join(repo.repoRoot, skill);
+      expect(fs.readFileSync(destination, 'utf-8')).toBe(content);
+      expect(readSidecarPaths(repo.repoRoot).filter((rel) => rel === skill)).toEqual([skill]);
+      for (const result of results) {
+        expect(result.artifacts.filter((artifact) => artifact.path === destination)).toHaveLength(
+          1,
+        );
+      }
+      expect((await runValidate(repo.repoRoot, { ci: true })).passed).toBe(true);
+    },
+  );
+
   it('a pre-existing non-generated root GEMINI.md → hard root-artifact-collision, original NOT overwritten', async () => {
     const ORIGINAL = '# HOST-OWNED, do not touch\n';
     repo = synthRegistryRepo([geminiPlugin('gem')], WORKSPACE);

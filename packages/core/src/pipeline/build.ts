@@ -614,6 +614,8 @@ interface RootArtifactFile {
   relPath: string;
   /** The target this file belongs to (a single-artifact host or a repo-root registry target). */
   owner: TargetId;
+  /** Source plugin for native root output. Registries represent the workspace. */
+  plugin?: string;
   /** Exact bytes to write at the repo root. */
   content: Buffer;
 }
@@ -629,7 +631,7 @@ export interface RootArtifacts {
   files: RootArtifactFile[];
   /** Repo-root-relative POSIX paths the toolkit generated this run (the tracked set). Sorted. */
   trackedPaths: string[];
-  /** Hard `single-artifact-host` findings — one per host declared by more than one plugin. */
+  /** Hard findings for ambiguous host declarations or conflicting planned bytes. */
   findings: Finding[];
 }
 
@@ -655,17 +657,43 @@ export function rootRegistryArtifactFiles(
 /**
  * Merge the single-artifact-host root artifacts with the repo-root registry files into one
  * {@link RootArtifacts}, so a single collision guard / sidecar tracked-set / orphan sweep covers
- * every repo-root file the toolkit owns (OP-D5/VT-4, option (a)).
+ * every repo-root file the toolkit owns (OP-D5/VT-4, option (a)). Competing byte sources
+ * produce a hard finding. Keep identical contributions here so the disk guard can check every
+ * contributing owner before selecting a single writer per path.
  */
 export function mergeRootArtifacts(
   base: RootArtifacts,
   registryFiles: readonly RootArtifactFile[],
 ): RootArtifacts {
   const files = [...base.files, ...registryFiles];
-  const trackedPaths = [
-    ...new Set([...base.trackedPaths, ...registryFiles.map((f) => f.relPath)]),
-  ].sort();
-  return { files, trackedPaths, findings: base.findings };
+  const groups = new Map<string, RootArtifactFile>();
+  const conflictingPaths = new Set<string>();
+  const findings = [...base.findings];
+  for (const file of files) {
+    const first = groups.get(file.relPath);
+    if (first === undefined) {
+      groups.set(file.relPath, file);
+    } else if (!first.content.equals(file.content) && !conflictingPaths.has(file.relPath)) {
+      conflictingPaths.add(file.relPath);
+      findings.push({
+        severity: 'hard',
+        code: 'root-artifact-collision',
+        message: `Cannot emit '${file.relPath}': ${rootArtifactSource(first)} and ${rootArtifactSource(file)} produce different bytes.`,
+      });
+    }
+  }
+  return {
+    files: files.filter((file) => !conflictingPaths.has(file.relPath)),
+    trackedPaths: [...groups.keys()].filter((rel) => !conflictingPaths.has(rel)).sort(),
+    findings,
+  };
+}
+
+/** Describe the contributor to a planned repo-root file. */
+function rootArtifactSource(file: RootArtifactFile): string {
+  return file.plugin === undefined
+    ? `the ${file.owner} registry`
+    : `plugin '${file.plugin}' (${file.owner})`;
 }
 
 /**
@@ -748,6 +776,7 @@ export function computeRootArtifacts(
         files.push({
           relPath: relPosix,
           owner: host,
+          plugin: declarer.name,
           content: fs.readFileSync(path.join(tempDir, rel)),
         });
       }
@@ -783,17 +812,17 @@ function rootCollisionFinding(owner: TargetId, relPath: string): Finding {
  * tracked set. A file collides when it exists on disk AND its repo-root-relative path is NOT in the
  * prior tracked set — i.e. it is not something the toolkit previously created, so it belongs to the
  * host/author and must not be clobbered (safety guard 3). A clean repo (no pre-existing root files)
- * never collides. Collision is evaluated PER OWNER: if any of an owner's files collide, that owner
- * is suppressed entirely (no partial writes) and a single finding names the first offending path.
+ * has no on-disk collisions. If any of an owner's files collide, that owner is suppressed entirely
+ * and a single finding names the first offending path.
  *
- * Returns the collision findings plus the set of owners that collided (so the caller can skip
- * writing/tracking their files). Pure — no I/O beyond `existsSync`.
+ * Returns the collision findings and the files eligible for emission, once per destination.
+ * Pure — no I/O beyond `existsSync`.
  */
 export function detectRootCollisions(
   repoRoot: string,
   artifacts: RootArtifacts,
   priorTracked: readonly string[],
-): { findings: Finding[]; collidedOwners: Set<TargetId> } {
+): { findings: Finding[]; files: RootArtifactFile[] } {
   const priorSet = new Set(priorTracked);
   const findings: Finding[] = [];
   const collidedOwners = new Set<TargetId>();
@@ -807,7 +836,13 @@ export function detectRootCollisions(
     }
   }
 
-  return { findings, collidedOwners };
+  const files = new Map<string, RootArtifactFile>();
+  for (const file of artifacts.files) {
+    if (!collidedOwners.has(file.owner) && !files.has(file.relPath)) {
+      files.set(file.relPath, file);
+    }
+  }
+  return { findings, files: [...files.values()] };
 }
 
 /**
@@ -985,14 +1020,59 @@ function assertClaudeHooksFileOwned(
   );
 }
 
+/** Resolve existing ancestors as well as destinations that have yet to be created. */
+function resolveOutputPath(destination: string): string {
+  if (fs.lstatSync(destination, { throwIfNoEntry: false }) !== undefined) {
+    return fs.realpathSync.native(destination);
+  }
+  return path.join(resolveOutputPath(path.dirname(destination)), path.basename(destination));
+}
+
+/** True when candidate is the directory itself or a descendant. */
+function containsPath(directory: string, candidate: string): boolean {
+  const relative = path.relative(directory, candidate);
+  return relative !== '..' && !relative.startsWith(`..${path.sep}`) && !path.isAbsolute(relative);
+}
+
+function pathsOverlap(first: string, second: string): boolean {
+  return containsPath(first, second) || containsPath(second, first);
+}
+
+/** Refuse destinations that could replace or write into a discovered plugin source tree. */
+function assertDestinationsOutsideSources(
+  kind: string,
+  destinations: readonly string[],
+  sources: ReadonlyMap<string, string>,
+): void {
+  for (const destination of destinations) {
+    // A write may follow a symlink, while a recursive cleanup can remove the link itself.
+    const physicalEntry = path.join(
+      resolveOutputPath(path.dirname(destination)),
+      path.basename(destination),
+    );
+    const resolved = resolveOutputPath(destination);
+    for (const [source, realSource] of sources) {
+      if (
+        pathsOverlap(source, destination) ||
+        pathsOverlap(realSource, physicalEntry) ||
+        pathsOverlap(realSource, resolved)
+      ) {
+        throw new Error(
+          `${kind} destination '${destination}' overlaps plugin source directory '${source}'.`,
+        );
+      }
+    }
+  }
+}
+
 /**
  * Build a single plugin: load envelope, emit in-plugin hook JSONs and dist bundles, and return
  * the `BuildResult` (without running validation — the caller orchestrates §5.4 validation once).
  */
 async function buildOnePlugin(
   pluginDir: string,
-  distDir: string,
-  cache?: ConfigCache,
+  bundles: readonly DistBundle[],
+  cache: ConfigCache,
 ): Promise<BuildResult> {
   const start = performance.now();
   const pluginName = path.basename(pluginDir);
@@ -1028,7 +1108,7 @@ async function buildOnePlugin(
   }
 
   // ── dist/** bundle trees (sentinel-less, byte-parity with oracle) ──────────
-  for (const bundle of computeDistBundles(pluginDir, distDir, envelope)) {
+  for (const bundle of bundles) {
     bundle.regenerate(bundle.destDir);
     for (const rel of collectFilesRelative(bundle.destDir)) {
       artifacts.push({
@@ -1106,6 +1186,44 @@ async function collectStampedArtifacts(
   return stamped;
 }
 
+/** Plan repo-wide registry and native root output before modifying the repository. */
+async function planWorkspaceOutput(
+  repoRoot: string,
+  pluginDirs: readonly string[],
+  workspace: AipmWorkspace,
+  cache: ConfigCache,
+  sourcePaths: ReadonlyMap<string, string>,
+): Promise<{
+  vendorRegistries: RegistryArtifact[];
+  priorTracked: string[];
+  rootFiles: RootArtifactFile[];
+}> {
+  const plugins = await collectRegistryPlugins(repoRoot, pluginDirs, cache);
+  const registries = computeRegistryArtifacts(repoRoot, plugins, workspace);
+  const vendorRegistries = registries.filter((r) => !isRootRegistryTarget(r.target));
+  const root = mergeRootArtifacts(
+    computeRootArtifacts(repoRoot, plugins, workspace),
+    rootRegistryArtifactFiles(repoRoot, registries),
+  );
+  const conflicts = root.findings.filter((finding) => finding.code === 'root-artifact-collision');
+  if (conflicts.length > 0) {
+    throw new Error(conflicts.map(({ code, message }) => `${code}: ${message}`).join('\n'));
+  }
+
+  const priorTracked = readRootManifestPaths(repoRoot);
+  const { files: rootFiles } = detectRootCollisions(repoRoot, root, priorTracked);
+  const destinations = [
+    ...rootFiles.map((file) => path.join(repoRoot, file.relPath)),
+    ...priorTracked.map((rel) => path.join(repoRoot, rel)).filter((old) => fs.existsSync(old)),
+    ...vendorRegistries.map((registry) => registry.absPath),
+    ...managedVendorRegistryPaths(repoRoot).filter((orphan) => fs.existsSync(orphan)),
+  ];
+  const manifest = rootManifestPath(repoRoot);
+  if (rootFiles.length > 0 || fs.existsSync(manifest)) destinations.push(manifest);
+  assertDestinationsOutsideSources('Workspace output', destinations, sourcePaths);
+  return { vendorRegistries, priorTracked, rootFiles };
+}
+
 // ---------------------------------------------------------------------------
 // Public entry point
 // ---------------------------------------------------------------------------
@@ -1122,7 +1240,8 @@ async function collectStampedArtifacts(
  * @param opts - Build options.
  * @returns One `BuildResult` per built plugin (length-1 for single-plugin input).
  * @throws {Error} If `targetPath` is neither a plugin nor a repo root, a config fails to load,
- *   a transform fails, or (when `failFast`) post-build validation reports hard findings.
+ *   a transform fails, a bundle or workspace output would overlap a plugin source, repo-root outputs disagree on
+ *   their bytes, or (when `failFast`) post-build validation reports hard findings.
  */
 export async function runBuild(targetPath: string, opts?: BuildOptions): Promise<BuildResult[]> {
   const { repoRoot, pluginDirs, distDir } = await discoverPlugins(targetPath);
@@ -1140,33 +1259,42 @@ export async function runBuild(targetPath: string, opts?: BuildOptions): Promise
   const stampedArtifacts = await collectStampedArtifacts(repoRoot, pluginDirs, configCache);
   assertGeneratorNotDowngraded(getGeneratorVersion(), stampedArtifacts, opts?.forceDowngrade);
 
+  const pluginBuilds = await Promise.all(
+    pluginDirs.map(async (pluginDir) => {
+      const { targets } = await loadPluginConfig(pluginDir, configCache);
+      return { pluginDir, bundles: computeDistBundles(pluginDir, distDir, targets) };
+    }),
+  );
+  const bundleDestinations = pluginBuilds.flatMap(({ bundles }) => bundles.map((b) => b.destDir));
+  const workspace = await loadWorkspaceConfig(repoRoot);
+  // A targeted build can still write into a sibling plugin, and workspace artifacts always
+  // represent the whole repo. Include the targeted plugin even if discovery places it elsewhere.
+  const allPluginDirs =
+    path.resolve(targetPath) !== repoRoot &&
+    (workspace !== undefined || bundleDestinations.length > 0)
+      ? (await discoverPlugins(repoRoot)).pluginDirs
+      : pluginDirs;
+  const sourcePaths = new Map(
+    [...new Set([...pluginDirs, ...allPluginDirs])].map((dir) => [
+      dir,
+      fs.realpathSync.native(dir),
+    ]),
+  );
+  assertDestinationsOutsideSources('Bundle', bundleDestinations, sourcePaths);
+
+  // Plan all workspace outputs before emitting plugin artifacts or removing orphaned files.
+  const workspaceOutput =
+    workspace === undefined
+      ? undefined
+      : await planWorkspaceOutput(repoRoot, allPluginDirs, workspace, configCache, sourcePaths);
+
   const results: BuildResult[] = [];
-  for (const pluginDir of pluginDirs) {
-    results.push(await buildOnePlugin(pluginDir, distDir, configCache));
+  for (const { pluginDir, bundles } of pluginBuilds) {
+    results.push(await buildOnePlugin(pluginDir, bundles, configCache));
   }
 
-  // ── Marketplace registries (opt-in via aipm.workspace.ts at the repo root) ──
-  // When the repo has opted into registry generation, the three marketplace.json files are
-  // GENERATED here (subsuming the hand-authored registries + validateMarketplaceRegistration).
-  // Registries are repo-level, so we compute them from EVERY plugin under the repo root — not just
-  // the one a single-plugin `targetPath` named — so a partial build never drops sibling entries.
-  // Re-discovering from `repoRoot` (rather than reusing `pluginDirs`, which holds only the named
-  // plugin for single-plugin input) is what makes the registry repo-complete. When no
-  // `aipm.workspace.ts` is present, generation does nothing and the registries stay hand-authored.
-  const workspace = await loadWorkspaceConfig(repoRoot);
-  if (workspace !== undefined) {
-    // For repo-root input, pluginDirs already covers the whole repo — reuse it (and the warm
-    // config cache) instead of re-discovering and reloading. Only single-plugin input needs a
-    // repo-wide re-scan to make the registry repo-complete.
-    const isRepoRoot = path.resolve(targetPath) === repoRoot;
-    const allPluginDirs = isRepoRoot ? pluginDirs : (await discoverPlugins(repoRoot)).pluginDirs;
-    const registryPlugins = await collectRegistryPlugins(repoRoot, allPluginDirs, configCache);
-    const registries = computeRegistryArtifacts(repoRoot, registryPlugins, workspace);
-    // Split vendor-subdirectory registries (written + orphan-swept here, unchanged) from repo-root
-    // registries (open-plugins), whose writing/orphan-removal is collision-guarded via the
-    // generated-root sidecar below (OP-D5/VT-4) so a foreign root marketplace.json is never touched.
-    const vendorRegistries = registries.filter((r) => !isRootRegistryTarget(r.target));
-    const rootRegistries = registries.filter((r) => isRootRegistryTarget(r.target));
+  if (workspaceOutput !== undefined) {
+    const { vendorRegistries, priorTracked, rootFiles } = workspaceOutput;
     const vendorExpectedPaths = new Set(vendorRegistries.map((r) => r.absPath));
     for (const registry of vendorRegistries) {
       writeFileEnsuringDir(registry.absPath, registry.expectedContent);
@@ -1188,27 +1316,11 @@ export async function runBuild(targetPath: string, opts?: BuildOptions): Promise
       }
     }
 
-    // ── Repo-root native emission (gemini / kiro + repo-root registries) ────────
-    // Single-artifact hosts install ONE extension/power per repo from the repo ROOT; repo-root
-    // registries (open-plugins) put their `marketplace.json` at the root too. Both are repo-level and
-    // computed from EVERY plugin (the N=1 gate / registry membership sees the whole repo). The emit is
-    // safety-guarded: bundling happens in temp (never against repoRoot), a single collision guard
-    // refuses to overwrite non-generated root files (OP-D5), and orphan removal is bounded to the
-    // prior tracked set recorded in the committed sidecar manifest. Merging the root registries into
-    // the same tracked set (option (a)) unifies every repo-root file the toolkit owns.
-    const priorTracked = readRootManifestPaths(repoRoot);
-    const root = mergeRootArtifacts(
-      computeRootArtifacts(repoRoot, registryPlugins, workspace),
-      rootRegistryArtifactFiles(repoRoot, rootRegistries),
-    );
-    const { collidedOwners } = detectRootCollisions(repoRoot, root, priorTracked);
-
     // The tracked set is only the paths we actually WRITE — files of a collided (suppressed) owner
     // are neither written nor tracked, so orphan removal can never delete an author-owned collider.
     const writtenTracked = new Set<string>();
     const emittedOwners = new Set<TargetId>();
-    for (const file of root.files) {
-      if (collidedOwners.has(file.owner)) continue;
+    for (const file of rootFiles) {
       const abs = path.join(repoRoot, ...file.relPath.split('/'));
       fs.mkdirSync(path.dirname(abs), { recursive: true });
       fs.writeFileSync(abs, file.content);

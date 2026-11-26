@@ -1487,25 +1487,25 @@ export async function checkRootArtifactFreshness(
 
   const findings: Finding[] = [];
 
-  // 1. N=1 gate findings (always hard, own code). Surfaced regardless of `skipFreshness` so the
-  // post-build validate (which skips freshness) still fails fast on an ambiguous host declaration.
+  // 1. Ambiguous host declarations and competing output bytes are hard planning findings.
+  // Surface them even when byte freshness is skipped.
   findings.push(...root.findings);
 
   // 2. Collision findings against the committed sidecar's tracked set (build's safety guard 3).
   // Also surfaced regardless of `skipFreshness` — a collision is a structural refusal, not drift.
   const priorTracked = readRootManifestPaths(repoRoot);
   const collisions = detectRootCollisions(repoRoot, root, priorTracked);
-  const { collidedOwners } = collisions;
   findings.push(...collisions.findings);
 
-  // The freshness-coded checks (missing/stale/orphan/sidecar) are skipped after a fresh build.
-  if (skipFreshness) return findings;
+  // Byte freshness requires a successful output plan.
+  if (skipFreshness || root.findings.some((f) => f.code === 'root-artifact-collision')) {
+    return findings;
+  }
 
   // 3a. The set of paths build WOULD write this run (excluding suppressed/collided hosts) — this is
   // the canonical expected tracked set the sidecar must match.
   const expectedTracked: string[] = [];
-  for (const file of root.files) {
-    if (collidedOwners.has(file.owner)) continue;
+  for (const file of collisions.files) {
     const rel = file.relPath;
     expectedTracked.push(rel);
     const abs = path.join(repoRoot, ...rel.split('/'));

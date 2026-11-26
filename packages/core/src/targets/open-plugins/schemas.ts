@@ -205,9 +205,22 @@ export const openPluginsMarketplaceSchema = z
       .strict()
       .optional(),
 
-    /** Plugin entries — at least one required (spec §2.4). */
+    /** Plugin entries with unique names — at least one required (spec §2.4). */
     plugins: z
       .array(openPluginsMarketplaceEntrySchema)
-      .min(1, 'plugins[] must have at least one entry'),
+      .min(1, 'plugins[] must have at least one entry')
+      .superRefine((plugins, ctx) => {
+        const names = new Set<string>();
+        for (const [index, { name }] of plugins.entries()) {
+          if (names.has(name)) {
+            ctx.addIssue({
+              code: 'custom',
+              path: [index, 'name'],
+              message: `Duplicate plugin name '${name}'`,
+            });
+          }
+          names.add(name);
+        }
+      }),
   })
   .strict();

@@ -1,8 +1,8 @@
 /**
  * Subprocess UAT for `aipm lint`: spawns the built CLI (`dist/bin.js`) as a real user would,
  * asserting stdout/exit codes for every format (text/json/sarif) and every documented exit path
- * (spec §4.1: 0 clean, 1 errors present, 2 usage error). `aipm validate`'s own UAT suite
- * (`run.test.ts`) is unmodified — this file only adds coverage for the new `lint` command.
+ * (spec §4.1: 0 clean, 1 errors present, 2 usage error). Marketplace registration cases
+ * exercise both `aipm lint` and `aipm validate`.
  *
  * Builds the CLI package (and `core`, via TS project references) once in `beforeAll` so the
  * subprocess runs the same compiled artifact a real install would, rather than calling `run()`
@@ -16,7 +16,7 @@ import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import { init } from '@ai-plugin-marketplace/core';
 
 const CLI_DIR = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
@@ -292,5 +292,186 @@ describe('aipm lint (subprocess)', () => {
     const brokenParsed = JSON.parse(brokenStdout) as JsonLintOutput;
     expect(brokenParsed.summary.fileCount).toBe(1);
     expect(brokenParsed.summary.fileCount).not.toBe(namelessParsed.summary.fileCount);
+  });
+});
+
+describe.each(['validate', 'lint'])('aipm %s marketplace registration (subprocess)', (command) => {
+  const name = 'alpha';
+  const marketplaceName = 'test-marketplace';
+  let repo: string;
+  let scratch: string;
+
+  beforeEach(() => {
+    scratch = fs.mkdtempSync(path.join(os.tmpdir(), 'aipm-marketplace-uat-'));
+    repo = path.join(scratch, 'repo');
+    fs.mkdirSync(repo);
+  });
+
+  afterEach(() => {
+    fs.rmSync(scratch, { recursive: true, force: true });
+  });
+
+  function writeJson(dir: string, file: string, value: unknown): void {
+    const location = path.join(dir, file);
+    fs.mkdirSync(path.dirname(location), { recursive: true });
+    fs.writeFileSync(location, JSON.stringify(value));
+  }
+
+  function entry(source: string) {
+    return { name, source };
+  }
+
+  function createPlugin(
+    targets: string[],
+    pluginsRoot = 'plugins',
+  ): { pluginPath: string; source: string } {
+    const pluginPath = `${pluginsRoot}/${name}`;
+    const source = `./${pluginPath}`;
+    const pluginDir = path.join(repo, pluginPath);
+    fs.mkdirSync(pluginDir, { recursive: true });
+    fs.writeFileSync(
+      path.join(pluginDir, 'aipm.config.ts'),
+      `export default ${JSON.stringify({ version: '1.0.0', targets })};\n`,
+    );
+    for (const target of targets) {
+      const manifestDir = target === 'open-plugins' ? '.plugin' : `.${target}-plugin`;
+      writeJson(pluginDir, `${manifestDir}/plugin.json`, { name, version: '1.0.0' });
+      if (target !== 'open-plugins') {
+        writeJson(repo, `${manifestDir}/marketplace.json`, {
+          name: marketplaceName,
+          plugins: [entry(source)],
+        });
+      }
+    }
+    return { pluginPath, source };
+  }
+
+  function expectRegistrationError(targetPath: string, message: string): void {
+    const { code, stdout } = runCli([command, targetPath], repo);
+    expect(stdout).toContain('marketplace-registration');
+    expect(stdout).toContain(message);
+    expect(code).toBe(1);
+  }
+
+  it('requires a valid hand-authored registry for an Open Plugins-only envelope', () => {
+    const { pluginPath, source } = createPlugin(['open-plugins']);
+    const plugins = [entry(source)];
+    writeJson(repo, 'marketplace.json', { name: marketplaceName, plugins });
+    for (const targetPath of ['.', pluginPath]) {
+      expect(runCli([command, targetPath], repo).code).toBe(0);
+    }
+
+    writeJson(repo, 'marketplace.json', { plugins });
+    for (const targetPath of ['.', pluginPath]) {
+      expectRegistrationError(targetPath, 'Failed to parse marketplace file');
+    }
+  });
+
+  it('rejects a forbidden Open Plugins entry even when the marketplace name is missing', () => {
+    const { source } = createPlugin(['claude', 'cursor']);
+    writeJson(repo, 'marketplace.json', { plugins: [entry(source)] });
+    expectRegistrationError('.', "target 'open-plugins' is not in the support envelope");
+  });
+
+  it('rejects duplicate Open Plugins entries with conflicting sources', () => {
+    const { source } = createPlugin(['claude', 'open-plugins']);
+    writeJson(repo, 'marketplace.json', {
+      name: marketplaceName,
+      plugins: [entry(source), entry('./plugins/missing')],
+    });
+    expectRegistrationError('.', "Duplicate plugin name 'alpha'");
+  });
+
+  it('finds a forbidden Open Plugins entry alongside a malformed entry', () => {
+    const { pluginPath, source } = createPlugin(['claude', 'cursor']);
+    writeJson(repo, 'marketplace.json', {
+      plugins: [{ name: 'other', source: null }, entry(source)],
+    });
+    for (const targetPath of ['.', pluginPath]) {
+      expectRegistrationError(targetPath, "target 'open-plugins' is not in the support envelope");
+    }
+  });
+
+  it('resolves Open Plugins sources against metadata.pluginRoot', () => {
+    const { source } = createPlugin(['claude', 'open-plugins']);
+    const registry = { name: marketplaceName, metadata: { pluginRoot: './plugins' } };
+    writeJson(repo, 'marketplace.json', { ...registry, plugins: [entry(source)] });
+    expectRegistrationError('.', "but expected './alpha'");
+
+    writeJson(repo, 'marketplace.json', { ...registry, plugins: [entry('./alpha')] });
+    expect(runCli([command, '.'], repo).code).toBe(0);
+  });
+
+  it('does not load configs above an independent marketplace for a direct plugin path', () => {
+    fs.writeFileSync(path.join(scratch, 'aipm.repo.ts'), "throw new Error('outer config');\n");
+    const { pluginPath, source } = createPlugin(['open-plugins']);
+    writeJson(repo, 'marketplace.json', { name: marketplaceName, plugins: [entry(source)] });
+
+    const result = runCli([command, pluginPath], repo);
+    expect(result.code, result.stdout + result.stderr).toBe(0);
+
+    if (command === 'validate') {
+      const build = runCli(['build', pluginPath], repo);
+      expect(build.code, build.stdout + build.stderr).toBe(0);
+    }
+  });
+
+  it('finds the repo registries from a direct path under a nested pluginsRoot', () => {
+    const pluginsRoot = 'extensions/plugins';
+    fs.writeFileSync(
+      path.join(repo, 'aipm.repo.ts'),
+      `export default { pluginsRoot: '${pluginsRoot}' };\n`,
+    );
+    const { pluginPath, source } = createPlugin(['claude', 'open-plugins'], pluginsRoot);
+    writeJson(repo, 'marketplace.json', { name: marketplaceName, plugins: [entry(source)] });
+
+    expect(runCli([command, '.'], repo).code).toBe(0);
+    const result = runCli([command, pluginPath], repo);
+    expect(result.code, result.stdout + result.stderr).toBe(0);
+  });
+
+  it('rejects an Open Plugins directory reached through a pluginsRoot symlink outside the repo', () => {
+    const outside = path.join(scratch, 'outside');
+    fs.mkdirSync(outside);
+    fs.symlinkSync(outside, path.join(repo, 'plugins'), 'junction');
+    const { pluginPath, source } = createPlugin(['claude', 'open-plugins']);
+    writeJson(repo, 'marketplace.json', { name: marketplaceName, plugins: [entry(source)] });
+
+    for (const targetPath of ['.', pluginPath]) {
+      expectRegistrationError(targetPath, 'resolves outside the repository');
+    }
+  });
+
+  it.skipIf(process.platform === 'win32')(
+    'rejects a source that escapes the repo through a symlink followed by a parent segment',
+    () => {
+      const { pluginPath, source } = createPlugin(['open-plugins']);
+      const outside = path.join(scratch, 'outside');
+      fs.mkdirSync(path.join(outside, 'child'), { recursive: true });
+      fs.mkdirSync(path.join(outside, pluginPath), { recursive: true });
+      fs.symlinkSync(path.join(outside, 'child'), path.join(repo, 'link'), 'dir');
+      writeJson(repo, 'marketplace.json', {
+        name: marketplaceName,
+        metadata: { pluginRoot: './link/..' },
+        plugins: [entry(source)],
+      });
+
+      for (const targetPath of ['.', pluginPath]) {
+        expectRegistrationError(targetPath, 'resolves outside the repository');
+      }
+    },
+  );
+
+  it('accepts a registry source using the in-repo pluginsRoot symlink', () => {
+    const authoredPlugins = path.join(repo, 'authored-plugins');
+    fs.mkdirSync(authoredPlugins);
+    fs.symlinkSync(authoredPlugins, path.join(repo, 'plugins'), 'junction');
+    const { source } = createPlugin(['open-plugins']);
+    writeJson(repo, 'marketplace.json', { name: marketplaceName, plugins: [entry(source)] });
+
+    for (const targetPath of ['.', 'authored-plugins/alpha']) {
+      const result = runCli([command, targetPath], repo);
+      expect(result.code, result.stdout + result.stderr).toBe(0);
+    }
   });
 });

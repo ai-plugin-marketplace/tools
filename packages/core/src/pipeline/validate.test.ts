@@ -730,6 +730,38 @@ describe('validateMarketplaceRegistration()', () => {
   });
 });
 
+describe('validateMarketplaceRegistration() for Open Plugins', () => {
+  const name = 'my-plugin';
+  const source = './agent-plugins/my-plugin';
+  const validRegistry = { name: 'test-marketplace', plugins: [{ name, source }] };
+
+  it.each([
+    ['missing marketplace name', { plugins: validRegistry.plugins }, '→ at name'],
+    [
+      'source without a ./ prefix',
+      { ...validRegistry, plugins: [{ name, source: 'agent-plugins/my-plugin' }] },
+      'plugins[0].source',
+    ],
+    ['unknown entry key', { ...validRegistry, plugins: [{ name, source, bogus: 1 }] }, 'bogus'],
+  ])('rejects %s after accepting a valid registry', (_label, registry, issue) => {
+    const repoRoot = path.join(tmpDir, 'repo');
+    const pluginDir = path.join(repoRoot, 'agent-plugins', name);
+    fs.mkdirSync(pluginDir, { recursive: true });
+
+    write(repoRoot, 'marketplace.json', validRegistry);
+    expect(validateMarketplaceRegistration(pluginDir, repoRoot, ['open-plugins'])).toStrictEqual(
+      [],
+    );
+
+    write(repoRoot, 'marketplace.json', registry);
+    const findings = validateMarketplaceRegistration(pluginDir, repoRoot, ['open-plugins']);
+    expect(findings).toMatchObject([
+      { severity: 'hard', code: 'marketplace-registration', plugin: name },
+    ]);
+    expect(findings[0]?.message).toContain(issue);
+  });
+});
+
 // ---------------------------------------------------------------------------
 // validateMarketplaceRegistration — Codex object-source registry
 //

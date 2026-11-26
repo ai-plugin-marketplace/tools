@@ -609,7 +609,7 @@ Validators run in defined order; each either passes or emits findings:
 4. **Cross-target consistency** (only when the envelope contains multiple targets):
    - `name` consistency across all manifests and the plugin directory name.
    - MCP server key sync between `.mcp.json` (Claude/Cursor) and `mcp.json` (Kiro).
-   - Marketplace registration: the plugin is listed in `.claude-plugin/marketplace.json` iff `claude` is in the envelope; likewise for Cursor.
+   - Hand-authored marketplace registration: each registry lists the plugin if and only if its target is in the envelope. The Open Plugins registry check also runs for an Open Plugins-only envelope. See [Open Plugins validation](open-plugins-target.md#6-validation-contract).
 5. **Host-contract checks** — per-target rules that encode a host's own loading behavior rather than a schema shape. Currently one, for `claude` (§10.1.5).
 
 #### 10.1.5 Claude — hooks live in the auto-loaded `hooks/hooks.json`; the manifest names none (hard)

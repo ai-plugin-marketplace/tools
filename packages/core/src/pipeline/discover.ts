@@ -12,9 +12,11 @@
  *   never silently dropped from discovery (#91). A subdirectory with NEITHER a config NOR any
  *   plugin-shape marker is not a plugin at all and stays excluded (unchanged non-goal).
  * - **Single plugin** — otherwise `targetPath` is treated as a single plugin directory. The repo
- *   root is the plugin's grandparent (`repoRoot = dirname(dirname(pluginDir))`) and the dist root
- *   is resolved from that repo root's config. A missing `aipm.config.ts` is **not** a discovery
- *   error: it is deferred to the config loader so the validate orchestrator can report it as an
+ *   root is the nearest ancestor whose `aipm.repo.ts` locates the plugin under its configured
+ *   plugins root, bounded by the nearest marketplace or Git root. Without a matching config,
+ *   discovery falls back to the plugin's grandparent within that boundary.
+ *   The dist root is resolved from the repo root's config. A missing `aipm.config.ts` is deferred
+ *   to the config loader so the validate orchestrator can report it as an
  *   `envelope-invalid` finding (§10.1 step 1) and the build orchestrator can throw a descriptive
  *   error.
  *
@@ -39,7 +41,12 @@
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 
-import { AIPM_CONFIG_FILENAME, hasRepoConfig, loadRepoConfig } from './load-config.js';
+import {
+  AIPM_CONFIG_FILENAME,
+  hasRepoConfig,
+  hasWorkspaceConfig,
+  loadRepoConfig,
+} from './load-config.js';
 
 /** Result of resolving a `targetPath` to concrete plugin directories and a dist root. */
 export interface Discovery {
@@ -105,6 +112,20 @@ function isPluginShaped(dir: string): boolean {
   return PLUGIN_SHAPE_MANIFESTS.some((rel) => fs.existsSync(path.join(dir, rel))) || hasSkills(dir);
 }
 
+/** Identify an independent marketplace or Git checkout without importing its configuration. */
+function isRepoBoundary(dir: string): boolean {
+  return (
+    hasWorkspaceConfig(dir) ||
+    [
+      '.git',
+      'marketplace.json',
+      '.claude-plugin/marketplace.json',
+      '.cursor-plugin/marketplace.json',
+      '.agents/plugins/marketplace.json',
+    ].some((marker) => fs.existsSync(path.join(dir, marker)))
+  );
+}
+
 /**
  * Resolve `targetPath` to the plugins to build/validate and the dist root.
  *
@@ -157,11 +178,38 @@ export async function discoverPlugins(targetPath: string): Promise<Discovery> {
   // Whether or not it carries a config: a missing config is deferred to the loader so validate
   // can emit `envelope-invalid` and build can throw a descriptive error (§10.1 step 1). The dist
   // root is resolved from the repo root's config so a relocated dist root is still honored.
-  const grandparent = path.dirname(path.dirname(resolved));
-  const repoConfig = await loadRepoConfig(grandparent);
+  const pluginParent = path.dirname(resolved);
+  let fallbackRoot = path.dirname(pluginParent);
+  for (let ancestor = pluginParent; ; ancestor = path.dirname(ancestor)) {
+    if (hasRepoConfig(ancestor)) {
+      const repoConfig = await loadRepoConfig(ancestor);
+      // Repo-root discovery enumerates the immediate children of pluginsRoot.
+      const configuredRoot = path.join(ancestor, repoConfig.pluginsRoot);
+      if (
+        isDirectory(configuredRoot) &&
+        path.relative(
+          fs.realpathSync.native(configuredRoot),
+          fs.realpathSync.native(pluginParent),
+        ) === ''
+      ) {
+        return {
+          repoRoot: ancestor,
+          distDir: path.join(ancestor, repoConfig.distDir),
+          pluginDirs: [resolved],
+        };
+      }
+    }
+    if (isRepoBoundary(ancestor)) {
+      if (ancestor === pluginParent) fallbackRoot = ancestor;
+      break;
+    }
+    if (ancestor === path.dirname(ancestor)) break;
+  }
+
+  const repoConfig = await loadRepoConfig(fallbackRoot);
   return {
-    repoRoot: grandparent,
-    distDir: path.join(grandparent, repoConfig.distDir),
+    repoRoot: fallbackRoot,
+    distDir: path.join(fallbackRoot, repoConfig.distDir),
     pluginDirs: [resolved],
   };
 }

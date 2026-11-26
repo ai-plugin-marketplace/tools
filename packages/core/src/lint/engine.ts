@@ -109,11 +109,15 @@ export async function lint(targetPath: string, options?: LintOptions): Promise<L
       diagnostics.push(...(await nameConsistencyRule.check(ctx)));
       diagnostics.push(...(await versionConsistencyRule.check(ctx)));
       diagnostics.push(...(await mcpKeySyncRule.check(ctx)));
-      // When registries are generated, their correctness is enforced by registry-freshness
-      // instead — skip the hand-authored-registry check to avoid double-reporting.
-      if (!generatesRegistries) {
-        diagnostics.push(...(await marketplaceRegistrationRule.check(ctx)));
-      }
+    }
+
+    // Match the hand-authored registration gate in runValidate, including Open Plugins-only repos.
+    if (
+      !generatesRegistries &&
+      !hasBlockingSchemaError &&
+      (envelope.length > 1 || envelope.includes('open-plugins'))
+    ) {
+      diagnostics.push(...(await marketplaceRegistrationRule.check(ctx)));
     }
   }
 

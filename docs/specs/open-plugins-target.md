@@ -312,12 +312,27 @@ rules applied to _other_ targets are soft advisories (§7).
 
 Every other requirement reuses an existing code with its existing meaning: `schema-invalid` for Zod
 failures (the new `open-plugins` schema plugs into `TARGET_VALIDATORS`, `validate.ts:935`),
-`marketplace-registration` for the root-registry projection (extend `MARKETPLACE_REGISTRY_CHECKS`,
-`validate.ts:749`, with an `open-plugins` descriptor using `extractStringSource`),
+`marketplace-registration` for the root-registry projection,
 `root-artifact-collision` for the root-file guard, `name-consistency` and `envelope-adherence` from
 the cross-target validators (`validate.ts:913`). This honors the api-semantics rule: a code means one
 thing across the codebase; we do not overload `marketplace-registration` to also mean "metadata dir
 dirty."
+
+For a plugin that declares Open Plugins, `aipm validate` and `aipm lint` require the hand-authored
+root registry to pass the Open Plugins marketplace schema, including unique plugin names. This
+check also runs for an Open Plugins-only envelope once the plugin manifest passes schema validation.
+Schema violations produce a hard `marketplace-registration` finding. The plugin's `./`-prefixed
+source resolves through the filesystem from `metadata.pluginRoot` (default `.`, the repo root).
+It must resolve to the same directory as the discovered plugin, and that directory must be inside
+the repo. In-repo symlink aliases can name the same directory.
+
+For a multi-target plugin outside the Open Plugins envelope, registration checks each entry with
+the loose string-source parser if the Open Plugins schema fails. A malformed entry does not hide a
+readable forbidden registration. Generated registries use freshness.
+
+Known limitation. Repo-wide hand-authored registration checks verify sources for discovered
+plugins. Entries that discovery skips, including missing plugin directories and symlinked plugin
+entries, can pass repo-wide validation even though direct validation of those paths fails.
 
 ---
 

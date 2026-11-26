@@ -279,6 +279,16 @@ To prevent this, every sentinel-carrying artifact is **stamped** with the genera
 2. **Guard.** At the start of `aipm build`, the toolkit reads the stamped version of every existing (committed) sentinel-carrying artifact. If the installed core version is **older** (by semver precedence, not string comparison) than any stamped version, the build **refuses** with a non-zero exit and a message naming both versions and suggesting `pnpm install`. Equal-or-newer installs, unstamped/first-time trees, and an empty artifact set all proceed and (re)stamp with the installed version. The `--force-downgrade` flag overrides the guard, proceeding and restamping with the older version.
 3. **All-or-nothing.** The guard runs before any write, so a refusal leaves the whole tree untouched — including the **sentinel-less** artifacts (`dist/**` bundles, marketplace registries, single-artifact-host root files), which carry no stamp of their own but are protected transitively: as long as at least one stamped artifact reveals the downgrade, the build aborts and rewrites nothing. A repo whose hooks-authoring plugins all emit at least one stamped hook artifact is fully covered; the guard's coverage is the union of stamped artifacts across the repo.
 
+Before changing repository files, `aipm build` checks hook files, bundle trees, workspace files, and cleanup paths together. Bundle trees must be disjoint from other outputs and discovered plugin sources. A selective build also reserves discovered siblings’ bundle destinations. Cleanup protects plugin source directories and the targets and symlink chains of bundle inputs. An orphan is removed by its directory entry, and a path claimed by current output is kept. Bundle staging sees planned hook bytes before hook files are written. Path resolution probes known entries, so ancestor directories need only grant search permission for traversal.
+
+Workspace builds compare repo-root files by filesystem destination, including parent symlinks and case aliases on case-insensitive filesystems. Different bytes produce a hard `root-artifact-collision` naming both contributors. Byte-identical output is written once and reported as `shared` when multiple targets contribute it. A generated file may not be an ancestor of another output.
+
+Known limitations:
+
+- Ownership is path-based. Separate hard links to the same inode can still receive competing writes.
+- When a remaining writer uses a leaf symlink, the generated-root manifest can retain the alias while losing ownership of its target.
+- Case handling probes known entries and inherits the parent policy when it cannot probe a directory. On NTFS, a directory with a different policy from its parent, including an empty directory, can therefore be misclassified.
+
 ### 4.4 Marketplace registry
 
 The toolkit generates **four** repo-root marketplace registries, one per registry-backed target (each emitted only when at least one plugin declares that target): `.claude-plugin/marketplace.json` (Claude), `.cursor-plugin/marketplace.json` (Cursor), `.agents/plugins/marketplace.json` (Codex), and — as the 4th — a repo-root `marketplace.json` (Open Plugins, at the spec's lookup position 1; see `open-plugins-target.md` OP-D3). All live at the **template repo root**, not in any single plugin. They are template-level registries listing every plugin by name and source path. Each plugin contributes an entry; the registries themselves are owned and validated at the template level. Consistency between plugins and their registry entries is checked by §10.1.4. The repo-root `marketplace.json` is additionally collision-guarded via the generated-root sidecar (a pre-existing foreign file raises a hard `root-artifact-collision`).
@@ -477,7 +487,7 @@ export type FindingCode =
   | 'marketplace-registration' // plugin-to-registry projection is wrong
   | 'freshness' // generated file drifted from what `aipm build` would produce
   | 'single-artifact-host' // a single-artifact host (gemini/kiro) is declared by >1 plugin
-  | 'root-artifact-collision' // a generated repo-root path is occupied by a non-toolkit file
+  | 'root-artifact-collision' // a repo-root path has competing bytes or is occupied by a non-toolkit file
   | 'default-marketplace-name' // marketplace name/owner is still a template placeholder (always soft)
   | 'frontmatter-invalid' // a skill/agent/command/POWER.md frontmatter is not strict YAML
   | 'metadata-dir-isolation' // the Open Plugins `.plugin/` dir holds more than plugin.json (hard, open-plugins target)

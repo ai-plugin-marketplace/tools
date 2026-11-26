@@ -28,11 +28,10 @@ import {
   computePluginHookArtifacts,
   computeRegistryArtifacts,
   computeRootArtifacts,
-  detectRootCollisions,
   isRootRegistryTarget,
   managedRegistryPaths,
   managedVendorRegistryPaths,
-  mergeRootArtifacts,
+  planRootArtifacts,
   readRootManifestPaths,
   regenerateBundleToTemp,
   rootManifestPath,
@@ -40,7 +39,7 @@ import {
   serializeRootManifest,
 } from './build.js';
 import type { RegistryArtifact } from './build.js';
-import { discoverPlugins } from './discover.js';
+import { discoverPlugins, discoverRepoPlugins } from './discover.js';
 import {
   ConfigLoadError,
   createConfigCache,
@@ -1456,7 +1455,8 @@ export async function checkRootArtifactFreshness(
   skipFreshness: boolean,
   cache?: ConfigCache,
 ): Promise<Finding[]> {
-  let root: ReturnType<typeof computeRootArtifacts>;
+  const priorTracked = readRootManifestPaths(repoRoot);
+  let root: ReturnType<typeof planRootArtifacts>;
   try {
     const plugins = await collectRegistryPlugins(repoRoot, pluginDirs, cache);
     // Merge the repo-root registries (open-plugins) into the root-artifact set so ONE collision
@@ -1466,9 +1466,11 @@ export async function checkRootArtifactFreshness(
     const rootRegistries = computeRegistryArtifacts(repoRoot, plugins, workspace).filter((r) =>
       isRootRegistryTarget(r.target),
     );
-    root = mergeRootArtifacts(
+    root = planRootArtifacts(
+      repoRoot,
       computeRootArtifacts(repoRoot, plugins, workspace),
       rootRegistryArtifactFiles(repoRoot, rootRegistries),
+      priorTracked,
     );
   } catch (err) {
     // A plugin config that won't load is reported per-plugin as envelope-invalid elsewhere; only
@@ -1485,27 +1487,14 @@ export async function checkRootArtifactFreshness(
     ];
   }
 
-  const findings: Finding[] = [];
-
-  // 1. N=1 gate findings (always hard, own code). Surfaced regardless of `skipFreshness` so the
-  // post-build validate (which skips freshness) still fails fast on an ambiguous host declaration.
-  findings.push(...root.findings);
-
-  // 2. Collision findings against the committed sidecar's tracked set (build's safety guard 3).
-  // Also surfaced regardless of `skipFreshness` — a collision is a structural refusal, not drift.
-  const priorTracked = readRootManifestPaths(repoRoot);
-  const collisions = detectRootCollisions(repoRoot, root, priorTracked);
-  const { collidedOwners } = collisions;
-  findings.push(...collisions.findings);
-
-  // The freshness-coded checks (missing/stale/orphan/sidecar) are skipped after a fresh build.
-  if (skipFreshness) return findings;
+  // Host ambiguity, planned byte conflicts and on-disk ownership also apply without freshness.
+  const findings = [...root.findings, ...root.conflicts];
+  if (skipFreshness || root.conflicts.length > 0) return findings;
 
   // 3a. The set of paths build WOULD write this run (excluding suppressed/collided hosts) — this is
   // the canonical expected tracked set the sidecar must match.
   const expectedTracked: string[] = [];
   for (const file of root.files) {
-    if (collidedOwners.has(file.owner)) continue;
     const rel = file.relPath;
     expectedTracked.push(rel);
     const abs = path.join(repoRoot, ...rel.split('/'));
@@ -1801,7 +1790,7 @@ export async function runValidate(
     // config cache) rather than re-discovering and reloading. Single-plugin input needs a
     // repo-wide re-scan so the oracle stays repo-complete.
     const isRepoRoot = path.resolve(targetPath) === repoRoot;
-    const allPluginDirs = isRepoRoot ? pluginDirs : (await discoverPlugins(repoRoot)).pluginDirs;
+    const allPluginDirs = isRepoRoot ? pluginDirs : await discoverRepoPlugins(repoRoot);
     const repoScopedCtx = createRuleContext({
       pluginDir: repoRoot,
       repoRoot,

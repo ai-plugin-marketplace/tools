@@ -114,7 +114,8 @@ export interface AipmRepoConfigInput {
   pluginsRoot?: string;
   /**
    * Directory (relative to the repo root) for generated `dist/` bundles. Relocate this when the
-   * host software already owns a top-level `dist/`. Default: `'dist'`.
+   * host software already owns a top-level `dist/`. Default: `'dist'`. The build rejects any
+   * bundle destination that overlaps a discovered plugin source directory.
    */
   distDir?: string;
 }

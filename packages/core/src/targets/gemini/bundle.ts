@@ -8,41 +8,9 @@
 
 import * as fs from 'node:fs';
 import * as path from 'node:path';
+import { BundleSource } from '../bundle-source.js';
 
 import { convertClaudeHooksYamlToGeminiJson, rewriteAgentFrontmatterTools } from './transform.js';
-
-// ---------------------------------------------------------------------------
-// Internal file-system helpers (mirrors build-standalone.ts utilities)
-// ---------------------------------------------------------------------------
-
-function copyFile(src: string, dest: string): void {
-  fs.mkdirSync(path.dirname(dest), { recursive: true });
-  fs.copyFileSync(src, dest);
-}
-
-function copyDir(src: string, dest: string): void {
-  if (!fs.existsSync(src)) return;
-  fs.mkdirSync(dest, { recursive: true });
-  for (const entry of fs.readdirSync(src, { withFileTypes: true })) {
-    const srcPath = path.join(src, entry.name);
-    const destPath = path.join(dest, entry.name);
-    if (entry.isDirectory()) {
-      copyDir(srcPath, destPath);
-    } else {
-      copyFile(srcPath, destPath);
-    }
-  }
-}
-
-function copyIfExists(src: string, dest: string): boolean {
-  if (!fs.existsSync(src)) return false;
-  if (fs.statSync(src).isDirectory()) {
-    copyDir(src, dest);
-  } else {
-    copyFile(src, dest);
-  }
-  return true;
-}
 
 function cleanDir(dir: string): void {
   if (fs.existsSync(dir)) {
@@ -115,6 +83,7 @@ function rewriteAgentsDir(agentsDir: string): Record<string, string[]> {
 export function bundleGeminiPlugin(
   pluginDir: string,
   destDir: string,
+  source = new BundleSource(),
 ): { emitted: string[]; droppedToolsByAgent: Record<string, string[]> } {
   cleanDir(destDir);
 
@@ -130,13 +99,13 @@ export function bundleGeminiPlugin(
   // guard (build.ts) — generation must never try to own files it does not generate.
   const flatFiles = ['gemini-extension.json', 'GEMINI.md'];
   for (const name of flatFiles) {
-    copyIfExists(path.join(pluginDir, name), path.join(destDir, name));
+    source.copyIfExists(path.join(pluginDir, name), path.join(destDir, name));
   }
 
   // ── Directories: skills/ and agents/ ─────────────────────────────────────
   const plainDirs = ['skills', 'agents'];
   for (const dir of plainDirs) {
-    copyIfExists(path.join(pluginDir, dir), path.join(destDir, dir));
+    source.copyIfExists(path.join(pluginDir, dir), path.join(destDir, dir));
   }
 
   // Rewrite agent tool names after copying
@@ -145,12 +114,12 @@ export function bundleGeminiPlugin(
   // ── commands/: .toml files only ───────────────────────────────────────────
   const commandsSrc = path.join(pluginDir, 'commands');
   const commandsDest = path.join(destDir, 'commands');
-  if (fs.existsSync(commandsSrc)) {
+  if (source.exists(commandsSrc)) {
     const tomlFiles = fs.readdirSync(commandsSrc).filter((f) => f.endsWith('.toml'));
     if (tomlFiles.length > 0) {
       fs.mkdirSync(commandsDest, { recursive: true });
       for (const file of tomlFiles) {
-        copyFile(path.join(commandsSrc, file), path.join(commandsDest, file));
+        source.copyFile(path.join(commandsSrc, file), path.join(commandsDest, file));
       }
     }
   }
@@ -162,8 +131,8 @@ export function bundleGeminiPlugin(
   const yamlCandidates = ['claude.yaml', 'claude.yml'];
   for (const candidate of yamlCandidates) {
     const yamlPath = path.join(hooksSrc, candidate);
-    if (fs.existsSync(yamlPath)) {
-      const yamlContent = fs.readFileSync(yamlPath, 'utf-8');
+    if (source.exists(yamlPath)) {
+      const yamlContent = source.readText(yamlPath);
       const jsonContent = convertClaudeHooksYamlToGeminiJson(yamlContent);
       const hooksDestDir = path.join(destDir, 'hooks');
       fs.mkdirSync(hooksDestDir, { recursive: true });

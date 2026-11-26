@@ -105,6 +105,24 @@ function isPluginShaped(dir: string): boolean {
   return PLUGIN_SHAPE_MANIFESTS.some((rel) => fs.existsSync(path.join(dir, rel))) || hasSkills(dir);
 }
 
+function scanPluginContainer(pluginsDir: string): string[] {
+  if (!isDirectory(pluginsDir)) return [];
+  const pluginDirs: string[] = [];
+  for (const entry of fs.readdirSync(pluginsDir, { withFileTypes: true })) {
+    if (!entry.isDirectory()) continue;
+    const candidate = path.join(pluginsDir, entry.name);
+    // Include config-less plugin shapes so the loader can report their missing config.
+    if (hasConfig(candidate) || isPluginShaped(candidate)) pluginDirs.push(candidate);
+  }
+  return pluginDirs.sort();
+}
+
+/** Scan only a repository's configured plugin container, which may be absent. */
+export async function discoverRepoPlugins(repoRoot: string): Promise<string[]> {
+  const { pluginsRoot } = await loadRepoConfig(repoRoot);
+  return scanPluginContainer(path.join(repoRoot, pluginsRoot));
+}
+
 /**
  * Resolve `targetPath` to the plugins to build/validate and the dist root.
  *
@@ -131,24 +149,10 @@ export async function discoverPlugins(targetPath: string): Promise<Discovery> {
     // An explicit `aipm.repo.ts` marks a repo root even before its plugins dir exists, so a
     // freshly-initialised embedded repo still resolves as a repo root rather than a single plugin.
     if (hasRepoConfig(resolved) || isDirectory(pluginsDir)) {
-      const pluginDirs: string[] = [];
-      if (isDirectory(pluginsDir)) {
-        for (const entry of fs.readdirSync(pluginsDir, { withFileTypes: true })) {
-          if (!entry.isDirectory()) continue;
-          const candidate = path.join(pluginsDir, entry.name);
-          // A config-less candidate is still discovered when it is plugin-shaped (#91) — deferred
-          // to the config loader downstream, which reports it as `envelope-invalid`/throws rather
-          // than letting it drop silently out of the plugin list.
-          if (hasConfig(candidate) || isPluginShaped(candidate)) {
-            pluginDirs.push(candidate);
-          }
-        }
-        pluginDirs.sort();
-      }
       return {
         repoRoot: resolved,
         distDir: path.join(resolved, repoConfig.distDir),
-        pluginDirs,
+        pluginDirs: scanPluginContainer(pluginsDir),
       };
     }
   }

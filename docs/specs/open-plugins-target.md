@@ -322,12 +322,17 @@ For a plugin that declares Open Plugins, `aipm validate` and `aipm lint` require
 root registry to pass the Open Plugins marketplace schema, including unique plugin names. This
 check also runs for an Open Plugins-only envelope once the plugin manifest passes schema validation.
 Schema violations produce a hard `marketplace-registration` finding. The plugin's `./`-prefixed
-source resolves from `metadata.pluginRoot` (default `.`, the repo root), and its directory must
-resolve inside the repo even when reached through a symlink.
+source resolves through the filesystem from `metadata.pluginRoot` (default `.`, the repo root).
+It must resolve to the same directory as the discovered plugin, and that directory must be inside
+the repo. In-repo symlink aliases can name the same directory.
 
-For a multi-target plugin outside the Open Plugins envelope, registration still checks for a
-forbidden entry using the loose string-source parser if the Open Plugins schema fails. Generated
-registries use freshness.
+For a multi-target plugin outside the Open Plugins envelope, registration checks each entry with
+the loose string-source parser if the Open Plugins schema fails. A malformed entry does not hide a
+readable forbidden registration. Generated registries use freshness.
+
+Known limitation. Repo-wide hand-authored registration checks verify sources for discovered
+plugins. Entries that discovery skips, including missing plugin directories and symlinked plugin
+entries, can pass repo-wide validation even though direct validation of those paths fails.
 
 ---
 

@@ -130,18 +130,13 @@ export const TARGET_MIN_REQUIRED: Record<TargetId, string[]> = {
  * Minimal Zod schema for a string-source marketplace.json (Claude/Cursor). Loose to tolerate
  * extra metadata fields. Each plugin entry's `source` is the canonical `./plugins/<name>` string.
  */
+const stringSourceEntrySchema = z.object({ name: z.string(), source: z.string() }).loose();
+
 const stringSourceMarketplaceSchema = z
-  .object({
-    plugins: z.array(
-      z
-        .object({
-          name: z.string(),
-          source: z.string(),
-        })
-        .loose(),
-    ),
-  })
+  .object({ plugins: z.array(stringSourceEntrySchema) })
   .loose();
+
+const marketplaceEntriesSchema = z.object({ plugins: z.array(z.unknown()) });
 
 /**
  * Minimal Zod schema for the Codex repo marketplace at `.agents/plugins/marketplace.json`. Its
@@ -1017,6 +1012,34 @@ function extractStringSource(raw: unknown, pluginName: string): SourceExtraction
   return { status: 'found', source: entry.source };
 }
 
+/** Look for a readable forbidden entry independently of malformed entries elsewhere. */
+function extractReadableStringSource(raw: unknown, pluginName: string): SourceExtraction {
+  const parsed = marketplaceEntriesSchema.safeParse(raw);
+  if (!parsed.success) return { status: 'parse-error' };
+  for (const value of parsed.data.plugins) {
+    const entry = stringSourceEntrySchema.safeParse(value);
+    if (entry.success && entry.data.name === pluginName) {
+      return { status: 'found', source: entry.data.source };
+    }
+  }
+  return { status: 'not-listed' };
+}
+
+/** Let the filesystem follow symlinks before interpreting any parent segments. */
+function tryRealDirectory(dir: string): string | undefined {
+  try {
+    const realDir = fs.realpathSync.native(dir);
+    return fs.statSync(realDir).isDirectory() ? realDir : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+function resolvesOutside(root: string, dir: string): boolean {
+  const relative = path.relative(root, dir);
+  return relative === '..' || relative.startsWith(`..${path.sep}`) || path.isAbsolute(relative);
+}
+
 /** Validate the Open Plugins registry and extract the matching entry's relative source. */
 function extractOpenPluginsSource(raw: unknown, pluginName: string): SourceExtraction {
   const parsed = openPluginsMarketplaceSchema.safeParse(raw);
@@ -1095,7 +1118,7 @@ export function validateMarketplaceRegistration(
     let extraction = extractSource(raw, pluginName);
     if (extraction.status === 'parse-error' && target === 'open-plugins' && !inEnvelope) {
       // Preserve the membership check when an invalid Open Plugins registry has readable entries.
-      extraction = extractStringSource(raw, pluginName);
+      extraction = extractReadableStringSource(raw, pluginName);
     }
 
     if (extraction.status === 'parse-error') {
@@ -1114,13 +1137,13 @@ export function validateMarketplaceRegistration(
 
     if (inEnvelope) {
       const { pluginRoot } = extraction;
+      let sourceBase = repoRoot;
+      let expectedPluginDir = pluginDir;
+      let realRepoRoot: string | undefined;
       if (pluginRoot !== undefined) {
-        const realRelative = path.relative(fs.realpathSync(repoRoot), fs.realpathSync(pluginDir));
-        if (
-          realRelative === '..' ||
-          realRelative.startsWith(`..${path.sep}`) ||
-          path.isAbsolute(realRelative)
-        ) {
+        realRepoRoot = fs.realpathSync.native(repoRoot);
+        expectedPluginDir = fs.realpathSync.native(pluginDir);
+        if (resolvesOutside(realRepoRoot, expectedPluginDir)) {
           findings.push(
             hard(
               'marketplace-registration',
@@ -1131,12 +1154,29 @@ export function validateMarketplaceRegistration(
           );
           continue;
         }
+
+        // Joining with path.join/resolve would collapse symlink/.. before the filesystem sees it.
+        const authoredBase = path.isAbsolute(pluginRoot)
+          ? pluginRoot
+          : `${repoRoot}${path.sep}${pluginRoot}`;
+        const realSourceBase = tryRealDirectory(authoredBase);
+        if (realSourceBase === undefined) {
+          findings.push(
+            hard(
+              'marketplace-registration',
+              pluginName,
+              `Open Plugins metadata.pluginRoot '${pluginRoot}' in '${marketplacePath}' does not resolve to a directory.`,
+            ),
+          );
+          continue;
+        }
+        sourceBase = realSourceBase;
       }
 
-      // Keep the authored path spelling when constructing registry sources, even if an in-repo
-      // directory is reached through a symlink. Registry paths use POSIX separators on every host.
-      const sourceBase = path.resolve(repoRoot, pluginRoot ?? '.');
-      const normalizedExpected = path.relative(sourceBase, pluginDir).split(path.sep).join('/');
+      const normalizedExpected = path
+        .relative(sourceBase, expectedPluginDir)
+        .split(path.sep)
+        .join('/');
       const expectedSource = `./${normalizedExpected}`;
       if (extraction.status === 'not-listed') {
         findings.push(
@@ -1149,10 +1189,24 @@ export function validateMarketplaceRegistration(
         );
       } else {
         const { source } = extraction;
-        const matches =
-          pluginRoot === undefined
-            ? source.replace(/^\.\//, '') === normalizedExpected
-            : path.resolve(sourceBase, source) === path.resolve(pluginDir);
+        let matches: boolean;
+        if (realRepoRoot === undefined) {
+          matches = source.replace(/^\.\//, '') === normalizedExpected;
+        } else {
+          const realSource = tryRealDirectory(`${sourceBase}${path.sep}${source}`);
+          if (realSource !== undefined && resolvesOutside(realRepoRoot, realSource)) {
+            findings.push(
+              hard(
+                'marketplace-registration',
+                pluginName,
+                `Plugin '${pluginName}' in '${marketplacePath}' has source '${source}' from metadata.pluginRoot '${pluginRoot ?? '.'}' that resolves outside the repository '${repoRoot}'.`,
+                'Point the source to the plugin directory inside the repository.',
+              ),
+            );
+            continue;
+          }
+          matches = realSource !== undefined && path.relative(realSource, expectedPluginDir) === '';
+        }
         if (!matches) {
           findings.push(
             hard(

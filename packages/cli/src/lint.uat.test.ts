@@ -382,6 +382,16 @@ describe.each(['validate', 'lint'])('aipm %s marketplace registration (subproces
     expectRegistrationError('.', "Duplicate plugin name 'alpha'");
   });
 
+  it('finds a forbidden Open Plugins entry alongside a malformed entry', () => {
+    const { pluginPath, source } = createPlugin(['claude', 'cursor']);
+    writeJson(repo, 'marketplace.json', {
+      plugins: [{ name: 'other', source: null }, entry(source)],
+    });
+    for (const targetPath of ['.', pluginPath]) {
+      expectRegistrationError(targetPath, "target 'open-plugins' is not in the support envelope");
+    }
+  });
+
   it('resolves Open Plugins sources against metadata.pluginRoot', () => {
     const { source } = createPlugin(['claude', 'open-plugins']);
     const registry = { name: marketplaceName, metadata: { pluginRoot: './plugins' } };
@@ -390,6 +400,20 @@ describe.each(['validate', 'lint'])('aipm %s marketplace registration (subproces
 
     writeJson(repo, 'marketplace.json', { ...registry, plugins: [entry('./alpha')] });
     expect(runCli([command, '.'], repo).code).toBe(0);
+  });
+
+  it('does not load configs above an independent marketplace for a direct plugin path', () => {
+    fs.writeFileSync(path.join(scratch, 'aipm.repo.ts'), "throw new Error('outer config');\n");
+    const { pluginPath, source } = createPlugin(['open-plugins']);
+    writeJson(repo, 'marketplace.json', { name: marketplaceName, plugins: [entry(source)] });
+
+    const result = runCli([command, pluginPath], repo);
+    expect(result.code, result.stdout + result.stderr).toBe(0);
+
+    if (command === 'validate') {
+      const build = runCli(['build', pluginPath], repo);
+      expect(build.code, build.stdout + build.stderr).toBe(0);
+    }
   });
 
   it('finds the repo registries from a direct path under a nested pluginsRoot', () => {
@@ -418,6 +442,26 @@ describe.each(['validate', 'lint'])('aipm %s marketplace registration (subproces
     }
   });
 
+  it.skipIf(process.platform === 'win32')(
+    'rejects a source that escapes the repo through a symlink followed by a parent segment',
+    () => {
+      const { pluginPath, source } = createPlugin(['open-plugins']);
+      const outside = path.join(scratch, 'outside');
+      fs.mkdirSync(path.join(outside, 'child'), { recursive: true });
+      fs.mkdirSync(path.join(outside, pluginPath), { recursive: true });
+      fs.symlinkSync(path.join(outside, 'child'), path.join(repo, 'link'), 'dir');
+      writeJson(repo, 'marketplace.json', {
+        name: marketplaceName,
+        metadata: { pluginRoot: './link/..' },
+        plugins: [entry(source)],
+      });
+
+      for (const targetPath of ['.', pluginPath]) {
+        expectRegistrationError(targetPath, 'resolves outside the repository');
+      }
+    },
+  );
+
   it('accepts a registry source using the in-repo pluginsRoot symlink', () => {
     const authoredPlugins = path.join(repo, 'authored-plugins');
     fs.mkdirSync(authoredPlugins);
@@ -425,6 +469,9 @@ describe.each(['validate', 'lint'])('aipm %s marketplace registration (subproces
     const { source } = createPlugin(['open-plugins']);
     writeJson(repo, 'marketplace.json', { name: marketplaceName, plugins: [entry(source)] });
 
-    expect(runCli([command, '.'], repo).code).toBe(0);
+    for (const targetPath of ['.', 'authored-plugins/alpha']) {
+      const result = runCli([command, targetPath], repo);
+      expect(result.code, result.stdout + result.stderr).toBe(0);
+    }
   });
 });

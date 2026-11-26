@@ -11,6 +11,10 @@
       "types": "./dist/core.d.ts",
       "import": "./dist/index.js"
     },
+    "./build-for-cli": {
+      "types": "./dist/build-for-cli.d.ts",
+      "import": "./dist/build-for-cli.js"
+    },
     "./package.json": "./package.json"
   },
   "files": [

@@ -60,6 +60,7 @@ export type {
   AddTargetOutcome,
   BuildOptions,
   BuildOutcome,
+  BuildFreshnessIoFinding,
   BuildResult,
   GeneratedFile,
   GeneratedFileTarget,

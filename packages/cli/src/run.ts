@@ -23,7 +23,6 @@ import { fileURLToPath } from 'node:url';
 import {
   addTarget,
   applyRuleSeverityOverrides,
-  buildWithOutcome,
   checkSupport,
   init,
   lint,
@@ -45,6 +44,8 @@ import type {
   TargetId,
   ValidationResult,
 } from '@ai-plugin-marketplace/core';
+import { buildForCli } from '@ai-plugin-marketplace/core/build-for-cli';
+
 import { buildLintJson, buildLintSarif, formatLintText, lintExitCode } from './lint-format.js';
 import type { LintFormat } from './lint-format.js';
 
@@ -159,29 +160,15 @@ function formatFinding(f: Finding): string {
   return f.hint !== undefined ? `${head}\n    hint: ${f.hint}` : head;
 }
 
-function reportCommandFailure(command: string, message: string, err: NodeJS.WritableStream): 1 {
-  err.write(`aipm: ${command} failed: ${message}\n`);
-  return 1;
-}
-
-/** Report validation and return the corresponding exit code. */
-function reportValidation(
-  result: ValidationResult,
-  command: 'build' | 'validate',
-  out: NodeJS.WritableStream,
-  err: NodeJS.WritableStream,
-): 0 | 1 {
-  const freshnessError = result.findings.find((finding) => finding.code === 'freshness-io');
-  if (freshnessError !== undefined) {
-    return reportCommandFailure(command, freshnessError.message, err);
-  }
+/** Write a validation result to the given stream; returns true iff it passed (no hard findings). */
+function reportValidation(result: ValidationResult, out: NodeJS.WritableStream): boolean {
   for (const finding of result.findings) {
     out.write(`${formatFinding(finding)}\n`);
   }
   if (result.passed) {
     out.write(result.findings.length === 0 ? 'OK — no findings.\n' : 'OK — no hard findings.\n');
   }
-  return result.passed ? 0 : 1;
+  return result.passed;
 }
 
 function reportSupport(report: SupportReport, out: NodeJS.WritableStream): void {
@@ -315,7 +302,7 @@ export async function run(argv: readonly string[], opts: RunOptions = {}): Promi
         // Resolve the target from the first non-flag positional so `aipm build --force-downgrade`
         // does not mistake the flag for a path.
         const target = rest.find((a) => !a.startsWith('-')) ?? process.cwd();
-        const { results, validation } = await buildWithOutcome(target, { forceDowngrade });
+        const { results, validation } = await buildForCli(target, { forceDowngrade });
         const artifactCount = results.reduce((n, r) => n + r.artifacts.length, 0);
         // §5.4: build runs validate before reporting success. The success summary is written
         // only when validate passes — printing it unconditionally would put a "Built N
@@ -326,13 +313,15 @@ export async function run(argv: readonly string[], opts: RunOptions = {}): Promi
             `Built ${String(results.length)} plugin(s), ${String(artifactCount)} artifact(s).\n`,
           );
         }
-        return reportValidation(validation, command, out, err);
+        const passed = reportValidation(validation, out);
+        return passed ? 0 : 1;
       }
 
       case 'validate': {
         const target = rest[0] ?? process.cwd();
         const result = await validate(target);
-        return reportValidation(result, command, out, err);
+        const passed = reportValidation(result, out);
+        return passed ? 0 : 1;
       }
 
       case 'lint': {
@@ -492,6 +481,7 @@ export async function run(argv: readonly string[], opts: RunOptions = {}): Promi
     }
   } catch (e) {
     const message = e instanceof Error ? e.message : String(e);
-    return reportCommandFailure(command, message, err);
+    err.write(`aipm: ${command} failed: ${message}\n`);
+    return 1;
   }
 }

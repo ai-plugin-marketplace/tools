@@ -49,7 +49,15 @@ import {
 import { createConfigCache, loadPluginConfig, loadWorkspaceConfig } from './load-config.js';
 import type { ConfigCache } from './load-config.js';
 import { isToolkitSentinelFor, readSentinelVersion, sidecarPath } from './sentinel.js';
-import type { BuildOptions, BuildOutcome, BuildResult, GeneratedFile, TargetId } from './types.js';
+import type {
+  BuildFreshnessIoFinding,
+  BuildOptions,
+  BuildOutcome,
+  BuildResult,
+  GeneratedFile,
+  TargetId,
+  ValidationResult,
+} from './types.js';
 import { runValidate } from './validate.js';
 
 // ---------------------------------------------------------------------------
@@ -296,7 +304,7 @@ async function collectStampedArtifacts(
 // ---------------------------------------------------------------------------
 
 export async function runBuild(targetPath: string, opts?: BuildOptions): Promise<BuildResult[]> {
-  const { results } = await buildAndValidate(targetPath, opts, false);
+  const { results } = await buildAndValidate(targetPath, opts, 'legacy');
   return results;
 }
 
@@ -304,7 +312,23 @@ export function runBuildWithOutcome(
   targetPath: string,
   opts?: BuildOptions,
 ): Promise<BuildOutcome> {
-  return buildAndValidate(targetPath, opts, true);
+  return buildAndValidate(targetPath, opts, 'outcome');
+}
+
+/** Package entry point for the CLI's legacy reporting behavior. */
+export async function buildForCli(
+  targetPath: string,
+  opts?: BuildOptions,
+): Promise<{ results: BuildResult[]; validation: ValidationResult }> {
+  const { results } = await buildAndValidate(targetPath, opts, 'legacy');
+  // Match the CLI's historical validation order after the build's structural preflight.
+  // This pass retries root-oracle failures skipped by the preflight and propagates the
+  // first fatal error it encounters, before the caller writes any validation output.
+  const validation = await runValidate(targetPath, {
+    skipPublishedSurfaceBoundary: true,
+    ci: Boolean(process.env['CI']),
+  });
+  return { results, validation };
 }
 
 /**
@@ -316,7 +340,7 @@ export function runBuildWithOutcome(
  *
  * @param targetPath - Absolute path to a plugin directory or repo root.
  * @param opts - Build options.
- * @param includeFreshness - Whether to check freshness for the returned diagnostics.
+ * @param mode - Whether to check freshness for the returned diagnostics.
  * @returns One `BuildResult` per built plugin and the combined validation result.
  * @throws {Error} If `targetPath` is neither a plugin nor a repo root, a config fails to load,
  *   a transform fails, or (when `failFast`) post-build validation reports hard non-freshness findings.
@@ -324,7 +348,7 @@ export function runBuildWithOutcome(
 async function buildAndValidate(
   targetPath: string,
   opts: BuildOptions | undefined,
-  includeFreshness: boolean,
+  mode: 'legacy' | 'outcome',
 ): Promise<BuildOutcome> {
   const { repoRoot, pluginDirs, distDir } = await discoverPlugins(targetPath);
 
@@ -451,16 +475,28 @@ async function buildAndValidate(
 
   // The results-only build skips freshness. The outcome API checks it with the same severity
   // as standalone validation. The published-surface boundary belongs to standalone validation.
-  const validation = await runValidate(targetPath, {
-    skipPublishedSurfaceBoundary: true,
-    ...(includeFreshness
-      ? { ci: Boolean(process.env['CI']), reportFreshnessIo: true }
-      : { skipFreshness: true }),
-  });
+  const ioFindings: BuildFreshnessIoFinding[] = [];
+  const validation = await runValidate(
+    targetPath,
+    {
+      skipPublishedSurfaceBoundary: true,
+      ...(mode === 'outcome' ? { ci: Boolean(process.env['CI']) } : { skipFreshness: true }),
+    },
+    mode === 'outcome'
+      ? (error, plugin) => {
+          ioFindings.push({
+            code: 'freshness-io',
+            severity: 'hard',
+            ...(plugin === undefined ? {} : { plugin }),
+            message: error.message,
+          });
+        }
+      : undefined,
+  );
   if (opts?.failFast) {
     // Preserve the rejection criteria of post-build validation with freshness skipped.
     const hardFindings = validation.findings.filter(
-      (f) => f.severity === 'hard' && f.code !== 'freshness' && f.code !== 'freshness-io',
+      (f) => f.severity === 'hard' && f.code !== 'freshness',
     );
     if (hardFindings.length > 0) {
       const summary = hardFindings
@@ -472,5 +508,11 @@ async function buildAndValidate(
     }
   }
 
-  return { results, validation };
+  return {
+    results,
+    validation: {
+      findings: [...validation.findings, ...ioFindings],
+      passed: validation.passed && ioFindings.length === 0,
+    },
+  };
 }

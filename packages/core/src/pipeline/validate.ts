@@ -54,7 +54,6 @@ import { isToolkitSentinelFor, withoutGeneratorVersion } from './sentinel.js';
 import { CLAUDE_HOOKS_SOURCES } from '../targets/claude/transform.js';
 import { createRuleContext } from '../lint/context.js';
 import { diagnosticToFinding } from '../lint/diagnostic.js';
-import type { InternalRuleContext, Rule } from '../lint/types.js';
 import {
   defaultMarketplaceNameRule,
   envelopeAdherenceRule,
@@ -1204,6 +1203,40 @@ export function validatePerTargetSchemas(
 // Freshness check (§10.5)
 // ---------------------------------------------------------------------------
 
+export type FreshnessIoHandler = (error: Error, plugin?: string) => void;
+
+/** Return whether the opt-in outcome captured a filesystem failure. */
+function captureFreshnessIo(
+  err: unknown,
+  onIoError: FreshnessIoHandler | undefined,
+  plugin?: string,
+): boolean {
+  if (
+    onIoError === undefined ||
+    !(err instanceof Error) ||
+    !('syscall' in err) ||
+    typeof err.syscall !== 'string' ||
+    !('errno' in err) ||
+    typeof err.errno !== 'number'
+  ) {
+    return false;
+  }
+  onIoError(err, plugin);
+  return true;
+}
+
+function checkFreshnessFile(
+  check: () => void,
+  onIoError: FreshnessIoHandler | undefined,
+  plugin?: string,
+): void {
+  try {
+    check();
+  } catch (err) {
+    if (!captureFreshnessIo(err, onIoError, plugin)) throw err;
+  }
+}
+
 /**
  * Build a `freshness` Finding. Severity is `hard` in CI (a stale tree must fail the build) and
  * `soft` locally (a warning the author can act on), per §10.2.
@@ -1242,6 +1275,7 @@ export function checkFreshness(
   distDir: string,
   envelope: readonly TargetId[],
   ci: boolean,
+  onIoError?: FreshnessIoHandler,
 ): Finding[] {
   const findings: Finding[] = [];
   const pluginName = path.basename(pluginDir);
@@ -1251,6 +1285,7 @@ export function checkFreshness(
   try {
     hookArtifacts = computePluginHookArtifacts(pluginDir, envelope);
   } catch (err) {
+    if (captureFreshnessIo(err, onIoError, pluginName)) return findings;
     // A malformed hooks source means the transform can't run — surface as freshness drift.
     const message = err instanceof Error ? err.message : String(err);
     return [
@@ -1264,75 +1299,90 @@ export function checkFreshness(
   }
 
   for (const artifact of hookArtifacts) {
-    const rel = path.relative(pluginDir, artifact.absPath);
-    if (!fs.existsSync(artifact.absPath)) {
-      findings.push(
-        freshnessFinding(
-          ci,
-          pluginName,
-          `Generated file '${rel}' is missing.`,
-          `run \`aipm build\` to generate it.`,
-        ),
-      );
-      continue;
-    }
-    const onDisk = fs.readFileSync(artifact.absPath, 'utf-8');
-    // Compare modulo the generator-version stamp (§4.3.1): a differently-versioned but
-    // content-identical artifact is NOT stale — version safety is the build downgrade guard's job,
-    // not freshness's. Content, source, or structural drift still differs after normalization.
-    const mode = artifact.sentinelMode;
-    if (
-      withoutGeneratorVersion(onDisk, mode) !==
-      withoutGeneratorVersion(artifact.expectedContent, mode)
-    ) {
-      findings.push(
-        freshnessFinding(
-          ci,
-          pluginName,
-          `Generated file '${rel}' is stale — it differs from what \`aipm build\` would produce (hand-edited or out of date).`,
-          `run \`aipm build\` to regenerate it; edit the source '${artifact.source}', not the generated file.`,
-        ),
-      );
-    }
-  }
-
-  // ── dist/** bundle trees (byte-parity via regeneration) ───────────────────
-  for (const bundle of computeDistBundles(pluginDir, distDir, envelope)) {
-    let tempDir: string | undefined;
-    try {
-      tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'aipm-freshness-'));
-      bundle.regenerate(tempDir);
-      const drift = compareTrees(bundle.destDir, tempDir);
-      for (const rel of drift) {
-        const distRel = path.relative(distDir, path.join(bundle.destDir, rel));
-        // A drifted path that isn't on disk at all was never built (e.g. first build hasn't run
-        // yet) — report it as `missing`, not `stale`, so the user isn't told a nonexistent file
-        // "differs" from expected output (issue #97).
-        if (!fs.existsSync(path.join(bundle.destDir, rel))) {
+    checkFreshnessFile(
+      () => {
+        const rel = path.relative(pluginDir, artifact.absPath);
+        if (!fs.existsSync(artifact.absPath)) {
           findings.push(
             freshnessFinding(
               ci,
               pluginName,
-              `Generated bundle file 'dist/${distRel}' is missing.`,
-              `run \`aipm build\` to generate the ${bundle.target} bundle.`,
+              `Generated file '${rel}' is missing.`,
+              `run \`aipm build\` to generate it.`,
             ),
           );
-          continue;
+          return;
         }
-        findings.push(
-          freshnessFinding(
-            ci,
-            pluginName,
-            `Generated bundle file 'dist/${distRel}' is stale — it differs from what \`aipm build\` would produce.`,
-            `run \`aipm build\` to regenerate the ${bundle.target} bundle.`,
-          ),
-        );
-      }
-    } finally {
-      if (tempDir !== undefined && fs.existsSync(tempDir)) {
-        fs.rmSync(tempDir, { recursive: true });
-      }
-    }
+        const onDisk = fs.readFileSync(artifact.absPath, 'utf-8');
+        // Compare modulo the generator-version stamp (§4.3.1): a differently-versioned but
+        // content-identical artifact is NOT stale — version safety is the build downgrade guard's job,
+        // not freshness's. Content, source, or structural drift still differs after normalization.
+        const mode = artifact.sentinelMode;
+        if (
+          withoutGeneratorVersion(onDisk, mode) !==
+          withoutGeneratorVersion(artifact.expectedContent, mode)
+        ) {
+          findings.push(
+            freshnessFinding(
+              ci,
+              pluginName,
+              `Generated file '${rel}' is stale — it differs from what \`aipm build\` would produce (hand-edited or out of date).`,
+              `run \`aipm build\` to regenerate it; edit the source '${artifact.source}', not the generated file.`,
+            ),
+          );
+        }
+      },
+      onIoError,
+      pluginName,
+    );
+  }
+
+  // ── dist/** bundle trees (byte-parity via regeneration) ───────────────────
+  for (const bundle of computeDistBundles(pluginDir, distDir, envelope)) {
+    checkFreshnessFile(
+      () => {
+        let tempDir: string | undefined;
+        try {
+          const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'aipm-freshness-'));
+          // The legacy validator only cleaned up after successful regeneration.
+          if (onIoError !== undefined) tempDir = dir;
+          bundle.regenerate(dir);
+          tempDir = dir;
+          const drift = compareTrees(bundle.destDir, tempDir);
+          for (const rel of drift) {
+            const distRel = path.relative(distDir, path.join(bundle.destDir, rel));
+            // A drifted path that isn't on disk at all was never built (e.g. first build hasn't run
+            // yet) — report it as `missing`, not `stale`, so the user isn't told a nonexistent file
+            // "differs" from expected output (issue #97).
+            if (!fs.existsSync(path.join(bundle.destDir, rel))) {
+              findings.push(
+                freshnessFinding(
+                  ci,
+                  pluginName,
+                  `Generated bundle file 'dist/${distRel}' is missing.`,
+                  `run \`aipm build\` to generate the ${bundle.target} bundle.`,
+                ),
+              );
+              continue;
+            }
+            findings.push(
+              freshnessFinding(
+                ci,
+                pluginName,
+                `Generated bundle file 'dist/${distRel}' is stale — it differs from what \`aipm build\` would produce.`,
+                `run \`aipm build\` to regenerate the ${bundle.target} bundle.`,
+              ),
+            );
+          }
+        } finally {
+          if (tempDir !== undefined && fs.existsSync(tempDir)) {
+            fs.rmSync(tempDir, { recursive: true });
+          }
+        }
+      },
+      onIoError,
+      pluginName,
+    );
   }
 
   return findings;
@@ -1357,6 +1407,7 @@ export async function checkRegistryFreshness(
   workspace: AipmWorkspace,
   ci: boolean,
   cache?: ConfigCache,
+  onIoError?: FreshnessIoHandler,
 ): Promise<Finding[]> {
   let expected: RegistryArtifact[];
   try {
@@ -1368,6 +1419,7 @@ export async function checkRegistryFreshness(
       (r) => !isRootRegistryTarget(r.target),
     );
   } catch (err) {
+    if (captureFreshnessIo(err, onIoError)) return [];
     // A plugin config that won't load is reported per-plugin as envelope-invalid elsewhere; here
     // we surface the inability to compute the registry oracle as repo-scoped freshness drift.
     const message = err instanceof Error ? err.message : String(err);
@@ -1383,29 +1435,31 @@ export async function checkRegistryFreshness(
 
   const findings: Finding[] = [];
   for (const registry of expected) {
-    const rel = path.relative(repoRoot, registry.absPath);
-    if (!fs.existsSync(registry.absPath)) {
-      findings.push(
-        freshnessFinding(
-          ci,
-          undefined,
-          `Generated registry '${rel}' is missing.`,
-          'run `aipm build` to generate it.',
-        ),
-      );
-      continue;
-    }
-    const onDisk = fs.readFileSync(registry.absPath, 'utf-8');
-    if (onDisk !== registry.expectedContent) {
-      findings.push(
-        freshnessFinding(
-          ci,
-          undefined,
-          `Generated registry '${rel}' is stale — it differs from what \`aipm build\` would produce (hand-edited or out of date).`,
-          "run `aipm build` to regenerate it; edit `aipm.workspace.ts` / each plugin's `aipm.config.ts`, not the generated registry.",
-        ),
-      );
-    }
+    checkFreshnessFile(() => {
+      const rel = path.relative(repoRoot, registry.absPath);
+      if (!fs.existsSync(registry.absPath)) {
+        findings.push(
+          freshnessFinding(
+            ci,
+            undefined,
+            `Generated registry '${rel}' is missing.`,
+            'run `aipm build` to generate it.',
+          ),
+        );
+        return;
+      }
+      const onDisk = fs.readFileSync(registry.absPath, 'utf-8');
+      if (onDisk !== registry.expectedContent) {
+        findings.push(
+          freshnessFinding(
+            ci,
+            undefined,
+            `Generated registry '${rel}' is stale — it differs from what \`aipm build\` would produce (hand-edited or out of date).`,
+            "run `aipm build` to regenerate it; edit `aipm.workspace.ts` / each plugin's `aipm.config.ts`, not the generated registry.",
+          ),
+        );
+      }
+    }, onIoError);
   }
 
   // Orphan check: a managed registry committed for a target NO plugin declares anymore is not in
@@ -1457,8 +1511,18 @@ export async function checkRootArtifactFreshness(
   ci: boolean,
   skipFreshness: boolean,
   cache?: ConfigCache,
-  reportFreshnessIo = false,
+  onIoError?: FreshnessIoHandler,
 ): Promise<Finding[]> {
+  const regenerationErrors: unknown[] = [];
+  const oracleFailure = (err: unknown): Finding => {
+    const message = err instanceof Error ? err.message : String(err);
+    return freshnessFinding(
+      ci,
+      undefined,
+      `Unable to compute expected repo-root artifacts: ${message}`,
+      'fix the offending aipm.config.ts and run `aipm build`.',
+    );
+  };
   let root: ReturnType<typeof computeRootArtifacts>;
   try {
     const plugins = await collectRegistryPlugins(repoRoot, pluginDirs, cache);
@@ -1470,33 +1534,43 @@ export async function checkRootArtifactFreshness(
       isRootRegistryTarget(r.target),
     );
     root = mergeRootArtifacts(
-      computeRootArtifacts(repoRoot, plugins, workspace),
+      computeRootArtifacts(
+        repoRoot,
+        plugins,
+        workspace,
+        onIoError === undefined
+          ? undefined
+          : (err) => {
+              regenerationErrors.push(err);
+            },
+      ),
       rootRegistryArtifactFiles(repoRoot, rootRegistries),
     );
   } catch (err) {
     // A plugin config that won't load is reported per-plugin as envelope-invalid elsewhere; only
     // surface the inability to compute the root oracle as freshness drift when freshness is checked.
-    if (skipFreshness) return [];
-    const message = err instanceof Error ? err.message : String(err);
-    return [
-      freshnessFinding(
-        ci,
-        undefined,
-        `Unable to compute expected repo-root artifacts: ${message}`,
-        'fix the offending aipm.config.ts and run `aipm build`.',
-      ),
-    ];
+    if (skipFreshness || captureFreshnessIo(err, onIoError)) return [];
+    return [oracleFailure(err)];
   }
 
   const findings: Finding[] = [];
 
   // 1. N=1 gate findings (always hard, own code). Surfaced regardless of `skipFreshness` so the
-  // structural check also runs when freshness is disabled.
+  // post-build validate (which skips freshness) still fails fast on an ambiguous host declaration.
   findings.push(...root.findings);
+  for (const err of regenerationErrors) {
+    if (!captureFreshnessIo(err, onIoError)) findings.push(oracleFailure(err));
+  }
 
   // 2. Collision findings against the committed sidecar's tracked set (build's safety guard 3).
   // Also surfaced regardless of `skipFreshness` — a collision is a structural refusal, not drift.
-  const priorTracked = readRootManifestPaths(repoRoot);
+  let priorTracked: string[];
+  try {
+    priorTracked = readRootManifestPaths(repoRoot, onIoError !== undefined);
+  } catch (err) {
+    if (captureFreshnessIo(err, onIoError)) return findings;
+    throw err;
+  }
   const collisions = detectRootCollisions(repoRoot, root, priorTracked);
   const { collidedOwners } = collisions;
   findings.push(...collisions.findings);
@@ -1504,14 +1578,14 @@ export async function checkRootArtifactFreshness(
   // The freshness-coded checks (missing/stale/orphan/sidecar) are skipped after a fresh build.
   if (skipFreshness) return findings;
 
-  try {
-    // 3a. The set of paths build WOULD write this run (excluding suppressed/collided hosts) — this is
-    // the canonical expected tracked set the sidecar must match.
-    const expectedTracked: string[] = [];
-    for (const file of root.files) {
-      if (collidedOwners.has(file.owner)) continue;
-      const rel = file.relPath;
-      expectedTracked.push(rel);
+  // 3a. The set of paths build WOULD write this run (excluding suppressed/collided hosts) — this is
+  // the canonical expected tracked set the sidecar must match.
+  const expectedTracked: string[] = [];
+  for (const file of root.files) {
+    if (collidedOwners.has(file.owner)) continue;
+    const rel = file.relPath;
+    expectedTracked.push(rel);
+    checkFreshnessFile(() => {
       const abs = path.join(repoRoot, ...rel.split('/'));
       if (!fs.existsSync(abs)) {
         findings.push(
@@ -1522,7 +1596,7 @@ export async function checkRootArtifactFreshness(
             'run `aipm build` to generate it.',
           ),
         );
-        continue;
+        return;
       }
       const onDisk = fs.readFileSync(abs);
       if (!onDisk.equals(file.content)) {
@@ -1535,44 +1609,50 @@ export async function checkRootArtifactFreshness(
           ),
         );
       }
-    }
+    }, onIoError);
+  }
 
-    // 3b. Orphans: any path the committed sidecar recorded that build would no longer write but which
-    // still sits on disk. `aipm build` removes these, so their presence means the tree is stale.
-    const expectedSet = new Set(expectedTracked);
-    for (const rel of priorTracked) {
-      if (expectedSet.has(rel)) continue;
-      const abs = path.join(repoRoot, ...rel.split('/'));
-      if (fs.existsSync(abs)) {
-        findings.push(
-          freshnessFinding(
-            ci,
-            undefined,
-            `Generated repo-root artifact '${rel}' is stale — it is no longer produced, so \`aipm build\` would remove it.`,
-            'run `aipm build` to remove the orphaned artifact.',
-          ),
-        );
-      }
-    }
+  // The complete tracked set is required to check for orphans and sidecar drift.
+  if (regenerationErrors.length > 0) return findings;
 
-    // 3c. The sidecar manifest itself is a generated, freshness-checked artifact: its bytes must
-    // match what build would write for the expected tracked set. When build would write no artifacts
-    // AND no sidecar exists, the expected state is "no sidecar" — only flag a stale/missing sidecar
-    // when one is expected (non-empty tracked set) or one already exists on disk.
-    const manifestAbs = rootManifestPath(repoRoot);
-    const manifestExists = fs.existsSync(manifestAbs);
-    if (expectedTracked.length > 0 || manifestExists) {
-      const expectedManifest = serializeRootManifest(expectedTracked);
-      if (!manifestExists) {
-        findings.push(
-          freshnessFinding(
-            ci,
-            undefined,
-            `Generated root manifest '${path.relative(repoRoot, manifestAbs)}' is missing.`,
-            'run `aipm build` to generate it.',
-          ),
-        );
-      } else if (fs.readFileSync(manifestAbs, 'utf-8') !== expectedManifest) {
+  // 3b. Orphans: any path the committed sidecar recorded that build would no longer write but which
+  // still sits on disk. `aipm build` removes these, so their presence means the tree is stale.
+  const expectedSet = new Set(expectedTracked);
+  for (const rel of priorTracked) {
+    if (expectedSet.has(rel)) continue;
+    const abs = path.join(repoRoot, ...rel.split('/'));
+    if (fs.existsSync(abs)) {
+      findings.push(
+        freshnessFinding(
+          ci,
+          undefined,
+          `Generated repo-root artifact '${rel}' is stale — it is no longer produced, so \`aipm build\` would remove it.`,
+          'run `aipm build` to remove the orphaned artifact.',
+        ),
+      );
+    }
+  }
+
+  // 3c. The sidecar manifest itself is a generated, freshness-checked artifact: its bytes must
+  // match what build would write for the expected tracked set. When build would write no artifacts
+  // AND no sidecar exists, the expected state is "no sidecar" — only flag a stale/missing sidecar
+  // when one is expected (non-empty tracked set) or one already exists on disk.
+  const manifestAbs = rootManifestPath(repoRoot);
+  const manifestExists = fs.existsSync(manifestAbs);
+  if (expectedTracked.length > 0 || manifestExists) {
+    const expectedManifest = serializeRootManifest(expectedTracked);
+    if (!manifestExists) {
+      findings.push(
+        freshnessFinding(
+          ci,
+          undefined,
+          `Generated root manifest '${path.relative(repoRoot, manifestAbs)}' is missing.`,
+          'run `aipm build` to generate it.',
+        ),
+      );
+    } else {
+      checkFreshnessFile(() => {
+        if (fs.readFileSync(manifestAbs, 'utf-8') === expectedManifest) return;
         findings.push(
           freshnessFinding(
             ci,
@@ -1581,10 +1661,8 @@ export async function checkRootArtifactFreshness(
             'run `aipm build` to regenerate it.',
           ),
         );
-      }
+      }, onIoError);
     }
-  } catch (err) {
-    findings.push(freshnessIoFinding(err, reportFreshnessIo));
   }
 
   return findings;
@@ -1619,38 +1697,6 @@ function compareTrees(actualDir: string, expectedDir: string): string[] {
 // runValidate — the validate orchestrator (§5.3, §10.1, §10.3)
 // ---------------------------------------------------------------------------
 
-/** Retain the original filesystem error message for CLI reporting. */
-function freshnessIoFinding(err: unknown, report: boolean, plugin?: string): Finding {
-  if (
-    !report ||
-    !(err instanceof Error) ||
-    !('syscall' in err) ||
-    typeof err.syscall !== 'string' ||
-    !('errno' in err) ||
-    typeof err.errno !== 'number'
-  ) {
-    throw err;
-  }
-  return {
-    severity: 'hard',
-    code: 'freshness-io',
-    ...(plugin === undefined ? {} : { plugin }),
-    message: err.message,
-  };
-}
-
-async function runFreshnessRule(
-  rule: Rule,
-  ctx: InternalRuleContext,
-  plugin?: string,
-): Promise<Finding[]> {
-  try {
-    return (await rule.check(ctx)).map((diagnostic) => diagnosticToFinding(diagnostic, ctx.ci));
-  } catch (err) {
-    return [freshnessIoFinding(err, ctx.reportFreshnessIo ?? false, plugin)];
-  }
-}
-
 /**
  * Validate one plugin or every plugin under a repo root (§5.3). Runs the validators in the order
  * mandated by §10.1 / §10.3:
@@ -1669,15 +1715,16 @@ async function runFreshnessRule(
  *
  * @param targetPath - Absolute path to a single plugin directory or a repo root.
  * @param opts - Validate options. `ci` controls freshness severity (default: local/soft).
+ * @param onFreshnessIoError - Report recoverable I/O errors to the build outcome.
  * @returns The combined validation result.
  */
 export async function runValidate(
   targetPath: string,
-  opts?: ValidateOptions & { ci?: boolean; reportFreshnessIo?: boolean },
+  opts?: ValidateOptions & { ci?: boolean },
+  onFreshnessIoError?: FreshnessIoHandler,
 ): Promise<ValidationResult> {
   const ci = opts?.ci ?? false;
   const skipFreshness = opts?.skipFreshness ?? false;
-  const reportFreshnessIo = opts?.reportFreshnessIo ?? false;
 
   // Discovery loads the optional `aipm.repo.ts`. An invalid repo config makes the whole repo's
   // topology unresolvable, so surface it as a single repo-scoped `repo-config-invalid` finding
@@ -1756,7 +1803,7 @@ export async function runValidate(
       workspace,
       ci,
       skipFreshness,
-      reportFreshnessIo,
+      onFreshnessIoError,
       configCache,
     });
 
@@ -1798,7 +1845,7 @@ export async function runValidate(
     }
 
     // ── 5. Freshness ─────────────────────────────────────────────────────────
-    findings.push(...(await runFreshnessRule(pluginFreshnessRule, ctx, pluginName)));
+    findings.push(...(await pluginFreshnessRule.check(ctx)).map((d) => diagnosticToFinding(d, ci)));
   }
 
   // ── 6. Repo-level default/placeholder marketplace-name check (always SOFT) ──
@@ -1834,8 +1881,9 @@ export async function runValidate(
   // single-plugin validate of a repo with sibling plugins compares against the same expected bytes.
   //
   // The registry block is freshness-only (gated on `!skipFreshness`). The root-artifact block runs
-  // whenever a workspace is present, including under `skipFreshness`, because its
-  // `single-artifact-host` and `root-artifact-collision` findings are structural gates.
+  // whenever a workspace is present — even under `skipFreshness` — because its `single-artifact-host`
+  // / `root-artifact-collision` findings are structural gates (not drift), and `runBuild`'s
+  // post-build validate (which skips freshness) must still fail fast on them.
   if (workspace !== undefined) {
     // For repo-root input, pluginDirs already covers the whole repo — reuse it (and the warm
     // config cache) rather than re-discovering and reloading. Single-plugin input needs a
@@ -1851,11 +1899,15 @@ export async function runValidate(
       workspace,
       ci,
       skipFreshness,
-      reportFreshnessIo,
+      onFreshnessIoError,
       configCache,
     });
     if (!skipFreshness) {
-      findings.push(...(await runFreshnessRule(registryFreshnessRule, repoScopedCtx)));
+      findings.push(
+        ...(await registryFreshnessRule.check(repoScopedCtx)).map((d) =>
+          diagnosticToFinding(d, ci),
+        ),
+      );
     }
     findings.push(
       ...(await rootArtifactFreshnessRule.check(repoScopedCtx)).map((d) =>

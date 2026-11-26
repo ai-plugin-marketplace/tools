@@ -109,7 +109,26 @@ export interface BuildOutcome {
   /** One result per built plugin. */
   results: BuildResult[];
   /** Combined post-build validation, including repo-level findings. */
-  validation: ValidationResult;
+  validation: {
+    findings: (Finding | BuildFreshnessIoFinding)[];
+    passed: boolean;
+  };
+}
+
+/**
+ * A filesystem failure that prevented a freshness check in {@link BuildOutcome}.
+ *
+ * @public
+ */
+export interface BuildFreshnessIoFinding {
+  /** Freshness I/O failures are hard in every environment. */
+  severity: 'hard';
+  /** Identifies a failed freshness check. */
+  code: 'freshness-io';
+  /** Owning plugin, when the check is plugin-scoped. */
+  plugin?: string;
+  /** Original filesystem error message. */
+  message: string;
 }
 
 /**
@@ -204,9 +223,6 @@ export interface ValidationResult {
  * pre-release artifact even after `aipm.config.ts`'s `version` is bumped. Fires HARD, mirroring
  * `name-consistency`.
  *
- * `freshness-io` — a filesystem operation prevented validation from checking freshness. Always
- * HARD, with the original filesystem error message.
- *
  * `single-artifact-host` — a "single-artifact host" (`gemini` or `kiro`), which installs ONE
  * extension/power per repo from the repo ROOT and has no marketplace concept, is declared by MORE
  * THAN ONE plugin in the repo. The root artifact for that host is NOT emitted while the ambiguity
@@ -263,7 +279,6 @@ export type FindingCode =
   | 'mcp-key-sync'
   | 'marketplace-registration'
   | 'freshness'
-  | 'freshness-io'
   | 'single-artifact-host'
   | 'root-artifact-collision'
   | 'default-marketplace-name'

@@ -352,7 +352,7 @@ describe('aipm build success-line ordering (issue #97)', () => {
     }
   });
 
-  it.each(['build', 'validate'])('reports freshness I/O failures as %s errors', async (command) => {
+  function writeGeminiPlugin(): void {
     const pluginDir = path.join(tmpDir, 'plugins', 'gem');
     fs.mkdirSync(pluginDir, { recursive: true });
     fs.writeFileSync(
@@ -364,51 +364,89 @@ describe('aipm build success-line ordering (issue #97)', () => {
       '{"name":"gem","version":"0.1.0"}',
     );
     fs.writeFileSync(path.join(pluginDir, 'GEMINI.md'), '# Gemini\n');
-    const failure = Object.assign(new Error('Cannot create a freshness directory'), {
+  }
+
+  it.each(['build', 'validate'])(
+    'reports the first fatal freshness error during %s',
+    async (command) => {
+      writeGeminiPlugin();
+      const laterPlugin = path.join(tmpDir, 'plugins', 'z-claude');
+      const hooksPath = path.join(laterPlugin, 'hooks', 'hooks.json');
+      fs.mkdirSync(path.dirname(hooksPath), { recursive: true });
+      fs.writeFileSync(
+        path.join(laterPlugin, 'aipm.config.ts'),
+        "export default { version: '0.1.0', targets: ['claude'] };\n",
+      );
+      fs.writeFileSync(hooksPath, '{"hooks":{}}');
+
+      const failure = Object.assign(new Error('Cannot create a freshness directory'), {
+        code: 'EACCES',
+        errno: -13,
+        syscall: 'mkdtemp',
+      });
+      const mkdtempSync = fs.mkdtempSync;
+      let freshnessStarted = false;
+      vi.spyOn(fs, 'mkdtempSync').mockImplementation((prefix, options) => {
+        if (prefix.endsWith('aipm-freshness-')) {
+          freshnessStarted = true;
+          throw failure;
+        }
+        return mkdtempSync(prefix, options);
+      });
+      const readFileSync = fs.readFileSync;
+      let preflightReadHooks = false;
+      vi.spyOn(fs, 'readFileSync').mockImplementation((file, options) => {
+        if (file === hooksPath) {
+          if (freshnessStarted) throw new Error('Cannot read the later plugin’s hooks');
+          preflightReadHooks = true;
+        }
+        return readFileSync(file, options);
+      });
+      syncBuiltinESMExports();
+      try {
+        await expect(invoke([command, tmpDir])).resolves.toEqual({
+          code: 1,
+          out: '',
+          err: `aipm: ${command} failed: ${failure.message}\n`,
+        });
+        if (command === 'build') expect(preflightReadHooks).toBe(true);
+      } finally {
+        vi.restoreAllMocks();
+        syncBuiltinESMExports();
+      }
+    },
+  );
+
+  it('retries a transient repo-root oracle failure after structural preflight in CI', async () => {
+    writeGeminiPlugin();
+    fs.writeFileSync(
+      path.join(tmpDir, 'aipm.workspace.ts'),
+      "export default { marketplace: { name: 'example-market' } };\n",
+    );
+    vi.stubEnv('CI', 'true');
+    const failure = Object.assign(new Error('Cannot create the preflight Gemini directory'), {
       code: 'EACCES',
       errno: -13,
       syscall: 'mkdtemp',
     });
     const mkdtempSync = fs.mkdtempSync;
+    let rootAttempts = 0;
     vi.spyOn(fs, 'mkdtempSync').mockImplementation((prefix, options) => {
-      if (prefix.endsWith('aipm-freshness-')) throw failure;
+      if (prefix.endsWith('aipm-root-gemini-') && ++rootAttempts === 2) throw failure;
       return mkdtempSync(prefix, options);
     });
     syncBuiltinESMExports();
     try {
-      if (command === 'validate') {
-        // A later plugin's envelope check also throws. Standalone validate must stop at gem.
-        const laterPlugin = path.join(tmpDir, 'plugins', 'z-claude');
-        const hooksPath = path.join(laterPlugin, 'hooks', 'hooks.json');
-        fs.mkdirSync(path.dirname(hooksPath), { recursive: true });
-        fs.writeFileSync(
-          path.join(laterPlugin, 'aipm.config.ts'),
-          "export default { version: '0.1.0', targets: ['claude'] };\n",
-        );
-        fs.writeFileSync(hooksPath, '{"hooks":{}}');
-        const laterFailure = new Error('Cannot read the later plugin’s hooks');
-        const readFileSync = fs.readFileSync;
-        vi.spyOn(fs, 'readFileSync').mockImplementation((file, options) => {
-          if (file === hooksPath) throw laterFailure;
-          return readFileSync(file, options);
-        });
-        syncBuiltinESMExports();
-        expect((await invoke(['validate', laterPlugin])).err).toBe(
-          `aipm: validate failed: ${laterFailure.message}\n`,
-        );
-      }
-
-      const { code, out, err } = await invoke([
-        command,
-        command === 'validate' ? tmpDir : pluginDir,
-      ]);
-
-      expect(code).toBe(1);
-      expect(out).toBe('');
-      expect(err).toBe(`aipm: ${command} failed: ${failure.message}\n`);
+      await expect(invoke(['build', tmpDir])).resolves.toEqual({
+        code: 0,
+        out: 'Built 1 plugin(s), 5 artifact(s).\nOK — no findings.\n',
+        err: '',
+      });
+      expect(rootAttempts).toBe(3);
     } finally {
       vi.restoreAllMocks();
       syncBuiltinESMExports();
+      vi.unstubAllEnvs();
     }
   });
 

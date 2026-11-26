@@ -66,6 +66,14 @@ export function applyRuleSeverityOverrides(diagnostics: readonly Diagnostic[], o
 export function build(targetPath: string, opts?: BuildOptions): Promise<BuildResult[]>;
 
 // @public
+export interface BuildFreshnessIoFinding {
+    code: 'freshness-io';
+    message: string;
+    plugin?: string;
+    severity: 'hard';
+}
+
+// @public
 export interface BuildOptions {
     failFast?: boolean;
     forceDowngrade?: boolean;
@@ -74,7 +82,10 @@ export interface BuildOptions {
 // @public
 export interface BuildOutcome {
     results: BuildResult[];
-    validation: ValidationResult;
+    validation: {
+        findings: (Finding | BuildFreshnessIoFinding)[];
+        passed: boolean;
+    };
 }
 
 // @public
@@ -136,7 +147,7 @@ export interface Finding {
 }
 
 // @public
-export type FindingCode = 'envelope-invalid' | 'repo-config-invalid' | 'envelope-adherence' | 'schema-invalid' | 'name-consistency' | 'version-consistency' | 'mcp-key-sync' | 'marketplace-registration' | 'freshness' | 'freshness-io' | 'single-artifact-host' | 'root-artifact-collision' | 'default-marketplace-name' | 'frontmatter-invalid' | 'metadata-dir-isolation' | 'open-plugins-conformance' | 'unpublished-skill-installable';
+export type FindingCode = 'envelope-invalid' | 'repo-config-invalid' | 'envelope-adherence' | 'schema-invalid' | 'name-consistency' | 'version-consistency' | 'mcp-key-sync' | 'marketplace-registration' | 'freshness' | 'single-artifact-host' | 'root-artifact-collision' | 'default-marketplace-name' | 'frontmatter-invalid' | 'metadata-dir-isolation' | 'open-plugins-conformance' | 'unpublished-skill-installable';
 
 // @public
 export interface Fix {

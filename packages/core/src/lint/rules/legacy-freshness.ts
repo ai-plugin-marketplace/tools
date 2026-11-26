@@ -33,7 +33,13 @@ export const pluginFreshnessRule: Rule = {
   },
   check(ctx: InternalRuleContext): Diagnostic[] {
     if (ctx.skipFreshness) return [];
-    const findings = checkFreshness(ctx.pluginDir, ctx.distDir, ctx.envelope, ctx.ci);
+    const findings = checkFreshness(
+      ctx.pluginDir,
+      ctx.distDir,
+      ctx.envelope,
+      ctx.ci,
+      ctx.onFreshnessIoError,
+    );
     return findings.map((f) =>
       findingToDiagnostic(f, FRESHNESS_ID, 'correctness', docsUrlFor(FRESHNESS_ID)),
     );
@@ -59,6 +65,7 @@ export const registryFreshnessRule: Rule = {
       ctx.workspace,
       ctx.ci,
       ctx.configCache,
+      ctx.onFreshnessIoError,
     );
     return findings.map((f) =>
       findingToDiagnostic(f, FRESHNESS_ID, 'correctness', docsUrlFor(FRESHNESS_ID)),
@@ -93,7 +100,7 @@ export const rootArtifactFreshnessRule: Rule = {
       ctx.ci,
       ctx.skipFreshness,
       ctx.configCache,
-      ctx.reportFreshnessIo,
+      ctx.onFreshnessIoError,
     );
     return findings.map((f) =>
       findingToDiagnostic(f, ROOT_ARTIFACT_ID, 'correctness', docsUrlFor(ROOT_ARTIFACT_ID)),

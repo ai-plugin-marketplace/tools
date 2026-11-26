@@ -669,10 +669,11 @@ export function computeRootArtifacts(
   repoRoot: string,
   plugins: readonly RegistryPluginInfo[],
   _workspace: AipmWorkspace,
+  onHostError?: (error: unknown) => void,
 ): RootArtifacts {
   const files: RootArtifactFile[] = [];
-  const trackedPaths = new Set<string>();
   const findings: Finding[] = [];
+  const owners = new Map<SingleArtifactHost, RegistryPluginInfo>();
 
   for (const host of SINGLE_ARTIFACT_HOSTS) {
     const declarers = plugins.filter((p) => p.envelope.includes(host));
@@ -688,34 +689,35 @@ export function computeRootArtifacts(
       continue;
     }
 
-    // Exactly one declarer: bundle it into temp, then capture its files as repo-root artifacts.
     const declarer = declarers[0];
-    if (declarer === undefined) continue; // unreachable (length === 1), satisfies noUncheckedIndexedAccess
-    // `source` is `./<rel>` POSIX from the repo root; resolve to the absolute plugin dir.
-    const pluginDir = path.resolve(repoRoot, declarer.source);
+    if (declarer !== undefined) owners.set(host, declarer);
+  }
 
-    let tempDir: string | undefined;
+  for (const [host, declarer] of owners) {
+    const pluginDir = path.resolve(repoRoot, declarer.source);
     try {
-      tempDir = bundleHostToTemp(host, pluginDir);
-      for (const rel of collectFilesRelative(tempDir)) {
-        // Tracked set is POSIX-separated (stable across platforms; the freshness oracle and
-        // sidecar compare against this exact form).
-        const relPosix = rel.split(path.sep).join('/');
-        trackedPaths.add(relPosix);
-        files.push({
-          relPath: relPosix,
-          owner: host,
-          content: fs.readFileSync(path.join(tempDir, rel)),
-        });
-      }
-    } finally {
-      if (tempDir !== undefined && fs.existsSync(tempDir)) {
-        fs.rmSync(tempDir, { recursive: true });
-      }
+      for (const file of readRootHostFiles(host, pluginDir)) files.push(file);
+    } catch (err) {
+      if (onHostError === undefined) throw err;
+      onHostError(err);
     }
   }
 
-  return { files, trackedPaths: [...trackedPaths].sort(), findings };
+  const trackedPaths = [...new Set(files.map((file) => file.relPath))].sort();
+  return { files, trackedPaths, findings };
+}
+
+function readRootHostFiles(host: SingleArtifactHost, pluginDir: string): RootArtifactFile[] {
+  const tempDir = bundleHostToTemp(host, pluginDir);
+  try {
+    return collectFilesRelative(tempDir).map((rel) => ({
+      relPath: rel.split(path.sep).join('/'),
+      owner: host,
+      content: fs.readFileSync(path.join(tempDir, rel)),
+    }));
+  } finally {
+    if (fs.existsSync(tempDir)) fs.rmSync(tempDir, { recursive: true });
+  }
 }
 
 /**
@@ -786,13 +788,15 @@ export function serializeRootManifest(trackedPaths: readonly string[]): string {
  * Read the prior generated-root sidecar manifest, returning the tracked-path set it recorded.
  * Returns an empty array when the sidecar is absent or unparseable — a missing/corrupt sidecar is
  * treated as "nothing tracked yet" (a clean first build), and the collision guard then protects any
- * pre-existing root files. POSIX-separated paths are returned as-is.
+ * pre-existing root files. With `reportReadError`, a failed read throws before parsing.
+ * POSIX-separated paths are returned as-is.
  */
-export function readRootManifestPaths(repoRoot: string): string[] {
+export function readRootManifestPaths(repoRoot: string, reportReadError = false): string[] {
   const manifestPath = rootManifestPath(repoRoot);
   if (!fs.existsSync(manifestPath)) return [];
+  const content = reportReadError ? fs.readFileSync(manifestPath, 'utf-8') : undefined;
   try {
-    const parsed = JSON.parse(fs.readFileSync(manifestPath, 'utf-8')) as unknown;
+    const parsed = JSON.parse(content ?? fs.readFileSync(manifestPath, 'utf-8')) as unknown;
     if (
       typeof parsed === 'object' &&
       parsed !== null &&

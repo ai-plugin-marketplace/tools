@@ -9,5 +9,8 @@ Combined post-build validation, including repo-level findings.
 **Signature:**
 
 ```typescript
-validation: ValidationResult;
+validation: {
+        findings: (Finding | BuildFreshnessIoFinding)[];
+        passed: boolean;
+    };
 ```

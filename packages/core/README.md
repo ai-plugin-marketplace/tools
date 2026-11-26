@@ -57,11 +57,12 @@ import {
 Use `buildWithOutcome()` with the same arguments to get `{ results, validation }` from one build
 and validation pass, including freshness diagnostics. With `failFast: true`, both functions
 reject on hard structural findings after writing artifacts. Artifact drift and freshness I/O
-failures are reported in the outcome's `validation`.
+failures are reported in the outcome's `validation`. Its findings include the usual `Finding`
+values and hard `BuildFreshnessIoFinding` diagnostics with code `freshness-io`.
 
 ### Key types
 
-`TargetId`, `BuildOptions`, `BuildOutcome`, `BuildResult`, `GeneratedFile`, `ValidateOptions`,
+`TargetId`, `BuildOptions`, `BuildOutcome`, `BuildFreshnessIoFinding`, `BuildResult`, `GeneratedFile`, `ValidateOptions`,
 `ValidationResult`, `Finding`, `FindingCode`, `ScaffoldOptions`, `InitOptions`,
 `MigrateOptions`, `MigrateResult`, `SupportReport`.
 

@@ -76,7 +76,7 @@ export function buildWithOutcome(targetPath: string, opts?: BuildOptions): Promi
  * @public
  */
 export function validate(targetPath: string, opts?: ValidateOptions): Promise<ValidationResult> {
-  return runValidate(targetPath, { ...opts, ci: isCi(), reportFreshnessIo: false });
+  return runValidate(targetPath, { ...opts, ci: isCi() });
 }
 
 /**

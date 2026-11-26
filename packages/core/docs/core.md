@@ -279,6 +279,17 @@ Raw input shape accepted by `defineWorkspace`<!-- -->. Authored as `aipm.workspa
 </td></tr>
 <tr><td>
 
+[BuildFreshnessIoFinding](./core.buildfreshnessiofinding.md)
+
+
+</td><td>
+
+A filesystem failure that prevented a freshness check in [BuildOutcome](./core.buildoutcome.md)<!-- -->.
+
+
+</td></tr>
+<tr><td>
+
 [BuildOptions](./core.buildoptions.md)
 
 
@@ -643,8 +654,6 @@ A position-aware parsed document.
 Enumerated finding codes. Additive — new codes arrive in toolkit MINOR releases; removing or renaming a code is MAJOR. Consumers SHOULD handle unknown codes gracefully.
 
 `version-consistency` — a declared target's manifest `version` field does not match `aipm.config.ts`<!-- -->'s `version`<!-- -->. Installs are keyed by manifest version, so a stale author-maintained manifest (e.g. `.claude-plugin/plugin.json`<!-- -->) silently pins auto-update to a pre-release artifact even after `aipm.config.ts`<!-- -->'s `version` is bumped. Fires HARD, mirroring `name-consistency`<!-- -->.
-
-`freshness-io` — a filesystem operation prevented validation from checking freshness. Always HARD, with the original filesystem error message.
 
 `single-artifact-host` — a "single-artifact host" (`gemini` or `kiro`<!-- -->), which installs ONE extension/power per repo from the repo ROOT and has no marketplace concept, is declared by MORE THAN ONE plugin in the repo. The root artifact for that host is NOT emitted while the ambiguity stands (the toolkit can't choose which plugin owns the single root slot).
 

@@ -315,7 +315,7 @@ Invoked by `aipm validate` (or as a subphase of `aipm build`). Inspects on-disk 
 
 - Author produces inputs; Build produces outputs; Validate inspects both.
 - Both core build operations run validation once after writing artifacts. `build()` returns the per-plugin results array and skips freshness checks. `buildWithOutcome()` returns the results and validation findings, including freshness checks. With `failFast` enabled, either operation rejects on hard structural findings.
-- The CLI uses `buildWithOutcome()` to report those findings and exits with status 1 for hard findings. Artifact drift is hard in CI and soft locally. Freshness I/O failures are hard in both environments and the CLI prints them to stderr. Standalone validation propagates the original filesystem error and also checks the published-surface boundary.
+- The CLI shares artifact generation and runs the structural preflight before its reporting pass. The reporting pass preserves validation order and retries the repo-root oracle if its preflight failed. Fatal errors go to stderr, and hard validation findings go to stdout with exit status 1. Artifact drift is hard in CI and soft locally. `buildWithOutcome()` records freshness I/O failures as hard diagnostics. Standalone validation also checks the published-surface boundary.
 - No phase calls another's internals; they communicate through on-disk state.
 
 ---
@@ -542,16 +542,16 @@ export interface InitOutcome {
 
 **Subcommands.**
 
-| Subcommand                          | Wraps                                       |
-| ----------------------------------- | ------------------------------------------- |
-| `aipm init [dir]`                   | `core.init(dir)` — default cwd              |
-| `aipm build [path]`                 | `core.buildWithOutcome(path)` — default cwd |
-| `aipm validate [path]`              | `core.validate(path)`                       |
-| `aipm scaffold <name>`              | `core.scaffold(name)`                       |
-| `aipm migrate [path]`               | `core.migrate(path)` — no-op in v0.1.0      |
-| `aipm check-support <plugin>`       | `core.checkSupport(pluginDir)`              |
-| `aipm add-target <plugin> <target>` | `core.addTarget(pluginDir, target)`         |
-| `aipm list-targets`                 | `core.listTargets()`                        |
+| Subcommand                          | Wraps                                     |
+| ----------------------------------- | ----------------------------------------- |
+| `aipm init [dir]`                   | `core.init(dir)` — default cwd            |
+| `aipm build [path]`                 | Build and report validation — default cwd |
+| `aipm validate [path]`              | `core.validate(path)`                     |
+| `aipm scaffold <name>`              | `core.scaffold(name)`                     |
+| `aipm migrate [path]`               | `core.migrate(path)` — no-op in v0.1.0    |
+| `aipm check-support <plugin>`       | `core.checkSupport(pluginDir)`            |
+| `aipm add-target <plugin> <target>` | `core.addTarget(pluginDir, target)`       |
+| `aipm list-targets`                 | `core.listTargets()`                      |
 
 **Naming convention.** CLI subcommand names are kebab-case; `core` exports are camelCase. The CLI handles the mapping at its argv boundary; downstream consumers never see the hyphenated form.
 

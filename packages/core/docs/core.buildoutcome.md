@@ -64,7 +64,7 @@ One result per built plugin.
 
 </td><td>
 
-[ValidationResult](./core.validationresult.md)
+{ findings: ([Finding](./core.finding.md) \| [BuildFreshnessIoFinding](./core.buildfreshnessiofinding.md)<!-- -->)\[\]; passed: boolean; }
 
 
 </td><td>

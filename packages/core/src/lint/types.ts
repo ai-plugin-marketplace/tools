@@ -125,6 +125,8 @@ export interface InternalRuleContext extends RuleContext {
    * `skipFreshness` — set only by `validate()`'s post-build re-validation; `lint()` never sets it.
    */
   readonly skipFreshness: boolean;
+  /** Convert freshness filesystem errors to findings during post-build validation. */
+  readonly reportFreshnessIo?: boolean;
   /**
    * Optional per-invocation `aipm.config.ts` transpile memo (see `pipeline/load-config.ts`'s
    * `ConfigCache`), threaded through so repo-scoped freshness rules reuse the same cache

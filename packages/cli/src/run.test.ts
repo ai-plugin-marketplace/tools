@@ -8,7 +8,8 @@
  * @see docs/specs/architecture.md §8.2
  */
 
-import * as fs from 'node:fs';
+import fs from 'node:fs';
+import { syncBuiltinESMExports } from 'node:module';
 import * as os from 'node:os';
 import * as path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -363,19 +364,51 @@ describe('aipm build success-line ordering (issue #97)', () => {
       '{"name":"gem","version":"0.1.0"}',
     );
     fs.writeFileSync(path.join(pluginDir, 'GEMINI.md'), '# Gemini\n');
-    const invalidTempDir = path.join(tmpDir, 'temp-file');
-    fs.writeFileSync(invalidTempDir, '');
-    vi.stubEnv('TMPDIR', invalidTempDir);
+    const failure = Object.assign(new Error('Cannot create a freshness directory'), {
+      code: 'EACCES',
+      errno: -13,
+      syscall: 'mkdtemp',
+    });
+    const mkdtempSync = fs.mkdtempSync;
+    vi.spyOn(fs, 'mkdtempSync').mockImplementation((prefix, options) => {
+      if (prefix.endsWith('aipm-freshness-')) throw failure;
+      return mkdtempSync(prefix, options);
+    });
+    syncBuiltinESMExports();
     try {
-      const { code, out, err } = await invoke([command, pluginDir]);
+      if (command === 'validate') {
+        // A later plugin's envelope check also throws. Standalone validate must stop at gem.
+        const laterPlugin = path.join(tmpDir, 'plugins', 'z-claude');
+        const hooksPath = path.join(laterPlugin, 'hooks', 'hooks.json');
+        fs.mkdirSync(path.dirname(hooksPath), { recursive: true });
+        fs.writeFileSync(
+          path.join(laterPlugin, 'aipm.config.ts'),
+          "export default { version: '0.1.0', targets: ['claude'] };\n",
+        );
+        fs.writeFileSync(hooksPath, '{"hooks":{}}');
+        const laterFailure = new Error('Cannot read the later plugin’s hooks');
+        const readFileSync = fs.readFileSync;
+        vi.spyOn(fs, 'readFileSync').mockImplementation((file, options) => {
+          if (file === hooksPath) throw laterFailure;
+          return readFileSync(file, options);
+        });
+        syncBuiltinESMExports();
+        expect((await invoke(['validate', laterPlugin])).err).toBe(
+          `aipm: validate failed: ${laterFailure.message}\n`,
+        );
+      }
+
+      const { code, out, err } = await invoke([
+        command,
+        command === 'validate' ? tmpDir : pluginDir,
+      ]);
 
       expect(code).toBe(1);
       expect(out).toBe('');
-      expect(err).toBe(
-        `aipm: ${command} failed: ENOTDIR: not a directory, mkdtemp '${path.join(invalidTempDir, 'aipm-freshness-XXXXXX')}'\n`,
-      );
+      expect(err).toBe(`aipm: ${command} failed: ${failure.message}\n`);
     } finally {
-      vi.unstubAllEnvs();
+      vi.restoreAllMocks();
+      syncBuiltinESMExports();
     }
   });
 

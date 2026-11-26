@@ -314,7 +314,7 @@ Invoked by `aipm validate` (or as a subphase of `aipm build`). Inspects on-disk 
 ### 5.4 Phase invariants
 
 - Author produces inputs; Build produces outputs; Validate inspects both.
-- Build runs validation once after writing artifacts and returns the findings with the per-plugin results. The CLI reports those findings and exits with status 1 for hard findings. Freshness findings are hard in CI and soft locally. Standalone validation also checks the published-surface boundary.
+- Build runs validation once after writing artifacts and returns the findings with the per-plugin results. The CLI reports those findings and exits with status 1 for hard findings. Artifact drift is hard in CI and soft locally. Freshness I/O failures are hard in both environments when returned from a build. Standalone validation propagates the original filesystem error and also checks the published-surface boundary.
 - No phase calls another's internals; they communicate through on-disk state.
 
 ---

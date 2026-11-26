@@ -437,6 +437,7 @@ export async function runBuild(targetPath: string, opts?: BuildOptions): Promise
   const validation = await runValidate(targetPath, {
     ci: Boolean(process.env['CI']),
     skipPublishedSurfaceBoundary: true,
+    reportFreshnessIo: true,
   });
   if (opts?.failFast) {
     // Preserve the rejection criteria of post-build validation with freshness skipped.

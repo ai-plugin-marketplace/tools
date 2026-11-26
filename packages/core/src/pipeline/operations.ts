@@ -64,7 +64,7 @@ export function build(targetPath: string, opts?: BuildOptions): Promise<BuildOut
  * @public
  */
 export function validate(targetPath: string, opts?: ValidateOptions): Promise<ValidationResult> {
-  return runValidate(targetPath, { ...opts, ci: isCi() });
+  return runValidate(targetPath, { ...opts, ci: isCi(), reportFreshnessIo: false });
 }
 
 /**

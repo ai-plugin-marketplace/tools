@@ -1457,6 +1457,7 @@ export async function checkRootArtifactFreshness(
   ci: boolean,
   skipFreshness: boolean,
   cache?: ConfigCache,
+  reportFreshnessIo = false,
 ): Promise<Finding[]> {
   let root: ReturnType<typeof computeRootArtifacts>;
   try {
@@ -1503,83 +1504,87 @@ export async function checkRootArtifactFreshness(
   // The freshness-coded checks (missing/stale/orphan/sidecar) are skipped after a fresh build.
   if (skipFreshness) return findings;
 
-  // 3a. The set of paths build WOULD write this run (excluding suppressed/collided hosts) — this is
-  // the canonical expected tracked set the sidecar must match.
-  const expectedTracked: string[] = [];
-  for (const file of root.files) {
-    if (collidedOwners.has(file.owner)) continue;
-    const rel = file.relPath;
-    expectedTracked.push(rel);
-    const abs = path.join(repoRoot, ...rel.split('/'));
-    if (!fs.existsSync(abs)) {
-      findings.push(
-        freshnessFinding(
-          ci,
-          undefined,
-          `Generated repo-root artifact '${rel}' is missing.`,
-          'run `aipm build` to generate it.',
-        ),
-      );
-      continue;
+  try {
+    // 3a. The set of paths build WOULD write this run (excluding suppressed/collided hosts) — this is
+    // the canonical expected tracked set the sidecar must match.
+    const expectedTracked: string[] = [];
+    for (const file of root.files) {
+      if (collidedOwners.has(file.owner)) continue;
+      const rel = file.relPath;
+      expectedTracked.push(rel);
+      const abs = path.join(repoRoot, ...rel.split('/'));
+      if (!fs.existsSync(abs)) {
+        findings.push(
+          freshnessFinding(
+            ci,
+            undefined,
+            `Generated repo-root artifact '${rel}' is missing.`,
+            'run `aipm build` to generate it.',
+          ),
+        );
+        continue;
+      }
+      const onDisk = fs.readFileSync(abs);
+      if (!onDisk.equals(file.content)) {
+        findings.push(
+          freshnessFinding(
+            ci,
+            undefined,
+            `Generated repo-root artifact '${rel}' is stale — it differs from what \`aipm build\` would produce (hand-edited or out of date).`,
+            "run `aipm build` to regenerate it; edit the owning plugin's source, not the generated repo-root file.",
+          ),
+        );
+      }
     }
-    const onDisk = fs.readFileSync(abs);
-    if (!onDisk.equals(file.content)) {
-      findings.push(
-        freshnessFinding(
-          ci,
-          undefined,
-          `Generated repo-root artifact '${rel}' is stale — it differs from what \`aipm build\` would produce (hand-edited or out of date).`,
-          "run `aipm build` to regenerate it; edit the owning plugin's source, not the generated repo-root file.",
-        ),
-      );
-    }
-  }
 
-  // 3b. Orphans: any path the committed sidecar recorded that build would no longer write but which
-  // still sits on disk. `aipm build` removes these, so their presence means the tree is stale.
-  const expectedSet = new Set(expectedTracked);
-  for (const rel of priorTracked) {
-    if (expectedSet.has(rel)) continue;
-    const abs = path.join(repoRoot, ...rel.split('/'));
-    if (fs.existsSync(abs)) {
-      findings.push(
-        freshnessFinding(
-          ci,
-          undefined,
-          `Generated repo-root artifact '${rel}' is stale — it is no longer produced, so \`aipm build\` would remove it.`,
-          'run `aipm build` to remove the orphaned artifact.',
-        ),
-      );
+    // 3b. Orphans: any path the committed sidecar recorded that build would no longer write but which
+    // still sits on disk. `aipm build` removes these, so their presence means the tree is stale.
+    const expectedSet = new Set(expectedTracked);
+    for (const rel of priorTracked) {
+      if (expectedSet.has(rel)) continue;
+      const abs = path.join(repoRoot, ...rel.split('/'));
+      if (fs.existsSync(abs)) {
+        findings.push(
+          freshnessFinding(
+            ci,
+            undefined,
+            `Generated repo-root artifact '${rel}' is stale — it is no longer produced, so \`aipm build\` would remove it.`,
+            'run `aipm build` to remove the orphaned artifact.',
+          ),
+        );
+      }
     }
-  }
 
-  // 3c. The sidecar manifest itself is a generated, freshness-checked artifact: its bytes must
-  // match what build would write for the expected tracked set. When build would write no artifacts
-  // AND no sidecar exists, the expected state is "no sidecar" — only flag a stale/missing sidecar
-  // when one is expected (non-empty tracked set) or one already exists on disk.
-  const manifestAbs = rootManifestPath(repoRoot);
-  const manifestExists = fs.existsSync(manifestAbs);
-  if (expectedTracked.length > 0 || manifestExists) {
-    const expectedManifest = serializeRootManifest(expectedTracked);
-    if (!manifestExists) {
-      findings.push(
-        freshnessFinding(
-          ci,
-          undefined,
-          `Generated root manifest '${path.relative(repoRoot, manifestAbs)}' is missing.`,
-          'run `aipm build` to generate it.',
-        ),
-      );
-    } else if (fs.readFileSync(manifestAbs, 'utf-8') !== expectedManifest) {
-      findings.push(
-        freshnessFinding(
-          ci,
-          undefined,
-          `Generated root manifest '${path.relative(repoRoot, manifestAbs)}' is stale — it differs from what \`aipm build\` would produce.`,
-          'run `aipm build` to regenerate it.',
-        ),
-      );
+    // 3c. The sidecar manifest itself is a generated, freshness-checked artifact: its bytes must
+    // match what build would write for the expected tracked set. When build would write no artifacts
+    // AND no sidecar exists, the expected state is "no sidecar" — only flag a stale/missing sidecar
+    // when one is expected (non-empty tracked set) or one already exists on disk.
+    const manifestAbs = rootManifestPath(repoRoot);
+    const manifestExists = fs.existsSync(manifestAbs);
+    if (expectedTracked.length > 0 || manifestExists) {
+      const expectedManifest = serializeRootManifest(expectedTracked);
+      if (!manifestExists) {
+        findings.push(
+          freshnessFinding(
+            ci,
+            undefined,
+            `Generated root manifest '${path.relative(repoRoot, manifestAbs)}' is missing.`,
+            'run `aipm build` to generate it.',
+          ),
+        );
+      } else if (fs.readFileSync(manifestAbs, 'utf-8') !== expectedManifest) {
+        findings.push(
+          freshnessFinding(
+            ci,
+            undefined,
+            `Generated root manifest '${path.relative(repoRoot, manifestAbs)}' is stale — it differs from what \`aipm build\` would produce.`,
+            'run `aipm build` to regenerate it.',
+          ),
+        );
+      }
     }
+  } catch (err) {
+    findings.push(freshnessIoFinding(err, reportFreshnessIo));
   }
 
   return findings;
@@ -1615,6 +1620,25 @@ function compareTrees(actualDir: string, expectedDir: string): string[] {
 // ---------------------------------------------------------------------------
 
 /** Retain the original filesystem error message for CLI reporting. */
+function freshnessIoFinding(err: unknown, report: boolean, plugin?: string): Finding {
+  if (
+    !report ||
+    !(err instanceof Error) ||
+    !('syscall' in err) ||
+    typeof err.syscall !== 'string' ||
+    !('errno' in err) ||
+    typeof err.errno !== 'number'
+  ) {
+    throw err;
+  }
+  return {
+    severity: 'hard',
+    code: 'freshness-io',
+    ...(plugin === undefined ? {} : { plugin }),
+    message: err.message,
+  };
+}
+
 async function runFreshnessRule(
   rule: Rule,
   ctx: InternalRuleContext,
@@ -1623,23 +1647,7 @@ async function runFreshnessRule(
   try {
     return (await rule.check(ctx)).map((diagnostic) => diagnosticToFinding(diagnostic, ctx.ci));
   } catch (err) {
-    if (
-      !(err instanceof Error) ||
-      !('syscall' in err) ||
-      typeof err.syscall !== 'string' ||
-      !('errno' in err) ||
-      typeof err.errno !== 'number'
-    ) {
-      throw err;
-    }
-    return [
-      {
-        severity: 'hard',
-        code: 'freshness-io',
-        ...(plugin === undefined ? {} : { plugin }),
-        message: err.message,
-      },
-    ];
+    return [freshnessIoFinding(err, ctx.reportFreshnessIo ?? false, plugin)];
   }
 }
 
@@ -1665,10 +1673,11 @@ async function runFreshnessRule(
  */
 export async function runValidate(
   targetPath: string,
-  opts?: ValidateOptions & { ci?: boolean },
+  opts?: ValidateOptions & { ci?: boolean; reportFreshnessIo?: boolean },
 ): Promise<ValidationResult> {
   const ci = opts?.ci ?? false;
   const skipFreshness = opts?.skipFreshness ?? false;
+  const reportFreshnessIo = opts?.reportFreshnessIo ?? false;
 
   // Discovery loads the optional `aipm.repo.ts`. An invalid repo config makes the whole repo's
   // topology unresolvable, so surface it as a single repo-scoped `repo-config-invalid` finding
@@ -1747,6 +1756,7 @@ export async function runValidate(
       workspace,
       ci,
       skipFreshness,
+      reportFreshnessIo,
       configCache,
     });
 
@@ -1841,12 +1851,17 @@ export async function runValidate(
       workspace,
       ci,
       skipFreshness,
+      reportFreshnessIo,
       configCache,
     });
     if (!skipFreshness) {
       findings.push(...(await runFreshnessRule(registryFreshnessRule, repoScopedCtx)));
     }
-    findings.push(...(await runFreshnessRule(rootArtifactFreshnessRule, repoScopedCtx)));
+    findings.push(
+      ...(await rootArtifactFreshnessRule.check(repoScopedCtx)).map((d) =>
+        diagnosticToFinding(d, ci),
+      ),
+    );
   }
 
   // ── 8. Published-surface boundary: unpublished skills must be marked internal (#118) ──

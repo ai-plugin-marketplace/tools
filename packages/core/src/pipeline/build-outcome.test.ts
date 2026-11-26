@@ -1,9 +1,10 @@
-import * as fs from 'node:fs';
+import fs from 'node:fs';
+import { syncBuiltinESMExports } from 'node:module';
 import * as path from 'node:path';
 
 import { afterEach, expect, it, vi } from 'vitest';
 
-import { build } from '../index.js';
+import { build, validate } from '../index.js';
 import { synthRegistryRepo } from '../test-support/synth-plugin.js';
 import type { SynthRegistryRepo } from '../test-support/synth-plugin.js';
 import * as validator from './validate.js';
@@ -11,11 +12,13 @@ import * as validator from './validate.js';
 let repo: SynthRegistryRepo | undefined;
 afterEach(() => {
   vi.restoreAllMocks();
+  syncBuiltinESMExports();
   vi.unstubAllEnvs();
   repo?.cleanup();
 });
 
-it('returns generated artifacts when freshness cannot create a temporary directory', async () => {
+it.each(['', 'true'])('returns a hard freshness I/O finding with CI=%j', async (ci) => {
+  vi.stubEnv('CI', ci);
   repo = synthRegistryRepo([
     {
       name: 'gem',
@@ -26,9 +29,17 @@ it('returns generated artifacts when freshness cannot create a temporary directo
       },
     },
   ]);
-  const invalidTempDir = path.join(repo.repoRoot, 'temp-file');
-  fs.writeFileSync(invalidTempDir, '');
-  vi.stubEnv('TMPDIR', invalidTempDir);
+  const failure = Object.assign(new Error('Cannot create a freshness directory'), {
+    code: 'EACCES',
+    errno: -13,
+    syscall: 'mkdtemp',
+  });
+  const mkdtempSync = fs.mkdtempSync;
+  vi.spyOn(fs, 'mkdtempSync').mockImplementation((prefix, options) => {
+    if (prefix.endsWith('aipm-freshness-')) throw failure;
+    return mkdtempSync(prefix, options);
+  });
+  syncBuiltinESMExports();
 
   const { results, validation } = await build(repo.repoRoot);
 
@@ -36,12 +47,62 @@ it('returns generated artifacts when freshness cannot create a temporary directo
   expect(results[0]?.artifacts.map((artifact) => artifact.path)).toContain(manifestPath);
   expect(fs.existsSync(manifestPath)).toBe(true);
   expect(validation.passed).toBe(false);
-  const failure = validation.findings.find((finding) => finding.code === 'freshness-io');
-  expect(failure).toMatchObject({
+  expect(validation.findings).toContainEqual({
+    code: 'freshness-io',
     severity: 'hard',
     plugin: 'gem',
+    message: failure.message,
   });
-  expect(failure?.message).toMatch(/ENOTDIR.*mkdtemp/);
+  await expect(validate(repo.repoRoot)).rejects.toBe(failure);
+});
+
+it('retains hard structural findings when a repo-root artifact cannot be read', async () => {
+  repo = synthRegistryRepo(
+    [
+      {
+        name: 'gem',
+        targets: ['gemini'],
+        files: {
+          'gemini-extension.json': '{"name":"gem","version":"0.0.1"}',
+          'GEMINI.md': '# Gemini\n',
+        },
+      },
+      ...['kiro-one', 'kiro-two'].map((name) => ({
+        name,
+        targets: ['kiro'] as const,
+        files: {
+          'POWER.md': `---\nname: ${name}\ndescription: ${name} power\nversion: 0.0.1\n---\n# ${name}\n`,
+        },
+      })),
+    ],
+    { name: 'workspace' },
+  );
+  const rootContext = path.join(repo.repoRoot, 'GEMINI.md');
+  const failure = Object.assign(new Error('Cannot read the repo-root GEMINI.md'), {
+    code: 'EACCES',
+    errno: -13,
+    syscall: 'open',
+  });
+  const readFileSync = fs.readFileSync;
+  vi.spyOn(fs, 'readFileSync').mockImplementation((file, options) => {
+    if (file === rootContext) throw failure;
+    return readFileSync(file, options);
+  });
+  syncBuiltinESMExports();
+
+  const { results, validation } = await build(repo.repoRoot);
+
+  expect(results).toHaveLength(3);
+  expect(validation.passed).toBe(false);
+  expect(validation.findings).toContainEqual(
+    expect.objectContaining({ code: 'single-artifact-host', severity: 'hard' }),
+  );
+  expect(validation.findings).toContainEqual({
+    code: 'freshness-io',
+    severity: 'hard',
+    message: failure.message,
+  });
+  await expect(build(repo.repoRoot, { failFast: true })).rejects.toThrow('single-artifact-host');
 });
 
 it('runs the internal validator exactly once from public build', async () => {
@@ -55,9 +116,9 @@ it('runs the internal validator exactly once from public build', async () => {
       },
     },
   ]);
-  const validate = vi.spyOn(validator, 'runValidate');
+  const runValidate = vi.spyOn(validator, 'runValidate');
 
   await build(repo.repoRoot);
 
-  expect(validate).toHaveBeenCalledTimes(1);
+  expect(runValidate).toHaveBeenCalledTimes(1);
 });

@@ -93,6 +93,7 @@ export const rootArtifactFreshnessRule: Rule = {
       ctx.ci,
       ctx.skipFreshness,
       ctx.configCache,
+      ctx.reportFreshnessIo,
     );
     return findings.map((f) =>
       findingToDiagnostic(f, ROOT_ARTIFACT_ID, 'correctness', docsUrlFor(ROOT_ARTIFACT_ID)),

@@ -13,12 +13,13 @@
 import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
-import { fileURLToPath, pathToFileURL } from 'node:url';
+import { fileURLToPath } from 'node:url';
 
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import semver from 'semver';
 
 import { init } from '../index.js';
+import { initFromCli } from '../init-cli.js';
 import { runValidate } from './validate.js';
 
 /** The base version for the generated core dependency. */
@@ -187,59 +188,35 @@ describe('init', () => {
     expect(fs.existsSync(repoDir)).toBe(false);
   });
 
-  it('accepts a range that includes the bundled release and the selected manifest', async () => {
-    const repoDir = path.join(tmpDir, 'selected-cli');
-    const selectedRelease = semver.inc(CLI_VERSION, 'patch');
-    const manifest = path.join(tmpDir, 'package.json');
-    fs.writeFileSync(
-      manifest,
-      JSON.stringify({ name: '@ai-plugin-marketplace/cli', version: selectedRelease }),
+  it('preserves a compatible major.minor shorthand in the rendered range', async () => {
+    const repoDir = path.join(tmpDir, 'compatible-version-shorthand');
+    const cliVersion = `${String(semver.major(CLI_VERSION))}.${String(semver.minor(CLI_VERSION))}`;
+    await init(repoDir, { cliVersion });
+    expect(readPackageJson(repoDir).devDependencies?.['@ai-plugin-marketplace/cli']).toBe(
+      `^${cliVersion}`,
     );
-    const cliPackageJson = pathToFileURL(manifest);
-    await init(repoDir, { cliPackageJson, cliVersion: CLI_VERSION });
+  });
+
+  it('ignores extra manifest input to public init', async () => {
+    const repoDir = path.join(tmpDir, 'extra-manifest');
+    const opts = {
+      name: 'public-init',
+      get cliPackageJson(): URL {
+        throw new Error('Public init should not read a manifest override.');
+      },
+    };
+    await init(repoDir, opts);
     expect(readPackageJson(repoDir).devDependencies?.['@ai-plugin-marketplace/cli']).toBe(
       `^${CLI_VERSION}`,
     );
   });
 
-  it('defaults to the explicitly selected CLI release when cliVersion is omitted', async () => {
-    const repoDir = path.join(tmpDir, 'selected-cli-default');
-    const manifest = path.join(tmpDir, 'package.json');
-    const selectedRelease = CLI_VERSION;
-    fs.writeFileSync(
-      manifest,
-      JSON.stringify({ name: '@ai-plugin-marketplace/cli', version: selectedRelease }),
-    );
-
-    await init(repoDir, { cliPackageJson: pathToFileURL(manifest) });
-
-    expect(readPackageJson(repoDir).devDependencies?.['@ai-plugin-marketplace/cli']).toBe(
-      `^${selectedRelease}`,
-    );
-  });
-
-  it.each([false, true])(
-    'rejects a disjoint CLI manifest before writing (explicit cliVersion: %s)',
-    async (explicitVersion) => {
-      const repoDir = path.join(tmpDir, 'disjoint-cli');
-      const manifest = path.join(tmpDir, 'package.json');
-      const version = `${String(semver.major(CLI_VERSION) + 1)}.0.0`;
-      fs.writeFileSync(manifest, JSON.stringify({ name: '@ai-plugin-marketplace/cli', version }));
-
-      await expect(
-        init(repoDir, {
-          cliPackageJson: pathToFileURL(manifest),
-          ...(explicitVersion ? { cliVersion: version } : {}),
-        }),
-      ).rejects.toThrow(`excludes @ai-plugin-marketplace/cli@${CLI_VERSION}`);
-      expect(fs.existsSync(repoDir)).toBe(false);
-    },
-  );
-
-  it('rejects a core manifest supplied as CLI metadata without writing', async () => {
+  it('rejects a core manifest passed to the CLI entry point without writing', async () => {
     const repoDir = path.join(tmpDir, 'wrong-package-manifest');
-    const cliPackageJson = new URL('../../package.json', import.meta.url);
-    await expect(init(repoDir, { cliPackageJson })).rejects.toThrow('Invalid CLI release metadata');
+    const coreManifest = new URL('../../package.json', import.meta.url);
+    await expect(initFromCli(repoDir, coreManifest)).rejects.toThrow(
+      'Invalid CLI release metadata',
+    );
     expect(fs.existsSync(repoDir)).toBe(false);
   });
 

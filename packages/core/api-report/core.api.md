@@ -164,7 +164,6 @@ export function init(targetDir: string, opts?: InitOptions): Promise<InitOutcome
 
 // @public
 export interface InitOptions {
-    cliPackageJson?: URL;
     cliVersion?: string;
     marketplaceName?: string;
     name?: string;

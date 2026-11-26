@@ -19,6 +19,7 @@
   },
   "files": [
     "dist",
+    "!dist/cli-release/cli-release.tsbuildinfo",
     "README.md",
     "LICENSE"
   ],

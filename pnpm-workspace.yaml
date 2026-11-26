@@ -7,3 +7,7 @@ packages:
 onlyBuiltDependencies:
   - nx
   - esbuild
+
+# Keep the CLI manifest copy current even when TypeScript would skip it by timestamp.
+patchedDependencies:
+  typescript@5.9.3: patches/typescript@5.9.3.patch

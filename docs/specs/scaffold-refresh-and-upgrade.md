@@ -84,9 +84,8 @@ auto-adopt without `--force`.)_
 `init` must render the cli and core deps **independently** (they can skew):
 
 - `cli` dep → a caret range that defaults to the CLI release bundled with core. Programmatic
-  `init()` must write a range that includes that release and any CLI release supplied through
-  `InitOptions.cliPackageJson`. The `aipm init` command supplies its installed `package.json` to
-  `initFromCli`, which uses the installed CLI version.
+  `init()` must write a range that includes that release. The `aipm init` command uses the CLI
+  release from its installed `package.json`.
 - `core` dep → `^<coreVersion>`, read from core's installed `package.json`.
 
 This yields `cli ^0.1.1` + `core ^0.2.0` — installable, and matching the template. The stale

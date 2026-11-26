@@ -47,23 +47,13 @@ function readCliRelease(releaseFile: URL): string {
   return cliRelease;
 }
 
-function resolveCliRange(
-  cliRelease: string,
-  override: string | undefined,
-  bundledRelease = cliRelease,
-): string {
-  const version = override === undefined ? cliRelease : semver.valid(override);
-  if (version === null) {
-    throw new Error("Invalid 'cliVersion': expected a semantic version.");
-  }
-  const range = `^${version}`;
-  if (!semver.satisfies(version, range)) {
+function resolveCliRange(cliRelease: string, override?: string): string {
+  const range = `^${override ?? cliRelease}`;
+  if (semver.validRange(range) === null) {
     throw new Error("Invalid 'cliVersion': expected a version that can be used as a caret range.");
   }
-  for (const release of [bundledRelease, cliRelease]) {
-    if (!semver.satisfies(release, range)) {
-      throw new Error(`Invalid 'cliVersion': ${range} excludes ${CLI_PACKAGE_NAME}@${release}.`);
-    }
+  if (!semver.satisfies(cliRelease, range)) {
+    throw new Error(`Invalid 'cliVersion': ${range} excludes ${CLI_PACKAGE_NAME}@${cliRelease}.`);
   }
   return range;
 }
@@ -174,10 +164,7 @@ export function runInit(targetDir: string, opts?: InitOptions): Promise<InitOutc
         import.meta.url,
       ),
     );
-    const selectedManifest = opts?.cliPackageJson;
-    const selectedRelease =
-      selectedManifest === undefined ? bundledRelease : readCliRelease(selectedManifest);
-    return resolveCliRange(selectedRelease, opts?.cliVersion, bundledRelease);
+    return resolveCliRange(bundledRelease, opts?.cliVersion);
   });
 }
 
@@ -189,9 +176,7 @@ export function runInitForCli(
   cliPackageJson: URL,
   opts?: InitNames,
 ): Promise<InitOutcome> {
-  return writeInit(targetDir, opts, () =>
-    resolveCliRange(readCliRelease(cliPackageJson), undefined),
-  );
+  return writeInit(targetDir, opts, () => resolveCliRange(readCliRelease(cliPackageJson)));
 }
 
 async function writeInit(

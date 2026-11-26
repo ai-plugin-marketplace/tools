@@ -4,7 +4,7 @@
 
 ## InitOptions.cliVersion property
 
-Optional base version for the CLI dependency caret range. The range must include the release shipped with core and any release from [InitOptions.cliPackageJson](./core.initoptions.clipackagejson.md)<!-- -->.
+Optional base version for the CLI dependency caret range (for example, `0.8`<!-- -->). The range must include the CLI release shipped with core.
 
 **Signature:**
 

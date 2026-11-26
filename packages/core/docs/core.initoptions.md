@@ -37,25 +37,6 @@ Description
 </th></tr></thead>
 <tbody><tr><td>
 
-[cliPackageJson?](./core.initoptions.clipackagejson.md)
-
-
-</td><td>
-
-
-</td><td>
-
-URL
-
-
-</td><td>
-
-_(Optional)_ File URL of an installed CLI package manifest. When provided, its version is the default caret base. The resulting range must still include the CLI release shipped with core.
-
-
-</td></tr>
-<tr><td>
-
 [cliVersion?](./core.initoptions.cliversion.md)
 
 
@@ -69,7 +50,7 @@ string
 
 </td><td>
 
-_(Optional)_ Optional base version for the CLI dependency caret range. The range must include the release shipped with core and any release from [InitOptions.cliPackageJson](./core.initoptions.clipackagejson.md)<!-- -->.
+_(Optional)_ Optional base version for the CLI dependency caret range (for example, `0.8`<!-- -->). The range must include the CLI release shipped with core.
 
 
 </td></tr>

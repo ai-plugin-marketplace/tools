@@ -5,8 +5,12 @@ import { describe, expect, it } from 'vitest';
 
 const workspace = new URL('../../../../', import.meta.url);
 
+function normalizeLineEndings(markdown: string): string {
+  return markdown.replaceAll('\r\n', '\n');
+}
+
 function read(relativePath: string): string {
-  return readFileSync(new URL(relativePath, workspace), 'utf8');
+  return normalizeLineEndings(readFileSync(new URL(relativePath, workspace), 'utf8'));
 }
 
 function initOptionDeclarations(markdown: string): string[] {
@@ -23,15 +27,26 @@ describe('init and upgrade documentation', () => {
     const spec = read('docs/specs/architecture.md');
     const report = read('packages/core/api-report/core.api.md');
     const options = initOptionDeclarations(report);
-    expect(options.length).toBeGreaterThan(0);
+    expect(options).toEqual([
+      'cliVersion?: string;',
+      'marketplaceName?: string;',
+      'name?: string;',
+    ]);
     expect(initOptionDeclarations(spec)).toEqual(options);
+    expect(report).not.toContain('initFromCli');
     expect(spec).toContain('function init(dir: string, opts?: InitOptions)');
   });
 
-  it.each(['docs/specs/architecture.md', 'RELEASING.md'])(
-    '%s shows how to upgrade a compatible pair across a core caret boundary',
-    (file) => {
-      const doc = read(file);
+  it.each([
+    { file: 'docs/specs/architecture.md', lineEndings: 'LF' },
+    { file: 'docs/specs/architecture.md', lineEndings: 'CRLF' },
+    { file: 'RELEASING.md', lineEndings: 'LF' },
+    { file: 'RELEASING.md', lineEndings: 'CRLF' },
+  ])(
+    '$file shows how to upgrade a compatible pair across a core caret boundary ($lineEndings)',
+    ({ file, lineEndings }) => {
+      const markdown = read(file).replaceAll('\n', lineEndings === 'CRLF' ? '\r\n' : '\n');
+      const doc = normalizeLineEndings(markdown);
       const inRange = 'pnpm up @ai-plugin-marketplace/cli @ai-plugin-marketplace/core';
       const compatibility =
         "the selected core version satisfies the selected CLI release's core dependency range";
@@ -73,7 +88,7 @@ describe('init and upgrade documentation', () => {
     const regression = spec.split('**Version-skew regression:**')[1]?.split('**UAT')[0] ?? '';
     expect(pinning).toContain('defaults to the CLI release bundled with core');
     expect(pinning).toContain('must write a range that includes that release');
-    expect(pinning).toMatch(/supplies its installed `package.json` to\s+`initFromCli`/);
+    expect(pinning).toMatch(/uses the CLI\s+release from its installed `package.json`/);
     expect(pinning).not.toContain('`InitOptions.cliVersion`');
     expect(regression).toMatch(
       /bundled CLI release\s+and rejects ranges that exclude it before writing/,

@@ -1,11 +1,13 @@
-import { execFileSync, spawnSync } from 'node:child_process';
+import { execFile, execFileSync } from 'node:child_process';
 import {
   cpSync,
   mkdirSync,
   mkdtempSync,
   readFileSync,
   rmSync,
+  statSync,
   symlinkSync,
+  utimesSync,
   writeFileSync,
 } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -19,6 +21,7 @@ const workspace = fileURLToPath(new URL('../../../../', import.meta.url));
 const corePackageName = '@ai-plugin-marketplace/core';
 const cliPackageName = '@ai-plugin-marketplace/cli';
 const bundledManifest = 'packages/core/dist/cli-release/package.json';
+const releaseBuildInfo = 'packages/core/dist/cli-release/cli-release.tsbuildinfo';
 const cliManifest = 'packages/cli/package.json';
 
 let checkout: string;
@@ -32,8 +35,9 @@ beforeEach(() => {
     'tsconfig.json',
     'tsconfig.base.json',
     'api-extractor-base.json',
+    'patches',
   ]) {
-    cpSync(join(workspace, file), join(checkout, file));
+    cpSync(join(workspace, file), join(checkout, file), { recursive: true });
   }
   for (const pkg of ['core', 'cli']) {
     const relative = join('packages', pkg);
@@ -59,18 +63,33 @@ afterEach(() => {
 });
 
 function runPnpm(...args: string[]) {
-  const result = spawnSync('pnpm', args, {
-    cwd: checkout,
-    encoding: 'utf8',
-    timeout: 60_000,
-    env: { ...process.env, NX_DAEMON: 'false' },
+  // Windows exposes pnpm through a .cmd shim. These arguments are fixed test commands.
+  const windows = process.platform === 'win32';
+  const command = windows ? 'cmd.exe' : 'pnpm';
+  const commandArgs = windows ? ['/d', '/c', 'pnpm.cmd', ...args] : args;
+  return new Promise<{ status: number; stdout: string; stderr: string }>((resolve, reject) => {
+    execFile(
+      command,
+      commandArgs,
+      {
+        cwd: checkout,
+        encoding: 'utf8',
+        timeout: 60_000,
+        env: { ...process.env, NX_DAEMON: 'false' },
+      },
+      (error, stdout, stderr) => {
+        if (error && typeof error.code !== 'number') {
+          reject(new Error('Unable to run pnpm.', { cause: error }));
+          return;
+        }
+        resolve({ status: error?.code ?? 0, stdout, stderr });
+      },
+    );
   });
-  if (result.error) throw result.error;
-  return result;
 }
 
-function assertPnpm(...args: string[]): void {
-  const { status, stdout, stderr } = runPnpm(...args);
+async function assertPnpm(...args: string[]): Promise<void> {
+  const { status, stdout, stderr } = await runPnpm(...args);
   expect(status, stdout + stderr).toBe(0);
 }
 
@@ -109,16 +128,33 @@ it.each([
   { path: 'CLI package build', args: ['--filter', cliPackageName, 'run', 'build'] },
 ])(
   'bundles the CLI manifest on clean and incremental $path',
-  ({ args }) => {
+  async ({ args }) => {
+    const sourceManifest = join(checkout, cliManifest);
+    // Set a timestamp the filesystem can restore exactly before the first build.
+    const oldTimestamp = new Date(Math.floor(statSync(sourceManifest).mtimeMs / 1000) * 1000);
+    utimesSync(sourceManifest, oldTimestamp, oldTimestamp);
+    const originalMtime = statSync(sourceManifest).mtimeMs;
     const manifest = readManifest(cliManifest);
-    assertPnpm(...args);
+    await assertPnpm(...args);
     expect(readManifest(bundledManifest)).toEqual(manifest);
     assertPublicInit('initial', manifest.version);
+
+    // Remove just the output and retain the metadata project's incremental build state.
+    const buildInfo = join(checkout, releaseBuildInfo);
+    expect(statSync(buildInfo).isFile()).toBe(true);
+    rmSync(join(checkout, bundledManifest));
+    const initSource = join(checkout, 'packages/core/src/pipeline/init.ts');
+    writeFileSync(initSource, readFileSync(initSource, 'utf8') + '\n// Incremental build probe.\n');
+    await assertPnpm(...args);
+    expect(readManifest(bundledManifest)).toEqual(manifest);
+    assertPublicInit('recreated', manifest.version);
 
     const version = semver.inc(manifest.version, 'major');
     if (version === null) throw new Error('Expected a valid CLI release.');
     const updated = { ...manifest, version };
-    writeFileSync(join(checkout, cliManifest), JSON.stringify(updated));
+    writeFileSync(sourceManifest, JSON.stringify(updated));
+    utimesSync(sourceManifest, oldTimestamp, oldTimestamp);
+    expect(statSync(sourceManifest).mtimeMs).toBe(originalMtime);
 
     // The already-built CLI reads its own manifest while core still holds the previous bundle.
     execFileSync(process.execPath, ['packages/cli/dist/bin.js', 'init', 'from-cli'], {
@@ -127,32 +163,33 @@ it.each([
     assertScaffoldedRelease('from-cli', version);
     assertPublicInit('still-bundled', manifest.version);
 
-    assertPnpm(...args);
+    await assertPnpm(...args);
     expect(readManifest(bundledManifest)).toEqual(updated);
     assertPublicInit('updated', version);
   },
-  60_000,
+  190_000,
 );
 
-it('refuses to pack core with missing or stale metadata', () => {
+it('refuses to pack core with missing or stale metadata', async () => {
   const pack = ['--filter', corePackageName, 'pack', '--json'];
-  const missing = runPnpm(...pack);
+  const missing = await runPnpm(...pack);
   expect(missing.status).not.toBe(0);
   expect(missing.stderr).toContain('Bundled CLI release metadata is missing');
 
-  assertPnpm('exec', 'tsc', '--build', 'packages/core');
+  await assertPnpm('exec', 'tsc', '--build', 'packages/core');
   const bundled = readManifest(bundledManifest);
   writeFileSync(join(checkout, bundledManifest), JSON.stringify({ ...bundled, version: '0.0.0' }));
-  const stale = runPnpm(...pack);
+  const stale = await runPnpm(...pack);
   expect(stale.status).not.toBe(0);
   expect(stale.stderr).toContain('Bundled CLI release metadata is stale');
 
   writeFileSync(join(checkout, bundledManifest), JSON.stringify(bundled));
-  const packed = runPnpm(...pack);
+  const packed = await runPnpm(...pack);
   expect(packed.status, packed.stdout + packed.stderr).toBe(0);
   expect(packed.stdout).toContain('dist/cli-release/package.json');
+  expect(packed.stdout).not.toContain('cli-release.tsbuildinfo');
 });
 
-it('runs the core built-package smoke test directly from a clean checkout', () => {
-  assertPnpm('--filter', corePackageName, 'run', 'test', 'src/pipeline/init-dist.test.ts');
+it('runs the core built-package smoke test directly from a clean checkout', async () => {
+  await assertPnpm('--filter', corePackageName, 'run', 'test', 'src/pipeline/init-dist.test.ts');
 });

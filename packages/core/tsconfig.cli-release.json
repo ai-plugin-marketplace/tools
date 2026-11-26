@@ -3,7 +3,7 @@
   "compilerOptions": {
     "rootDir": "../cli",
     "outDir": "./dist/cli-release",
-    "tsBuildInfoFile": "./cli-release.tsbuildinfo",
+    "tsBuildInfoFile": "./dist/cli-release/cli-release.tsbuildinfo",
     "types": []
   },
   "files": ["../cli/package.json"]

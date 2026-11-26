@@ -823,14 +823,3 @@ export function collectFilesRelative(dir: string): string[] {
   }
   return out;
 }
-
-/**
- * Regenerate a dist bundle into a fresh temp directory and return that directory. The caller is
- * responsible for removing it. Used by the freshness check (§10.5) to byte-compare against the
- * on-disk bundle without disturbing it.
- */
-export function regenerateBundleToTemp(bundle: DistBundle): string {
-  const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'aipm-freshness-'));
-  bundle.regenerate(tempDir);
-  return tempDir;
-}

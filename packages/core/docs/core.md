@@ -50,9 +50,9 @@ Apply `--rule` overrides to a diagnostic list: a diagnostic whose `ruleId` has a
 
 </td><td>
 
-Build a single plugin or every plugin under a repo root. Returns one result per built plugin along with post-build validation findings, including freshness (hard in CI, soft locally). The published-surface boundary check runs only in standalone [validate()](./core.validate.md)<!-- -->.
+Build a single plugin or every plugin under a repo root. Returns one result per built plugin along with post-build validation findings. Artifact drift is hard in CI and soft locally. Filesystem failures that prevent freshness checks are hard findings in either environment. The published-surface boundary check runs only in standalone [validate()](./core.validate.md)<!-- -->.
 
-Setting [BuildOptions.failFast](./core.buildoptions.failfast.md) rejects with a summary of hard findings after generation and validation complete. By default, the outcome includes those findings.
+Setting [BuildOptions.failFast](./core.buildoptions.failfast.md) rejects with a summary of hard findings outside freshness checks after generation and validation complete. Inspect the returned `validation.passed` for failures from freshness checks.
 
 
 </td></tr>
@@ -632,6 +632,8 @@ A position-aware parsed document.
 Enumerated finding codes. Additive — new codes arrive in toolkit MINOR releases; removing or renaming a code is MAJOR. Consumers SHOULD handle unknown codes gracefully.
 
 `version-consistency` — a declared target's manifest `version` field does not match `aipm.config.ts`<!-- -->'s `version`<!-- -->. Installs are keyed by manifest version, so a stale author-maintained manifest (e.g. `.claude-plugin/plugin.json`<!-- -->) silently pins auto-update to a pre-release artifact even after `aipm.config.ts`<!-- -->'s `version` is bumped. Fires HARD, mirroring `name-consistency`<!-- -->.
+
+`freshness-io` — a filesystem operation prevented validation from checking freshness. Always HARD, with the original filesystem error message.
 
 `single-artifact-host` — a "single-artifact host" (`gemini` or `kiro`<!-- -->), which installs ONE extension/power per repo from the repo ROOT and has no marketplace concept, is declared by MORE THAN ONE plugin in the repo. The root artifact for that host is NOT emitted while the ambiguity stands (the toolkit can't choose which plugin owns the single root slot).
 

@@ -4,9 +4,9 @@
 
 ## build() function
 
-Build a single plugin or every plugin under a repo root. Returns one result per built plugin along with post-build validation findings, including freshness (hard in CI, soft locally). The published-surface boundary check runs only in standalone [validate()](./core.validate.md)<!-- -->.
+Build a single plugin or every plugin under a repo root. Returns one result per built plugin along with post-build validation findings. Artifact drift is hard in CI and soft locally. Filesystem failures that prevent freshness checks are hard findings in either environment. The published-surface boundary check runs only in standalone [validate()](./core.validate.md)<!-- -->.
 
-Setting [BuildOptions.failFast](./core.buildoptions.failfast.md) rejects with a summary of hard findings after generation and validation complete. By default, the outcome includes those findings.
+Setting [BuildOptions.failFast](./core.buildoptions.failfast.md) rejects with a summary of hard findings outside freshness checks after generation and validation complete. Inspect the returned `validation.passed` for failures from freshness checks.
 
 **Signature:**
 

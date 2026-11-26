@@ -52,7 +52,8 @@ import {
 | `listTargets`  | Return the `TargetId` values this toolkit version recognises       |
 
 `build()` returns `{ results, validation }`. With `failFast: true`, it rejects after writing
-artifacts and completing validation if there are hard findings.
+artifacts and completing validation if there are hard findings outside freshness checks. Artifact
+drift and freshness I/O failures are reported in `validation` even with `failFast` enabled.
 
 ### Key types
 

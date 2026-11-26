@@ -159,15 +159,29 @@ function formatFinding(f: Finding): string {
   return f.hint !== undefined ? `${head}\n    hint: ${f.hint}` : head;
 }
 
-/** Write a validation result to the given stream; returns true iff it passed (no hard findings). */
-function reportValidation(result: ValidationResult, out: NodeJS.WritableStream): boolean {
+function reportCommandFailure(command: string, message: string, err: NodeJS.WritableStream): 1 {
+  err.write(`aipm: ${command} failed: ${message}\n`);
+  return 1;
+}
+
+/** Report validation and return the corresponding exit code. */
+function reportValidation(
+  result: ValidationResult,
+  command: 'build' | 'validate',
+  out: NodeJS.WritableStream,
+  err: NodeJS.WritableStream,
+): 0 | 1 {
+  const freshnessError = result.findings.find((finding) => finding.code === 'freshness-io');
+  if (freshnessError !== undefined) {
+    return reportCommandFailure(command, freshnessError.message, err);
+  }
   for (const finding of result.findings) {
     out.write(`${formatFinding(finding)}\n`);
   }
   if (result.passed) {
     out.write(result.findings.length === 0 ? 'OK — no findings.\n' : 'OK — no hard findings.\n');
   }
-  return result.passed;
+  return result.passed ? 0 : 1;
 }
 
 function reportSupport(report: SupportReport, out: NodeJS.WritableStream): void {
@@ -312,15 +326,13 @@ export async function run(argv: readonly string[], opts: RunOptions = {}): Promi
             `Built ${String(results.length)} plugin(s), ${String(artifactCount)} artifact(s).\n`,
           );
         }
-        const passed = reportValidation(validation, out);
-        return passed ? 0 : 1;
+        return reportValidation(validation, command, out, err);
       }
 
       case 'validate': {
         const target = rest[0] ?? process.cwd();
         const result = await validate(target);
-        const passed = reportValidation(result, out);
-        return passed ? 0 : 1;
+        return reportValidation(result, command, out, err);
       }
 
       case 'lint': {
@@ -480,7 +492,6 @@ export async function run(argv: readonly string[], opts: RunOptions = {}): Promi
     }
   } catch (e) {
     const message = e instanceof Error ? e.message : String(e);
-    err.write(`aipm: ${command} failed: ${message}\n`);
-    return 1;
+    return reportCommandFailure(command, message, err);
   }
 }

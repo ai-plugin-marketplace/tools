@@ -86,7 +86,8 @@ export const DEFAULT_SCAFFOLD_TARGETS = TARGET_IDS.filter(
  */
 export interface BuildOptions {
   /**
-   * Throw an error summarizing all hard findings after artifact generation and validation.
+   * Throw an error summarizing hard structural findings after artifact generation and validation.
+   * Freshness findings, including I/O failures, stay in the returned validation result.
    * Default: false.
    */
   failFast?: boolean;
@@ -203,6 +204,9 @@ export interface ValidationResult {
  * pre-release artifact even after `aipm.config.ts`'s `version` is bumped. Fires HARD, mirroring
  * `name-consistency`.
  *
+ * `freshness-io` — a filesystem operation prevented validation from checking freshness. Always
+ * HARD, with the original filesystem error message.
+ *
  * `single-artifact-host` — a "single-artifact host" (`gemini` or `kiro`), which installs ONE
  * extension/power per repo from the repo ROOT and has no marketplace concept, is declared by MORE
  * THAN ONE plugin in the repo. The root artifact for that host is NOT emitted while the ambiguity
@@ -259,6 +263,7 @@ export type FindingCode =
   | 'mcp-key-sync'
   | 'marketplace-registration'
   | 'freshness'
+  | 'freshness-io'
   | 'single-artifact-host'
   | 'root-artifact-collision'
   | 'default-marketplace-name'

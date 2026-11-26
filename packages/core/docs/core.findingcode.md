@@ -8,6 +8,8 @@ Enumerated finding codes. Additive — new codes arrive in toolkit MINOR release
 
 `version-consistency` — a declared target's manifest `version` field does not match `aipm.config.ts`<!-- -->'s `version`<!-- -->. Installs are keyed by manifest version, so a stale author-maintained manifest (e.g. `.claude-plugin/plugin.json`<!-- -->) silently pins auto-update to a pre-release artifact even after `aipm.config.ts`<!-- -->'s `version` is bumped. Fires HARD, mirroring `name-consistency`<!-- -->.
 
+`freshness-io` — a filesystem operation prevented validation from checking freshness. Always HARD, with the original filesystem error message.
+
 `single-artifact-host` — a "single-artifact host" (`gemini` or `kiro`<!-- -->), which installs ONE extension/power per repo from the repo ROOT and has no marketplace concept, is declared by MORE THAN ONE plugin in the repo. The root artifact for that host is NOT emitted while the ambiguity stands (the toolkit can't choose which plugin owns the single root slot).
 
 `root-artifact-collision` — a generated repo-root path the toolkit would write is already occupied by a file the toolkit does NOT track as previously-generated (i.e. it belongs to the host software / the author). Generation refuses to overwrite it rather than clobber repo-root state.
@@ -19,5 +21,5 @@ Enumerated finding codes. Additive — new codes arrive in toolkit MINOR release
 **Signature:**
 
 ```typescript
-export type FindingCode = 'envelope-invalid' | 'repo-config-invalid' | 'envelope-adherence' | 'schema-invalid' | 'name-consistency' | 'version-consistency' | 'mcp-key-sync' | 'marketplace-registration' | 'freshness' | 'single-artifact-host' | 'root-artifact-collision' | 'default-marketplace-name' | 'frontmatter-invalid' | 'metadata-dir-isolation' | 'open-plugins-conformance' | 'unpublished-skill-installable';
+export type FindingCode = 'envelope-invalid' | 'repo-config-invalid' | 'envelope-adherence' | 'schema-invalid' | 'name-consistency' | 'version-consistency' | 'mcp-key-sync' | 'marketplace-registration' | 'freshness' | 'freshness-io' | 'single-artifact-host' | 'root-artifact-collision' | 'default-marketplace-name' | 'frontmatter-invalid' | 'metadata-dir-isolation' | 'open-plugins-conformance' | 'unpublished-skill-installable';
 ```

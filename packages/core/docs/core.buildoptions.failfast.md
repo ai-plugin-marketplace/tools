@@ -4,7 +4,7 @@
 
 ## BuildOptions.failFast property
 
-Throw an error summarizing all hard findings after artifact generation and validation. Default: false.
+Throw an error summarizing hard structural findings after artifact generation and validation. Freshness findings, including I/O failures, stay in the returned validation result. Default: false.
 
 **Signature:**
 

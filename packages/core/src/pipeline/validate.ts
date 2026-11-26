@@ -9,6 +9,7 @@
  */
 
 import * as fs from 'node:fs';
+import * as os from 'node:os';
 import * as path from 'node:path';
 import { parse as parseYaml } from 'yaml';
 import { z } from 'zod';
@@ -34,7 +35,6 @@ import {
   managedVendorRegistryPaths,
   mergeRootArtifacts,
   readRootManifestPaths,
-  regenerateBundleToTemp,
   rootManifestPath,
   rootRegistryArtifactFiles,
   serializeRootManifest,
@@ -54,6 +54,7 @@ import { isToolkitSentinelFor, withoutGeneratorVersion } from './sentinel.js';
 import { CLAUDE_HOOKS_SOURCES } from '../targets/claude/transform.js';
 import { createRuleContext } from '../lint/context.js';
 import { diagnosticToFinding } from '../lint/diagnostic.js';
+import type { InternalRuleContext, Rule } from '../lint/types.js';
 import {
   defaultMarketplaceNameRule,
   envelopeAdherenceRule,
@@ -1299,7 +1300,8 @@ export function checkFreshness(
   for (const bundle of computeDistBundles(pluginDir, distDir, envelope)) {
     let tempDir: string | undefined;
     try {
-      tempDir = regenerateBundleToTemp(bundle);
+      tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'aipm-freshness-'));
+      bundle.regenerate(tempDir);
       const drift = compareTrees(bundle.destDir, tempDir);
       for (const rel of drift) {
         const distRel = path.relative(distDir, path.join(bundle.destDir, rel));
@@ -1612,6 +1614,35 @@ function compareTrees(actualDir: string, expectedDir: string): string[] {
 // runValidate — the validate orchestrator (§5.3, §10.1, §10.3)
 // ---------------------------------------------------------------------------
 
+/** Retain the original filesystem error message for CLI reporting. */
+async function runFreshnessRule(
+  rule: Rule,
+  ctx: InternalRuleContext,
+  plugin?: string,
+): Promise<Finding[]> {
+  try {
+    return (await rule.check(ctx)).map((diagnostic) => diagnosticToFinding(diagnostic, ctx.ci));
+  } catch (err) {
+    if (
+      !(err instanceof Error) ||
+      !('syscall' in err) ||
+      typeof err.syscall !== 'string' ||
+      !('errno' in err) ||
+      typeof err.errno !== 'number'
+    ) {
+      throw err;
+    }
+    return [
+      {
+        severity: 'hard',
+        code: 'freshness-io',
+        ...(plugin === undefined ? {} : { plugin }),
+        message: err.message,
+      },
+    ];
+  }
+}
+
 /**
  * Validate one plugin or every plugin under a repo root (§5.3). Runs the validators in the order
  * mandated by §10.1 / §10.3:
@@ -1757,7 +1788,7 @@ export async function runValidate(
     }
 
     // ── 5. Freshness ─────────────────────────────────────────────────────────
-    findings.push(...(await pluginFreshnessRule.check(ctx)).map((d) => diagnosticToFinding(d, ci)));
+    findings.push(...(await runFreshnessRule(pluginFreshnessRule, ctx, pluginName)));
   }
 
   // ── 6. Repo-level default/placeholder marketplace-name check (always SOFT) ──
@@ -1813,17 +1844,9 @@ export async function runValidate(
       configCache,
     });
     if (!skipFreshness) {
-      findings.push(
-        ...(await registryFreshnessRule.check(repoScopedCtx)).map((d) =>
-          diagnosticToFinding(d, ci),
-        ),
-      );
+      findings.push(...(await runFreshnessRule(registryFreshnessRule, repoScopedCtx)));
     }
-    findings.push(
-      ...(await rootArtifactFreshnessRule.check(repoScopedCtx)).map((d) =>
-        diagnosticToFinding(d, ci),
-      ),
-    );
+    findings.push(...(await runFreshnessRule(rootArtifactFreshnessRule, repoScopedCtx)));
   }
 
   // ── 8. Published-surface boundary: unpublished skills must be marked internal (#118) ──

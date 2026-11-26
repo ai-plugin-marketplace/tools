@@ -29,8 +29,9 @@
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 
+import { build } from '../index.js';
 import { runBuild } from './build.js';
 import { runValidate } from './validate.js';
 import { synthRegistryRepo } from '../test-support/synth-plugin.js';
@@ -117,7 +118,33 @@ const WORKSPACE = { name: 'm' } as const;
 describe('single-artifact-host — root emission (workspace present, N=1)', () => {
   let repo: SynthRegistryRepo | undefined;
   afterEach(() => {
+    vi.unstubAllEnvs();
     repo?.cleanup();
+  });
+
+  it('returns hard CI freshness findings even when failFast is enabled', async () => {
+    vi.stubEnv('CI', '1');
+    const skill = 'skills/skill-x/SKILL.md';
+    const gemini = geminiPlugin('gem');
+    const kiro = kiroPlugin('kir');
+    repo = synthRegistryRepo(
+      [gemini, kiro].map((plugin) => ({
+        ...plugin,
+        files: {
+          ...plugin.files,
+          [skill]: `---\nname: skill-x\ndescription: A shared skill\n---\n# ${plugin.name}\n`,
+        },
+      })),
+      WORKSPACE,
+    );
+
+    const { results, validation } = await build(repo.repoRoot, { failFast: true });
+
+    expect(results.map((result) => result.plugin).sort()).toEqual(['gem', 'kir']);
+    expect(validation.passed).toBe(false);
+    const [finding] = ofCode(validation.findings, 'freshness');
+    expect(finding?.severity).toBe('hard');
+    expect(finding?.message).toContain(`Generated repo-root artifact '${skill}' is stale`);
   });
 
   it('emits a single gemini extension and a single kiro power at the repo root from distinct plugins', async () => {

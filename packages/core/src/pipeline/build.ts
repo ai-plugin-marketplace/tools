@@ -300,13 +300,13 @@ async function collectStampedArtifacts(
  * plugin directory (contains `aipm.config.ts`) or a repo root (contains a `plugins/` directory).
  *
  * After emitting artifacts, validates the on-disk state once (§5.4). When `opts.failFast` is set
- * and validation reports hard findings, throws an Error summarizing them.
+ * and validation reports hard findings outside freshness checks, throws an Error summarizing them.
  *
  * @param targetPath - Absolute path to a plugin directory or repo root.
  * @param opts - Build options.
  * @returns One `BuildResult` per built plugin and the combined validation result.
  * @throws {Error} If `targetPath` is neither a plugin nor a repo root, a config fails to load,
- *   a transform fails, or (when `failFast`) post-build validation reports hard findings.
+ *   a transform fails, or (when `failFast`) post-build validation reports hard non-freshness findings.
  */
 export async function runBuild(targetPath: string, opts?: BuildOptions): Promise<BuildOutcome> {
   const { repoRoot, pluginDirs, distDir } = await discoverPlugins(targetPath);
@@ -438,14 +438,19 @@ export async function runBuild(targetPath: string, opts?: BuildOptions): Promise
     ci: Boolean(process.env['CI']),
     skipPublishedSurfaceBoundary: true,
   });
-  if (opts?.failFast && !validation.passed) {
-    const hardFindings = validation.findings.filter((f) => f.severity === 'hard');
-    const summary = hardFindings
-      .map((f) => `  [${f.plugin ?? '?'}] ${f.code}: ${f.message}`)
-      .join('\n');
-    throw new Error(
-      `Build produced ${String(hardFindings.length)} hard validation finding(s):\n${summary}`,
+  if (opts?.failFast) {
+    // Preserve the rejection criteria of post-build validation with freshness skipped.
+    const hardFindings = validation.findings.filter(
+      (f) => f.severity === 'hard' && f.code !== 'freshness' && f.code !== 'freshness-io',
     );
+    if (hardFindings.length > 0) {
+      const summary = hardFindings
+        .map((f) => `  [${f.plugin ?? '?'}] ${f.code}: ${f.message}`)
+        .join('\n');
+      throw new Error(
+        `Build produced ${String(hardFindings.length)} hard validation finding(s):\n${summary}`,
+      );
+    }
   }
 
   return { results, validation };

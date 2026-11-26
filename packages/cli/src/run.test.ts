@@ -351,6 +351,34 @@ describe('aipm build success-line ordering (issue #97)', () => {
     }
   });
 
+  it.each(['build', 'validate'])('reports freshness I/O failures as %s errors', async (command) => {
+    const pluginDir = path.join(tmpDir, 'plugins', 'gem');
+    fs.mkdirSync(pluginDir, { recursive: true });
+    fs.writeFileSync(
+      path.join(pluginDir, 'aipm.config.ts'),
+      "export default { version: '0.1.0', targets: ['gemini'] };\n",
+    );
+    fs.writeFileSync(
+      path.join(pluginDir, 'gemini-extension.json'),
+      '{"name":"gem","version":"0.1.0"}',
+    );
+    fs.writeFileSync(path.join(pluginDir, 'GEMINI.md'), '# Gemini\n');
+    const invalidTempDir = path.join(tmpDir, 'temp-file');
+    fs.writeFileSync(invalidTempDir, '');
+    vi.stubEnv('TMPDIR', invalidTempDir);
+    try {
+      const { code, out, err } = await invoke([command, pluginDir]);
+
+      expect(code).toBe(1);
+      expect(out).toBe('');
+      expect(err).toBe(
+        `aipm: ${command} failed: ENOTDIR: not a directory, mkdtemp '${path.join(invalidTempDir, 'aipm-freshness-XXXXXX')}'\n`,
+      );
+    } finally {
+      vi.unstubAllEnvs();
+    }
+  });
+
   it('still prints "Built N plugin(s)" before validation output on a clean run', async () => {
     // A `vercel`-only plugin needs no marketplace.json registry and no hooks source (a bare
     // `skills/*/SKILL.md` satisfies its adherence + schema checks), so this is the minimal

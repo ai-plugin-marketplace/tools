@@ -481,6 +481,7 @@ export type FindingCode =
   | 'mcp-key-sync' // .mcp.json vs mcp.json server keys diverge
   | 'marketplace-registration' // plugin-to-registry projection is wrong
   | 'freshness' // generated file drifted from what `aipm build` would produce
+  | 'freshness-io' // filesystem operation prevented the freshness check (always hard)
   | 'single-artifact-host' // a single-artifact host (gemini/kiro) is declared by >1 plugin
   | 'root-artifact-collision' // a generated repo-root path is occupied by a non-toolkit file
   | 'default-marketplace-name' // marketplace name/owner is still a template placeholder (always soft)

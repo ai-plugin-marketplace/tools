@@ -50,7 +50,7 @@ URL
 
 </td><td>
 
-_(Optional)_ File URL of an installed CLI package's `package.json`<!-- -->. Defaults to the CLI release metadata shipped with core. The CLI command supplies its own manifest.
+_(Optional)_ File URL of an installed CLI package manifest. When provided, its version is the default caret base. The resulting range must still include the CLI release shipped with core.
 
 
 </td></tr>
@@ -69,7 +69,7 @@ string
 
 </td><td>
 
-_(Optional)_ Optional base version for the CLI dependency caret range. The range must include the CLI release identified by [InitOptions.cliPackageJson](./core.initoptions.clipackagejson.md) or by the metadata shipped with core.
+_(Optional)_ Optional base version for the CLI dependency caret range. The range must include the release shipped with core and any release from [InitOptions.cliPackageJson](./core.initoptions.clipackagejson.md)<!-- -->.
 
 
 </td></tr>

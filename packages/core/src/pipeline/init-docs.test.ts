@@ -35,7 +35,9 @@ describe('init and upgrade documentation', () => {
       const inRange = 'pnpm up @ai-plugin-marketplace/cli @ai-plugin-marketplace/core';
       const compatibility =
         "the selected core version satisfies the selected CLI release's core dependency range";
-      expect(doc).toContain(inRange);
+      expect(doc).toContain(`${inRange}\npnpm exec aipm build\n`);
+      expect(doc).toMatch(/`pnpm exec aipm migrate` before `pnpm exec aipm build`/);
+      expect(doc).not.toMatch(/^aipm (build|migrate)\b/m);
       expect(doc.replace(/\s+/g, ' ').split(inRange)[0]).toContain(compatibility);
 
       const explicitUpgrade =
@@ -43,6 +45,7 @@ describe('init and upgrade documentation', () => {
           doc,
         );
       expect(explicitUpgrade).not.toBeNull();
+      expect(doc).toContain(`${explicitUpgrade?.[0] ?? ''}\npnpm exec aipm build\n`);
       const [, cliVersion = '', coreVersion = ''] = explicitUpgrade ?? [];
       // dependencies['@ai-plugin-marketplace/core'] from the published CLI tarball manifests.
       const publishedCoreRanges: Readonly<Record<string, string>> = {
@@ -63,6 +66,20 @@ describe('init and upgrade documentation', () => {
       expect(semver.satisfies(coreVersion, previousCoreRange)).toBe(false);
     },
   );
+
+  it('documents the bundled release guarantee and the CLI version source in the refresh spec', () => {
+    const spec = read('docs/specs/scaffold-refresh-and-upgrade.md');
+    const pinning = spec.split('## Prerequisite fix')[1]?.split('\n## ')[0] ?? '';
+    const regression = spec.split('**Version-skew regression:**')[1]?.split('**UAT')[0] ?? '';
+    expect(pinning).toContain('defaults to the CLI release bundled with core');
+    expect(pinning).toContain('must write a range that includes that release');
+    expect(pinning).toMatch(/supplies its installed `package.json` to\s+`initFromCli`/);
+    expect(pinning).not.toContain('`InitOptions.cliVersion`');
+    expect(regression).toMatch(
+      /bundled CLI release\s+and rejects ranges that exclude it before writing/,
+    );
+    expect(regression).toMatch(/`aipm init` uses its installed CLI\s+version/);
+  });
 
   it('preserves the Open Plugins changeset requirement for both independently versioned packages', () => {
     const spec = read('docs/specs/open-plugins-target.md');

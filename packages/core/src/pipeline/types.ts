@@ -312,14 +312,14 @@ export interface InitOptions {
   marketplaceName?: string;
 
   /**
-   * Optional base version for the CLI dependency caret range. The range must include the CLI
-   * release identified by {@link InitOptions.cliPackageJson} or by the metadata shipped with core.
+   * Optional base version for the CLI dependency caret range. The range must include the release
+   * shipped with core and any release from {@link InitOptions.cliPackageJson}.
    */
   cliVersion?: string;
 
   /**
-   * File URL of an installed CLI package's `package.json`. Defaults to the CLI release metadata
-   * shipped with core. The CLI command supplies its own manifest.
+   * File URL of an installed CLI package manifest. When provided, its version is the default
+   * caret base. The resulting range must still include the CLI release shipped with core.
    */
   cliPackageJson?: URL;
 }

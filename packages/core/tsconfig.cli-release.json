@@ -1,0 +1,10 @@
+{
+  "extends": "../../tsconfig.base.json",
+  "compilerOptions": {
+    "rootDir": "../cli",
+    "outDir": "./dist/cli-release",
+    "tsBuildInfoFile": "./cli-release.tsbuildinfo",
+    "types": []
+  },
+  "files": ["../cli/package.json"]
+}

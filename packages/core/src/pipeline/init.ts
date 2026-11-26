@@ -11,7 +11,7 @@
  * with `core 0.2.0`), so the generated `package.json` pins each to a caret of its *own* version.
  * `core`'s version is read at runtime from this package's `package.json` (resolved relative to
  * {@link import.meta.url}); the default CLI release comes from the CLI manifest at build time.
- * The CLI entrypoint supplies its own installed manifest.
+ * The CLI entrypoint supplies its own installed manifest via initFromCli.
  *
  * @see docs/specs/architecture.md §3.2 (template repo contents)
  * @see docs/specs/architecture.md §11 (template→toolkit dependency contract)
@@ -29,14 +29,7 @@ import type { InitOptions, InitOutcome } from './types.js';
 
 const CLI_PACKAGE_NAME = '@ai-plugin-marketplace/cli';
 
-function resolveCliRange(opts: InitOptions | undefined): string {
-  // The source uses the workspace manifest. The build ships the same release metadata with core.
-  const releaseFile =
-    opts?.cliPackageJson ??
-    new URL(
-      import.meta.url.endsWith('.ts') ? '../../../cli/package.json' : '../cli-release.json',
-      import.meta.url,
-    );
+function readCliRelease(releaseFile: URL): string {
   const release = JSON.parse(fs.readFileSync(releaseFile, 'utf8')) as {
     name?: unknown;
     version?: unknown;
@@ -51,7 +44,14 @@ function resolveCliRange(opts: InitOptions | undefined): string {
     );
   }
 
-  const override = opts?.cliVersion;
+  return cliRelease;
+}
+
+function resolveCliRange(
+  cliRelease: string,
+  override: string | undefined,
+  bundledRelease = cliRelease,
+): string {
   const version = override === undefined ? cliRelease : semver.valid(override);
   if (version === null) {
     throw new Error("Invalid 'cliVersion': expected a semantic version.");
@@ -60,8 +60,10 @@ function resolveCliRange(opts: InitOptions | undefined): string {
   if (!semver.satisfies(version, range)) {
     throw new Error("Invalid 'cliVersion': expected a version that can be used as a caret range.");
   }
-  if (!semver.satisfies(cliRelease, range)) {
-    throw new Error(`Invalid 'cliVersion': ${range} excludes ${CLI_PACKAGE_NAME}@${cliRelease}.`);
+  for (const release of [bundledRelease, cliRelease]) {
+    if (!semver.satisfies(release, range)) {
+      throw new Error(`Invalid 'cliVersion': ${range} excludes ${CLI_PACKAGE_NAME}@${release}.`);
+    }
   }
   return range;
 }
@@ -161,7 +163,42 @@ function findAncestorPnpmWorkspace(dir: string): string | undefined {
  *   {@link findAncestorPnpmWorkspace}), is `undefined` otherwise.
  * @throws {Error} When the target cannot be scaffolded into or the CLI range cannot be verified.
  */
-export async function runInit(targetDir: string, opts?: InitOptions): Promise<InitOutcome> {
+export function runInit(targetDir: string, opts?: InitOptions): Promise<InitOutcome> {
+  return writeInit(targetDir, opts, () => {
+    // The same workspace manifest is copied into dist by the TypeScript project reference.
+    const bundledRelease = readCliRelease(
+      new URL(
+        import.meta.url.endsWith('.ts')
+          ? '../../../cli/package.json'
+          : '../cli-release/package.json',
+        import.meta.url,
+      ),
+    );
+    const selectedManifest = opts?.cliPackageJson;
+    const selectedRelease =
+      selectedManifest === undefined ? bundledRelease : readCliRelease(selectedManifest);
+    return resolveCliRange(selectedRelease, opts?.cliVersion, bundledRelease);
+  });
+}
+
+type InitNames = Pick<InitOptions, 'name' | 'marketplaceName'>;
+
+/** Scaffold for the CLI command using the release in its installed manifest. */
+export function runInitForCli(
+  targetDir: string,
+  cliPackageJson: URL,
+  opts?: InitNames,
+): Promise<InitOutcome> {
+  return writeInit(targetDir, opts, () =>
+    resolveCliRange(readCliRelease(cliPackageJson), undefined),
+  );
+}
+
+async function writeInit(
+  targetDir: string,
+  opts: InitNames | undefined,
+  getCliRange: () => string,
+): Promise<InitOutcome> {
   const resolved = path.resolve(targetDir);
 
   if (!isFreshTarget(resolved)) {
@@ -171,7 +208,7 @@ export async function runInit(targetDir: string, opts?: InitOptions): Promise<In
     );
   }
 
-  const cliRange = resolveCliRange(opts);
+  const cliRange = getCliRange();
 
   // Detected before writing anything, since the check is independent of the scaffold write below
   // and cheap to do up front. Note this does NOT reach the caller if a later step throws (name

@@ -21,7 +21,8 @@ environment. The workflow requests `id-token: write` to authenticate with npm.
    page in GitHub Actions.
 
 A **minor or patch** toolkit release never requires downstream plugin authors to change their
-manifests (architecture spec §9.3). Major releases may require `aipm migrate` (a no-op today).
+manifests (architecture spec §9.3). Major releases may require running
+`pnpm exec aipm migrate` before `pnpm exec aipm build` (migration is a no-op today).
 
 ## How downstream consumes this
 
@@ -33,7 +34,7 @@ ranges and the selected core version satisfies the selected CLI release's core d
 
 ```sh
 pnpm up @ai-plugin-marketplace/cli @ai-plugin-marketplace/core
-aipm build
+pnpm exec aipm build
 ```
 
 To cross a caret boundary, including a pre-1.0 minor line, select versions for both packages.
@@ -42,5 +43,5 @@ select a compatible pair explicitly:
 
 ```sh
 pnpm add -D @ai-plugin-marketplace/cli@0.8.0 @ai-plugin-marketplace/core@0.11.0
-aipm build
+pnpm exec aipm build
 ```

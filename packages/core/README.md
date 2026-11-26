@@ -52,9 +52,10 @@ import {
 | `listTargets`  | Return the `TargetId` values this toolkit version recognises       |
 
 For programmatic scaffolding, `init(dir)` uses the CLI release metadata shipped with core.
-To scaffold for a different installed CLI release, pass its `package.json` file URL as
-`cliPackageJson`. An optional `cliVersion` sets the base of the CLI caret range, which must
-include the selected release. The core range comes from the installed core version.
+Pass an installed CLI manifest URL as `cliPackageJson` to use its release as the default
+caret base. An optional `cliVersion` sets the caret base explicitly. The range must include
+the bundled CLI release and any release supplied through `cliPackageJson`. The core range
+comes from the installed core version.
 
 ### Key types
 

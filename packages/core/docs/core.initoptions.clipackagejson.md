@@ -4,7 +4,7 @@
 
 ## InitOptions.cliPackageJson property
 
-File URL of an installed CLI package's `package.json`<!-- -->. Defaults to the CLI release metadata shipped with core. The CLI command supplies its own manifest.
+File URL of an installed CLI package manifest. When provided, its version is the default caret base. The resulting range must still include the CLI release shipped with core.
 
 **Signature:**
 

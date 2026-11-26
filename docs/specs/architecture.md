@@ -513,7 +513,7 @@ export interface InitOutcome {
 }
 ```
 
-**Why `init` lives in `core`.** `init` scaffolds the thin consumer repo described in §3.2. The generated `package.json` uses separate caret ranges for core and CLI. Core reads its own installed version and ships CLI release metadata for the default. The CLI command supplies its own manifest as `opts.cliPackageJson`. Programmatic callers can also pass an installed CLI manifest. If supplied, `opts.cliVersion` must produce a range that includes the release identified by the selected metadata. The scaffold also writes the repo-root marketplace registries, an empty `plugins/`, a README, and a CI workflow that runs `aipm build` then `aipm validate` (§10.5). It refuses to write into a non-empty directory.
+**Why `init` lives in `core`.** `init` scaffolds the thin consumer repo described in §3.2. The generated `package.json` uses separate caret ranges for core and CLI. Core reads its own installed version and bundles the CLI manifest as the default. Programmatic callers can use `opts.cliPackageJson` to supply another installed CLI manifest and `opts.cliVersion` to set the caret base. The resulting range must include the bundled CLI release and any release supplied through `opts.cliPackageJson`. The `aipm init` command uses the release in its own installed manifest through `initFromCli`. The scaffold also writes the repo-root marketplace registries, an empty `plugins/`, a README, and a CI workflow that runs `aipm build` then `aipm validate` (§10.5). It refuses to write into a non-empty directory.
 
 **Ancestor-workspace guard (issue #96).** `init` always writes a local `package.json`, but a directory nested under an ancestor `pnpm-workspace.yaml` can still have a later `pnpm install` swept into that ancestor workspace (shared lockfile/hoisting) instead of staying local. `init` walks up from the target directory looking for an ancestor `pnpm-workspace.yaml` and reports it via `InitOutcome.ancestorWorkspace`; the `aipm init` CLI surface prints a warning to stderr when it is set, before instructing the user to run `pnpm install`.
 
@@ -537,16 +537,16 @@ export interface InitOutcome {
 
 **Subcommands.**
 
-| Subcommand                          | Wraps                                              |
-| ----------------------------------- | -------------------------------------------------- |
-| `aipm init [dir]`                   | `core.init(dir, { cliPackageJson })` — default cwd |
-| `aipm build [path]`                 | `core.build(path)` — default cwd                   |
-| `aipm validate [path]`              | `core.validate(path)`                              |
-| `aipm scaffold <name>`              | `core.scaffold(name)`                              |
-| `aipm migrate [path]`               | `core.migrate(path)` — no-op in v0.1.0             |
-| `aipm check-support <plugin>`       | `core.checkSupport(pluginDir)`                     |
-| `aipm add-target <plugin> <target>` | `core.addTarget(pluginDir, target)`                |
-| `aipm list-targets`                 | `core.listTargets()`                               |
+| Subcommand                          | Wraps                                            |
+| ----------------------------------- | ------------------------------------------------ |
+| `aipm init [dir]`                   | `initFromCli(dir, cliPackageJson)` — default cwd |
+| `aipm build [path]`                 | `core.build(path)` — default cwd                 |
+| `aipm validate [path]`              | `core.validate(path)`                            |
+| `aipm scaffold <name>`              | `core.scaffold(name)`                            |
+| `aipm migrate [path]`               | `core.migrate(path)` — no-op in v0.1.0           |
+| `aipm check-support <plugin>`       | `core.checkSupport(pluginDir)`                   |
+| `aipm add-target <plugin> <target>` | `core.addTarget(pluginDir, target)`              |
+| `aipm list-targets`                 | `core.listTargets()`                             |
 
 **Naming convention.** CLI subcommand names are kebab-case; `core` exports are camelCase. The CLI handles the mapping at its argv boundary; downstream consumers never see the hyphenated form.
 
@@ -703,7 +703,7 @@ version satisfies the selected CLI release's core dependency range:
 
 ```sh
 pnpm up @ai-plugin-marketplace/cli @ai-plugin-marketplace/core
-aipm build
+pnpm exec aipm build
 ```
 
 To cross a caret boundary, including a pre-1.0 minor line, select versions for both packages.
@@ -712,10 +712,10 @@ select a compatible pair explicitly:
 
 ```sh
 pnpm add -D @ai-plugin-marketplace/cli@0.8.0 @ai-plugin-marketplace/core@0.11.0
-aipm build
+pnpm exec aipm build
 ```
 
-For a major upgrade that requires migration, run `aipm migrate` before `aipm build`.
+For a major upgrade that requires migration, run `pnpm exec aipm migrate` before `pnpm exec aipm build`.
 Commit the updated manifests, lockfile, and generated artifacts.
 
 ### 11.4 What the template may customize

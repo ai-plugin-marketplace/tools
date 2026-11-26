@@ -272,7 +272,7 @@ export interface Finding {
 // Scaffold
 
 /**
- * Options for {@link scaffold}.
+ * Options for scaffolding a new plugin.
  *
  * @public
  */
@@ -402,6 +402,16 @@ export interface MigrateResult {
 
 // ---------------------------------------------------------------------------
 // Support
+
+/**
+ * Options for {@link checkSupport} and {@link addTarget}.
+ *
+ * @public
+ */
+export interface PluginArgumentOptions {
+  /** Look up a bare name in the nearest repo layout when it does not name an existing directory. */
+  lookupByName?: boolean;
+}
 
 /**
  * Diagnostic report from {@link checkSupport} describing a plugin's support envelope.

@@ -1125,7 +1125,7 @@ async function collectStampedArtifacts(
  *   a transform fails, or (when `failFast`) post-build validation reports hard findings.
  */
 export async function runBuild(targetPath: string, opts?: BuildOptions): Promise<BuildResult[]> {
-  const { repoRoot, pluginDirs, distDir } = await discoverPlugins(targetPath);
+  const { repoRoot, pluginDirs, distDir, isRepoRoot } = await discoverPlugins(targetPath);
 
   // One per-invocation config memo shared across the build loop and registry collection, so each
   // plugin's aipm.config.ts is transpiled once rather than reloaded per phase (see ConfigCache).
@@ -1158,7 +1158,6 @@ export async function runBuild(targetPath: string, opts?: BuildOptions): Promise
     // For repo-root input, pluginDirs already covers the whole repo — reuse it (and the warm
     // config cache) instead of re-discovering and reloading. Only single-plugin input needs a
     // repo-wide re-scan to make the registry repo-complete.
-    const isRepoRoot = path.resolve(targetPath) === repoRoot;
     const allPluginDirs = isRepoRoot ? pluginDirs : (await discoverPlugins(repoRoot)).pluginDirs;
     const registryPlugins = await collectRegistryPlugins(repoRoot, allPluginDirs, configCache);
     const registries = computeRegistryArtifacts(repoRoot, registryPlugins, workspace);

@@ -4,12 +4,14 @@
 
 ## scaffold() function
 
-Scaffold a new plugin under the cwd's configured plugins root (`<cwd>/plugins/<name>` by default, or the relocated `pluginsRoot` from an `aipm.repo.ts`<!-- -->). The plugins directory is derived from the current working directory, matching how `aipm scaffold` is invoked from a repo root.
+Scaffold a plugin in the nearest repo layout and return its repo-relative path.
 
 **Signature:**
 
 ```typescript
-export declare function scaffold(name: string, opts?: ScaffoldOptions): Promise<void>;
+export declare function scaffold(name: string, opts: ScaffoldOptions & {
+    returnPath: true;
+}): Promise<string>;
 ```
 
 ## Parameters
@@ -51,12 +53,10 @@ opts
 
 </td><td>
 
-[ScaffoldOptions](./core.scaffoldoptions.md)
+[ScaffoldOptions](./core.scaffoldoptions.md) &amp; { returnPath: true; }
 
 
 </td><td>
-
-_(Optional)_
 
 
 </td></tr>
@@ -64,5 +64,5 @@ _(Optional)_
 
 **Returns:**
 
-Promise&lt;void&gt;
+Promise&lt;string&gt;
 

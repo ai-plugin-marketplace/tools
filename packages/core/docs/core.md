@@ -23,12 +23,12 @@ Description
 </th></tr></thead>
 <tbody><tr><td>
 
-[addTarget(pluginDir, target)](./core.addtarget.md)
+[addTarget(pluginDir, target, opts)](./core.addtarget.md)
 
 
 </td><td>
 
-Scaffold skeleton files for a new target in an existing plugin (§6.4). Preserve-or-warn, never destructive: an already-materialized target (every file it would write already exists) is a friendly no-op (`status: 'already-present'`<!-- -->) rather than a thrown error, and existing files are never overwritten — see [AddTargetOutcome](./core.addtargetoutcome.md)<!-- -->.
+Scaffold skeleton files for a new target in an existing plugin (§6.4). Preserve-or-warn, never destructive: an already-materialized target (every file it would write already exists) is a friendly no-op (`status: 'already-present'`<!-- -->) rather than a thrown error, and existing files are never overwritten — see [AddTargetOutcome](./core.addtargetoutcome.md)<!-- -->. Pass a plugin directory path, or set `opts.lookupByName` to also accept bare plugin names.
 
 
 </td></tr>
@@ -50,18 +50,18 @@ Apply `--rule` overrides to a diagnostic list: a diagnostic whose `ruleId` has a
 
 </td><td>
 
-Build a single plugin or every plugin under a repo root. `path` may be a plugin directory (contains `aipm.config.ts`<!-- -->) or a repo root (contains `plugins/`<!-- -->); the orchestrator detects which and returns a length-1 array for single-plugin input. See §5.2, §8.1.
+Build a single plugin or every plugin under a repo root. Pass a repo path, plugin directory path, or plugin name under the configured plugins root. Single-plugin input returns a length-1 array. See §5.2, §8.1.
 
 
 </td></tr>
 <tr><td>
 
-[checkSupport(pluginDir)](./core.checksupport.md)
+[checkSupport(pluginDir, opts)](./core.checksupport.md)
 
 
 </td><td>
 
-Diagnose a plugin's support envelope: declared targets, missing artifacts, addable targets (§6.4).
+Diagnose a plugin's support envelope: declared targets, missing artifacts, addable targets (§6.4). Pass a plugin directory path, or set `opts.lookupByName` to also accept bare plugin names.
 
 
 </td></tr>
@@ -171,7 +171,18 @@ Every rule id the engine knows about (spec L-D4's `Rule.meta.id`<!-- -->), regar
 
 </td><td>
 
-Scaffold a new plugin under the cwd's configured plugins root (`<cwd>/plugins/<name>` by default, or the relocated `pluginsRoot` from an `aipm.repo.ts`<!-- -->). The plugins directory is derived from the current working directory, matching how `aipm scaffold` is invoked from a repo root.
+Scaffold a plugin in the nearest repo layout and return its repo-relative path.
+
+
+</td></tr>
+<tr><td>
+
+[scaffold(name, opts)](./core.scaffold_1.md)
+
+
+</td><td>
+
+Scaffold a plugin under the nearest configured or default plugins root. If no repo layout is present, use the working directory.
 
 
 </td></tr>
@@ -195,7 +206,7 @@ Must be called with the diagnostics `lint()` produced BEFORE [applyRuleSeverityO
 
 </td><td>
 
-Validate a single plugin or every plugin under a repo root, in the order defined by §10.1. Freshness severity follows the CI environment (§10.2).
+Validate a single plugin or every plugin under a repo root, in the order defined by §10.1. Accepts a repo path, plugin directory path, or plugin name under the configured plugins root. Freshness severity follows the CI environment (§10.2).
 
 
 </td></tr>
@@ -420,6 +431,17 @@ Result of running [migrate()](./core.migrate.md)<!-- -->.
 </td></tr>
 <tr><td>
 
+[PluginArgumentOptions](./core.pluginargumentoptions.md)
+
+
+</td><td>
+
+Options for [checkSupport()](./core.checksupport.md) and [addTarget()](./core.addtarget.md)<!-- -->.
+
+
+</td></tr>
+<tr><td>
+
 [Position](./core.position.md)
 
 
@@ -491,7 +513,7 @@ Read-only context handed to a [Rule](./core.rule.md)<!-- -->'s `check()`<!-- -->
 
 </td><td>
 
-Options for [scaffold()](./core.scaffold.md)<!-- -->.
+Options for scaffolding a new plugin.
 
 
 </td></tr>

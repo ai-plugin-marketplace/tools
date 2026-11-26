@@ -380,6 +380,86 @@ describe('aipm migrate', () => {
   });
 });
 
+describe('aipm plugin paths', () => {
+  let root: string;
+
+  beforeEach(() => {
+    root = fs.mkdtempSync(path.join(os.tmpdir(), 'aipm-plugin-paths-'));
+  });
+
+  afterEach(() => {
+    vi.restoreAllMocks();
+    fs.rmSync(root, { recursive: true });
+  });
+
+  it.each(['.', 'docs'])(
+    'scaffolds into the configured layout when invoked from %s',
+    async (from) => {
+      const cwd = path.join(root, from);
+      fs.mkdirSync(cwd, { recursive: true });
+      fs.writeFileSync(
+        path.join(root, 'aipm.repo.ts'),
+        "export default { pluginsRoot: 'extensions/ai/plugins' };\n",
+      );
+      const workingDirectory = vi.spyOn(process, 'cwd').mockReturnValue(cwd);
+
+      expect(await invoke(['scaffold', 'demo'])).toStrictEqual({
+        code: 0,
+        out: 'Created extensions/ai/plugins/demo.\n',
+        err: '',
+      });
+      expect(fs.existsSync(path.join(root, 'extensions/ai/plugins/demo/aipm.config.ts'))).toBe(
+        true,
+      );
+      expect(fs.existsSync(path.join(root, 'docs/plugins/demo'))).toBe(false);
+      expect(
+        fs.readFileSync(path.join(root, '.claude-plugin/marketplace.json'), 'utf-8'),
+      ).toContain('"source": "./extensions/ai/plugins/demo"');
+
+      workingDirectory.mockReturnValue(root);
+      expect((await invoke(['check-support', 'demo'])).code).toBe(0);
+    },
+  );
+
+  it('adds targets by name and path to the same owning repo with overlapping roots', async () => {
+    const inner = path.join(root, 'extensions/ai');
+    const pluginDir = path.join(inner, 'plugins/demo');
+    fs.mkdirSync(pluginDir, { recursive: true });
+    fs.writeFileSync(
+      path.join(root, 'aipm.repo.ts'),
+      "export default { pluginsRoot: 'extensions/ai/plugins' };\n",
+    );
+    fs.writeFileSync(path.join(inner, 'aipm.repo.ts'), 'export default {};\n');
+    fs.writeFileSync(
+      path.join(pluginDir, 'aipm.config.ts'),
+      "export default { targets: ['gemini'] };\n",
+    );
+    vi.spyOn(process, 'cwd').mockReturnValue(root);
+
+    expect((await invoke(['add-target', 'demo', 'cursor'])).code).toBe(0);
+    expect((await invoke(['add-target', 'extensions/ai/plugins/demo', 'claude'])).code).toBe(0);
+    for (const target of ['.cursor-plugin', '.claude-plugin']) {
+      expect(fs.existsSync(path.join(root, target, 'marketplace.json'))).toBe(false);
+      expect(fs.readFileSync(path.join(inner, target, 'marketplace.json'), 'utf-8')).toContain(
+        '"source": "./plugins/demo"',
+      );
+    }
+  });
+
+  it('validates a config-less plugin containing a plugins directory by name and by path', async () => {
+    const pluginDir = path.join(root, 'plugins/demo');
+    fs.mkdirSync(path.join(pluginDir, 'plugins'), { recursive: true });
+    fs.mkdirSync(path.join(pluginDir, '.claude-plugin'));
+    fs.writeFileSync(path.join(pluginDir, '.claude-plugin/plugin.json'), '{}');
+    vi.spyOn(process, 'cwd').mockReturnValue(root);
+
+    const byName = await invoke(['validate', 'demo']);
+    expect(byName.code).toBe(1);
+    expect(byName.out).toContain('envelope-invalid');
+    expect(await invoke(['validate', 'plugins/demo'])).toStrictEqual(byName);
+  });
+});
+
 describe('aipm argument errors (exit code 2)', () => {
   it('rejects an unknown command', async () => {
     const { code, err } = await invoke(['frobnicate']);

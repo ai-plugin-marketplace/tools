@@ -10,11 +10,9 @@
  * @see docs/specs/architecture.md §8.1
  */
 
-import * as path from 'node:path';
-
 import { runBuild } from './build.js';
 import { runInit } from './init.js';
-import { loadRepoConfig } from './load-config.js';
+import { findRepoLayout } from './resolve-plugin.js';
 import { runRefreshScaffold } from './scaffold-refresh.js';
 import { runScaffold, runAddTarget, runCheckSupport } from './scaffold.js';
 import { TARGET_IDS } from './types.js';
@@ -27,6 +25,7 @@ import type {
   InitOutcome,
   MigrateOptions,
   MigrateResult,
+  PluginArgumentOptions,
   RefreshOptions,
   RefreshOutcome,
   ScaffoldOptions,
@@ -96,18 +95,29 @@ export function refreshScaffold(
 }
 
 /**
- * Scaffold a new plugin under the cwd's configured plugins root (`<cwd>/plugins/<name>` by
- * default, or the relocated `pluginsRoot` from an `aipm.repo.ts`). The plugins directory is
- * derived from the current working directory, matching how `aipm scaffold` is invoked from a repo
- * root.
+ * Scaffold a plugin in the nearest repo layout and return its repo-relative path.
  *
  * @public
  */
-export async function scaffold(name: string, opts: ScaffoldOptions = {}): Promise<void> {
-  const cwd = process.cwd();
-  const repoConfig = await loadRepoConfig(cwd);
-  const pluginsDir = path.join(cwd, repoConfig.pluginsRoot);
-  return runScaffold(name, pluginsDir, opts);
+export function scaffold(
+  name: string,
+  opts: ScaffoldOptions & { returnPath: true },
+): Promise<string>;
+/**
+ * Scaffold a plugin under the nearest configured or default plugins root. If no repo layout is
+ * present, use the working directory.
+ *
+ * @public
+ */
+export function scaffold(name: string, opts?: ScaffoldOptions): Promise<void>;
+/** @public */
+export async function scaffold(
+  name: string,
+  opts: ScaffoldOptions & { returnPath?: true } = {},
+): Promise<string | void> {
+  const layout = await findRepoLayout(process.cwd());
+  const pluginPath = await runScaffold(name, layout.pluginsDir, opts, layout);
+  if (opts.returnPath) return pluginPath;
 }
 
 /**
@@ -127,25 +137,32 @@ export function migrate(_path: string, _opts?: MigrateOptions): Promise<MigrateR
 
 /**
  * Diagnose a plugin's support envelope: declared targets, missing artifacts, addable targets (§6.4).
- * Pass a plugin directory path or a plugin name under the configured plugins root.
+ * Pass a plugin directory path, or set `opts.lookupByName` to also accept bare plugin names.
  *
  * @public
  */
-export function checkSupport(pluginDir: string): Promise<SupportReport> {
-  return runCheckSupport(pluginDir);
+export function checkSupport(
+  pluginDir: string,
+  opts?: PluginArgumentOptions,
+): Promise<SupportReport> {
+  return runCheckSupport(pluginDir, opts?.lookupByName);
 }
 
 /**
  * Scaffold skeleton files for a new target in an existing plugin (§6.4). Preserve-or-warn, never
  * destructive: an already-materialized target (every file it would write already exists) is a
  * friendly no-op (`status: 'already-present'`) rather than a thrown error, and existing files are
- * never overwritten — see {@link AddTargetOutcome}. Pass a plugin directory path or a plugin
- * name under the configured plugins root.
+ * never overwritten — see {@link AddTargetOutcome}. Pass a plugin directory path, or set
+ * `opts.lookupByName` to also accept bare plugin names.
  *
  * @public
  */
-export function addTarget(pluginDir: string, target: TargetId): Promise<AddTargetOutcome> {
-  return runAddTarget(pluginDir, target);
+export function addTarget(
+  pluginDir: string,
+  target: TargetId,
+  opts?: PluginArgumentOptions,
+): Promise<AddTargetOutcome> {
+  return runAddTarget(pluginDir, target, opts?.lookupByName);
 }
 
 /**

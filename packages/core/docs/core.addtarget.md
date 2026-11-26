@@ -4,12 +4,12 @@
 
 ## addTarget() function
 
-Scaffold skeleton files for a new target in an existing plugin (§6.4). Preserve-or-warn, never destructive: an already-materialized target (every file it would write already exists) is a friendly no-op (`status: 'already-present'`<!-- -->) rather than a thrown error, and existing files are never overwritten — see [AddTargetOutcome](./core.addtargetoutcome.md)<!-- -->.
+Scaffold skeleton files for a new target in an existing plugin (§6.4). Preserve-or-warn, never destructive: an already-materialized target (every file it would write already exists) is a friendly no-op (`status: 'already-present'`<!-- -->) rather than a thrown error, and existing files are never overwritten — see [AddTargetOutcome](./core.addtargetoutcome.md)<!-- -->. Pass a plugin directory path, or set `opts.lookupByName` to also accept bare plugin names.
 
 **Signature:**
 
 ```typescript
-export declare function addTarget(pluginDir: string, target: TargetId): Promise<AddTargetOutcome>;
+export declare function addTarget(pluginDir: string, target: TargetId, opts?: PluginArgumentOptions): Promise<AddTargetOutcome>;
 ```
 
 ## Parameters
@@ -55,6 +55,22 @@ target
 
 
 </td><td>
+
+
+</td></tr>
+<tr><td>
+
+opts
+
+
+</td><td>
+
+[PluginArgumentOptions](./core.pluginargumentoptions.md)
+
+
+</td><td>
+
+_(Optional)_
 
 
 </td></tr>

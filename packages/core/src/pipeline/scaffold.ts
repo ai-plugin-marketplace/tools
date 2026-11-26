@@ -37,7 +37,8 @@ import { scaffoldOpenPluginsFiles } from '../targets/open-plugins/scaffold.js';
 import { scaffoldVercelFiles } from '../targets/vercel/scaffold.js';
 import type { ScaffoldedFile, TargetScaffoldOptions } from '../targets/scaffold-kit.js';
 import { INITIAL_PLUGIN_VERSION } from '../targets/scaffold-kit.js';
-import { resolvePluginArgument } from './resolve-plugin.js';
+import { findPluginOwner, isDirectory, resolvePluginPath } from './resolve-plugin.js';
+import type { RepoLayout } from './resolve-plugin.js';
 import { DEFAULT_SCAFFOLD_TARGETS, TARGET_IDS } from './types.js';
 import type { AddTargetOutcome, ScaffoldOptions, SupportReport, TargetId } from './types.js';
 import { TARGET_MIN_REQUIRED } from './validate.js';
@@ -373,12 +374,20 @@ export async function runScaffold(
   name: string,
   pluginsDir: string,
   opts: ScaffoldOptions = {},
-): Promise<void> {
+  layout?: RepoLayout,
+): Promise<string> {
   validatePluginName(name);
 
-  const { repoRoot, pluginDir } = await resolvePluginArgument(path.resolve(pluginsDir, name));
-  if (fs.existsSync(pluginDir)) {
+  const pluginDir = path.join(pluginsDir, name);
+  if (fs.lstatSync(pluginDir, { throwIfNoEntry: false }) !== undefined) {
     throw new Error(`Plugin directory already exists: ${pluginDir}`);
+  }
+
+  const { repoRoot } = await findPluginOwner(pluginDir, layout);
+  if (layout !== undefined && repoRoot !== layout.repoRoot) {
+    throw new Error(
+      `The plugins root '${pluginsDir}' is owned by '${repoRoot}'. Scaffold from that repo instead.`,
+    );
   }
 
   const targets = orderTargets(opts.targets ?? DEFAULT_SCAFFOLD_TARGETS);
@@ -402,7 +411,7 @@ export async function runScaffold(
   // Registry sources are relative to the owning repo, including for nested plugins roots.
   registerPluginInMarketplaces(repoRoot, pluginDir, targets);
 
-  return Promise.resolve();
+  return path.relative(repoRoot, pluginDir).split(path.sep).join('/');
 }
 
 // ---------------------------------------------------------------------------
@@ -433,11 +442,16 @@ export async function runScaffold(
  * @throws Error when `pluginDir` does not exist, or the config's targets array cannot be located
  * for the update.
  */
-export async function runAddTarget(argument: string, target: TargetId): Promise<AddTargetOutcome> {
-  const { pluginDir, repoRoot } = await resolvePluginArgument(argument);
-  if (!fs.existsSync(pluginDir)) {
+export async function runAddTarget(
+  argument: string,
+  target: TargetId,
+  lookupByName = false,
+): Promise<AddTargetOutcome> {
+  const pluginDir = await resolvePluginPath(argument, lookupByName);
+  if (!isDirectory(pluginDir)) {
     throw new Error(`Plugin directory does not exist: ${pluginDir}`);
   }
+  const { repoRoot } = await findPluginOwner(pluginDir);
 
   const pluginName = path.basename(pluginDir);
   const files = TARGET_SCAFFOLDERS[target](pluginName, { placeholder: true });
@@ -519,9 +533,12 @@ function updateConfigTargets(pluginDir: string, target: TargetId): void {
  *
  * @throws Error when `pluginDir` or its `aipm.config.ts` is missing, or the envelope is unreadable.
  */
-export async function runCheckSupport(argument: string): Promise<SupportReport> {
-  const { pluginDir } = await resolvePluginArgument(argument);
-  if (!fs.existsSync(pluginDir)) {
+export async function runCheckSupport(
+  argument: string,
+  lookupByName = false,
+): Promise<SupportReport> {
+  const pluginDir = await resolvePluginPath(argument, lookupByName);
+  if (!isDirectory(pluginDir)) {
     throw new Error(`Plugin directory does not exist: ${pluginDir}`);
   }
   const configPath = path.join(pluginDir, 'aipm.config.ts');

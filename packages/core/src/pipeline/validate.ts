@@ -1655,7 +1655,7 @@ export async function runValidate(
     }
     throw err;
   }
-  const { repoRoot, distDir, pluginDirs } = discovery;
+  const { repoRoot, distDir, pluginDirs, isRepoRoot } = discovery;
   const findings: Finding[] = [];
 
   // One per-invocation config memo so each plugin's aipm.config.ts is transpiled once — reused by
@@ -1767,7 +1767,7 @@ export async function runValidate(
   // `aipm.workspace.ts` when present, else from a committed repo-root registry's top-level
   // `name`/`owner.name`. A placeholder name collides with the upstream marketplace and strands
   // plugins, so warn — but never fail (soft, does not flip `passed`).
-  if (path.resolve(targetPath) === repoRoot) {
+  if (isRepoRoot) {
     const repoLevelCtx = createRuleContext({
       pluginDir: repoRoot,
       repoRoot,
@@ -1800,7 +1800,6 @@ export async function runValidate(
     // For repo-root input, pluginDirs already covers the whole repo — reuse it (and the warm
     // config cache) rather than re-discovering and reloading. Single-plugin input needs a
     // repo-wide re-scan so the oracle stays repo-complete.
-    const isRepoRoot = path.resolve(targetPath) === repoRoot;
     const allPluginDirs = isRepoRoot ? pluginDirs : (await discoverPlugins(repoRoot)).pluginDirs;
     const repoScopedCtx = createRuleContext({
       pluginDir: repoRoot,

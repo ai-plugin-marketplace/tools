@@ -4,7 +4,7 @@
 
 ## ScaffoldOptions interface
 
-Options for [scaffold()](./core.scaffold.md)<!-- -->.
+Options for scaffolding a new plugin.
 
 **Signature:**
 

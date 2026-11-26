@@ -14,10 +14,11 @@ import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
 
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { DEFAULT_SCAFFOLD_TARGETS, TARGET_IDS } from './types.js';
 import { runBuild } from './build.js';
+import { addTarget, checkSupport } from './operations.js';
 import {
   parseDeclaredTargets,
   renderAipmConfig,
@@ -721,5 +722,54 @@ describe('every default-scaffolded target emits a build artifact (issue #94)', (
     const [result] = await runBuild(repoRoot);
     const vercelArtifacts = result?.artifacts.filter((a) => a.target === 'vercel') ?? [];
     expect(vercelArtifacts).toStrictEqual([]);
+  });
+});
+
+describe('public compatibility operations', () => {
+  it('treats addTarget and checkSupport arguments as paths by default', async () => {
+    const pluginsDir = path.join(tmpDir, 'agent-plugins');
+    await runScaffold('demo', pluginsDir, { targets: ['claude'] });
+    const pluginDir = path.join(pluginsDir, 'demo');
+    fs.writeFileSync(
+      path.join(tmpDir, 'aipm.repo.ts'),
+      "export default { pluginsRoot: 'agent-plugins' };\n",
+    );
+
+    const cwd = vi.spyOn(process, 'cwd').mockReturnValue(tmpDir);
+    try {
+      await expect(addTarget('demo', 'cursor')).rejects.toThrow(/does not exist/);
+      await expect(checkSupport('demo')).rejects.toThrow(/does not exist/);
+      expect(read(pluginDir, '.cursor-plugin/plugin.json')).toBe('');
+      expect(parseDeclaredTargets(read(pluginDir, 'aipm.config.ts'))).toStrictEqual(['claude']);
+      expect(registryExists(tmpDir, '.cursor-plugin')).toBe(false);
+    } finally {
+      cwd.mockRestore();
+    }
+  });
+
+  it('reads support by explicit path even when an ancestor repo config is invalid', async () => {
+    const pluginDir = buildFixture(['claude']);
+    fs.writeFileSync(path.join(tmpDir, 'aipm.repo.ts'), 'export default false;\n');
+
+    await expect(checkSupport(pluginDir)).resolves.toMatchObject({ declared: ['claude'] });
+  });
+
+  it('adds a target through an external alias using the real plugin name and registry', async () => {
+    const repo = path.join(tmpDir, 'marketplace');
+    const pluginsDir = path.join(repo, 'plugins');
+    await runScaffold('demo', pluginsDir, { targets: ['claude'] });
+    const pluginDir = path.join(pluginsDir, 'demo');
+    const alias = path.join(tmpDir, 'plugins', 'alias');
+    fs.mkdirSync(path.dirname(alias));
+    fs.symlinkSync(pluginDir, alias, 'junction');
+
+    await expect(checkSupport(alias)).resolves.toMatchObject({ plugin: 'demo' });
+    await addTarget(alias, 'cursor');
+
+    expect(readRegistry(repo, '.cursor-plugin').plugins).toStrictEqual([
+      { name: 'demo', source: './plugins/demo' },
+    ]);
+    expect(registryExists(tmpDir, '.cursor-plugin')).toBe(false);
+    expect(read(pluginDir, '.cursor-plugin/plugin.json')).toContain('"name": "demo"');
   });
 });

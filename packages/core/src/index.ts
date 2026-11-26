@@ -72,5 +72,6 @@ export type {
   RefreshOutcome,
   MigrateOptions,
   MigrateResult,
+  PluginArgumentOptions,
   SupportReport,
 } from './pipeline/types.js';

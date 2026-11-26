@@ -27,7 +27,7 @@
  * single-plugin target missing its config would: `envelope-invalid` from validate, a thrown
  * `ConfigLoadError` from build.
  *
- * Repo-root detection is tried first so a real repo root is never misread as a single plugin.
+ * A plugin-shaped child of its owning plugins root takes precedence over an implicit repo layout.
  *
  * The plugins root and dist root are read from an optional `aipm.repo.ts` at the repo root
  * (embedded-marketplace support). Absent that file, they default to `plugins/` and `dist/`, so a
@@ -39,11 +39,19 @@
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 
-import { AIPM_CONFIG_FILENAME, hasRepoConfig, loadRepoConfig } from './load-config.js';
-import { resolvePluginArgument } from './resolve-plugin.js';
+import { AIPM_CONFIG_FILENAME, DEFAULT_REPO_CONFIG, hasRepoConfig } from './load-config.js';
+import {
+  findDeclaredPluginOwner,
+  findPluginOwner,
+  isDirectory,
+  readRepoLayout,
+  resolvePluginPath,
+} from './resolve-plugin.js';
 
 /** Result of resolving a `targetPath` to concrete plugin directories and a dist root. */
 export interface Discovery {
+  /** Whether the argument selected the whole repo. */
+  isRepoRoot: boolean;
   /** Absolute repo root (where the configured plugins/dist roots live). */
   repoRoot: string;
   /** Absolute dist output directory (the configured dist root under the repo root). */
@@ -55,11 +63,6 @@ export interface Discovery {
 /** True iff `dir` contains an `aipm.config.ts`. */
 function hasConfig(dir: string): boolean {
   return fs.existsSync(path.join(dir, AIPM_CONFIG_FILENAME));
-}
-
-/** True iff `dir` exists and is a directory. */
-function isDirectory(dir: string): boolean {
-  return fs.existsSync(dir) && fs.statSync(dir).isDirectory();
 }
 
 /**
@@ -115,48 +118,43 @@ function isPluginShaped(dir: string): boolean {
  * @throws {ConfigLoadError} If a present `aipm.repo.ts` cannot be imported or fails validation.
  */
 export async function discoverPlugins(targetPath: string): Promise<Discovery> {
-  const resolved = path.resolve(targetPath);
-
-  // ── Repo-root input (tried first) ─────────────────────────────────────────
-  // A path is a repo root when it does NOT itself carry a plugin config but either declares an
-  // `aipm.repo.ts` or contains the configured plugins root. (A plugin directory that happens to
-  // contain a `plugins/` subfolder is vanishingly unlikely and would be a layout error; carrying
-  // its own `aipm.config.ts` disambiguates it as a plugin.)
-  if (isDirectory(resolved) && !hasConfig(resolved)) {
-    const repoConfig = await loadRepoConfig(resolved);
-    const pluginsDir = path.join(resolved, repoConfig.pluginsRoot);
-    // An explicit `aipm.repo.ts` marks a repo root even before its plugins dir exists, so a
-    // freshly-initialised embedded repo still resolves as a repo root rather than a single plugin.
-    if (hasRepoConfig(resolved) || isDirectory(pluginsDir)) {
-      const pluginDirs: string[] = [];
-      if (isDirectory(pluginsDir)) {
-        for (const entry of fs.readdirSync(pluginsDir, { withFileTypes: true })) {
-          if (!entry.isDirectory()) continue;
-          const candidate = path.join(pluginsDir, entry.name);
-          // A config-less candidate is still discovered when it is plugin-shaped (#91) — deferred
-          // to the config loader downstream, which reports it as `envelope-invalid`/throws rather
-          // than letting it drop silently out of the plugin list.
-          if (hasConfig(candidate) || isPluginShaped(candidate)) {
-            pluginDirs.push(candidate);
-          }
-        }
-        pluginDirs.sort();
-      }
-      return {
-        repoRoot: resolved,
-        distDir: path.join(resolved, repoConfig.distDir),
-        pluginDirs,
-      };
-    }
-  }
-
-  // ── Single-plugin input ───────────────────────────────────────────────────
-  // Whether or not it carries a config: a missing config is deferred to the loader so validate
-  // can emit `envelope-invalid` and build can throw a descriptive error (§10.1 step 1). The dist
-  // root is resolved from the repo root's config so a relocated dist root is still honored.
-  const { pluginDir, repoRoot, repoConfig } = await resolvePluginArgument(targetPath);
-  if (!fs.existsSync(pluginDir)) {
+  const pluginDir = await resolvePluginPath(targetPath, true);
+  if (!isDirectory(pluginDir)) {
     throw new Error(`Path '${targetPath}' does not exist.`);
   }
-  return { repoRoot, distDir: path.join(repoRoot, repoConfig.distDir), pluginDirs: [pluginDir] };
+
+  const hasPluginConfig = hasConfig(pluginDir);
+  const hasExplicitLayout = !hasPluginConfig && hasRepoConfig(pluginDir);
+  const hasDefaultLayout =
+    !hasPluginConfig &&
+    !hasExplicitLayout &&
+    isDirectory(path.join(pluginDir, DEFAULT_REPO_CONFIG.pluginsRoot));
+  const owner =
+    hasDefaultLayout && isPluginShaped(pluginDir)
+      ? await findDeclaredPluginOwner(pluginDir)
+      : undefined;
+
+  if (hasExplicitLayout || (hasDefaultLayout && owner === undefined)) {
+    const layout = await readRepoLayout(pluginDir);
+    const { repoRoot, pluginsDir, distDir } = layout;
+    const pluginDirs: string[] = [];
+    if (isDirectory(pluginsDir)) {
+      for (const entry of fs.readdirSync(pluginsDir, { withFileTypes: true })) {
+        if (!entry.isDirectory()) continue;
+        const candidate = path.join(pluginsDir, entry.name);
+        if (
+          (hasConfig(candidate) || isPluginShaped(candidate)) &&
+          (await findDeclaredPluginOwner(candidate, layout))?.repoRoot === repoRoot
+        ) {
+          pluginDirs.push(candidate);
+        }
+      }
+      pluginDirs.sort();
+    }
+    return { isRepoRoot: true, repoRoot, distDir, pluginDirs };
+  }
+
+  // Missing plugin configs are deferred to build/validate so they can report an envelope error.
+  const { repoRoot, distDir } = owner ?? (await findPluginOwner(pluginDir));
+  return { isRepoRoot: false, repoRoot, distDir, pluginDirs: [pluginDir] };
 }

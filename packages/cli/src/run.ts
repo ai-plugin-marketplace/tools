@@ -423,8 +423,8 @@ export async function run(argv: readonly string[], opts: RunOptions = {}): Promi
           err.write("aipm: 'scaffold' requires a <name> argument.\n");
           return 2;
         }
-        await scaffold(name);
-        out.write(`Created plugins/${name}.\n`);
+        const pluginPath = await scaffold(name, { returnPath: true });
+        out.write(`Created ${pluginPath}.\n`);
         return 0;
       }
 
@@ -440,7 +440,7 @@ export async function run(argv: readonly string[], opts: RunOptions = {}): Promi
           err.write("aipm: 'check-support' requires a <plugin> argument.\n");
           return 2;
         }
-        const report = await checkSupport(plugin);
+        const report = await checkSupport(plugin, { lookupByName: true });
         reportSupport(report, out);
         return 0;
       }
@@ -457,7 +457,7 @@ export async function run(argv: readonly string[], opts: RunOptions = {}): Promi
           err.write(`aipm: unknown target '${target}'. Known: ${known.join(', ')}.\n`);
           return 2;
         }
-        const outcome = await addTarget(plugin, target as TargetId);
+        const outcome = await addTarget(plugin, target as TargetId, { lookupByName: true });
         reportAddTarget(outcome, plugin, out);
         return 0;
       }

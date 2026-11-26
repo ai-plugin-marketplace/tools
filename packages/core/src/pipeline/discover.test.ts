@@ -189,6 +189,7 @@ describe('discoverPlugins — embedded marketplace (aipm.repo.ts)', () => {
       const cwd = vi.spyOn(process, 'cwd').mockReturnValue(root);
       try {
         await expect(discoverPlugins(argument)).resolves.toStrictEqual({
+          isRepoRoot: false,
           repoRoot: root,
           distDir: path.join(root, 'build-out'),
           pluginDirs: [pluginDir],
@@ -198,6 +199,82 @@ describe('discoverPlugins — embedded marketplace (aipm.repo.ts)', () => {
       }
     },
   );
+
+  it('assigns a shared plugins root to the nearer configured repo for both arguments and scans', async () => {
+    writeRepoConfig(root, "{ pluginsRoot: 'extensions/ai/plugins', distDir: 'outer-dist' }");
+    const inner = path.join(root, 'extensions/ai');
+    writeRepoConfig(inner, "{ pluginsRoot: 'plugins', distDir: 'inner-dist' }");
+    const pluginDir = path.join(inner, 'plugins/demo');
+    writeConfig(pluginDir);
+
+    const cwd = vi.spyOn(process, 'cwd').mockReturnValue(root);
+    try {
+      const expected = {
+        repoRoot: inner,
+        distDir: path.join(inner, 'inner-dist'),
+        pluginDirs: [pluginDir],
+      };
+      await expect(discoverPlugins('demo')).resolves.toMatchObject(expected);
+      await expect(discoverPlugins('extensions/ai/plugins/demo')).resolves.toMatchObject(expected);
+      await expect(discoverPlugins(inner)).resolves.toMatchObject(expected);
+      await expect(discoverPlugins(root)).resolves.toMatchObject({ pluginDirs: [] });
+    } finally {
+      cwd.mockRestore();
+    }
+  });
+
+  it('uses a nested default layout when the enclosing config declares an unrelated plugins root', async () => {
+    writeRepoConfig(root, "{ pluginsRoot: 'agent-plugins', distDir: 'outer-dist' }");
+    const inner = path.join(root, 'vendor/inner');
+    const pluginDir = path.join(inner, 'plugins/demo');
+    writeConfig(pluginDir);
+
+    const cwd = vi.spyOn(process, 'cwd').mockReturnValue(inner);
+    try {
+      const expected = {
+        repoRoot: inner,
+        distDir: path.join(inner, 'dist'),
+        pluginDirs: [pluginDir],
+      };
+      for (const argument of ['.', 'demo', 'plugins/demo']) {
+        await expect(discoverPlugins(argument)).resolves.toMatchObject(expected);
+      }
+    } finally {
+      cwd.mockRestore();
+    }
+  });
+
+  it('uses the same physical plugins root for discovery through a configured symlink', async () => {
+    writeRepoConfig(root, "{ pluginsRoot: 'agent-plugins', distDir: 'build-out' }");
+    const pluginDir = path.join(root, 'extensions/authored/demo');
+    writeConfig(pluginDir);
+    fs.symlinkSync(path.dirname(pluginDir), path.join(root, 'agent-plugins'), 'junction');
+    fs.symlinkSync(pluginDir, path.join(path.dirname(pluginDir), 'alias'), 'junction');
+
+    const cwd = vi.spyOn(process, 'cwd').mockReturnValue(root);
+    try {
+      const expected = {
+        repoRoot: root,
+        distDir: path.join(root, 'build-out'),
+        pluginDirs: [pluginDir],
+      };
+      for (const argument of ['.', 'demo', 'agent-plugins/demo', pluginDir]) {
+        await expect(discoverPlugins(argument)).resolves.toMatchObject(expected);
+      }
+    } finally {
+      cwd.mockRestore();
+    }
+  });
+
+  it('rejects a configured plugins root that resolves outside the repo', async () => {
+    const repo = path.join(root, 'marketplace');
+    writeRepoConfig(repo, "{ pluginsRoot: 'agent-plugins' }");
+    const outside = path.join(root, 'outside');
+    writeConfig(path.join(outside, 'demo'));
+    fs.symlinkSync(outside, path.join(repo, 'agent-plugins'), 'junction');
+
+    await expect(discoverPlugins(repo)).rejects.toThrow(/pluginsRoot.*outside/);
+  });
 
   it('resolves the relocated distDir for single-plugin input', async () => {
     writeRepoConfig(root, `{ pluginsRoot: 'agent-plugins', distDir: 'build-out' }`);

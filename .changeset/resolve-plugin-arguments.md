@@ -3,4 +3,4 @@
 '@ai-plugin-marketplace/cli': patch
 ---
 
-Resolve bare plugin names under the configured `pluginsRoot`. Use the owning repo for dist output and marketplace registry paths when the plugins root is nested.
+Resolve CLI plugin arguments and scaffold destinations using the configured or default plugins root. Use the plugin's real directory and owning repo for discovery, dist output, and marketplace registration. Keep the core `checkSupport` and `addTarget` APIs path-based by default, with opt-in name lookup.

@@ -5,7 +5,7 @@
 ```ts
 
 // @public
-export function addTarget(pluginDir: string, target: TargetId): Promise<AddTargetOutcome>;
+export function addTarget(pluginDir: string, target: TargetId, opts?: PluginArgumentOptions): Promise<AddTargetOutcome>;
 
 // @public
 export interface AddTargetOutcome {
@@ -80,7 +80,7 @@ export interface BuildResult {
 }
 
 // @public
-export function checkSupport(pluginDir: string): Promise<SupportReport>;
+export function checkSupport(pluginDir: string, opts?: PluginArgumentOptions): Promise<SupportReport>;
 
 // @public
 export function defineConfig(config: AipmConfigInput): AipmConfig;
@@ -220,6 +220,11 @@ export interface MigrateResult {
 }
 
 // @public
+export interface PluginArgumentOptions {
+    lookupByName?: boolean;
+}
+
+// @public
 export interface Position {
     // (undocumented)
     col: number;
@@ -280,6 +285,11 @@ export interface RuleContext {
 
 // @public
 export type RuleSeverityOverride = 'error' | 'warn' | 'info' | 'off';
+
+// @public
+export function scaffold(name: string, opts: ScaffoldOptions & {
+    returnPath: true;
+}): Promise<string>;
 
 // @public
 export function scaffold(name: string, opts?: ScaffoldOptions): Promise<void>;

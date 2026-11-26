@@ -42,9 +42,9 @@ function isCi(): boolean {
 }
 
 /**
- * Build a single plugin or every plugin under a repo root. `path` may be a plugin directory
- * (contains `aipm.config.ts`) or a repo root (contains `plugins/`); the orchestrator detects
- * which and returns a length-1 array for single-plugin input. See §5.2, §8.1.
+ * Build a single plugin or every plugin under a repo root. Pass a repo path, plugin directory
+ * path, or plugin name under the configured plugins root. Single-plugin input returns a
+ * length-1 array. See §5.2, §8.1.
  *
  * @public
  */
@@ -54,6 +54,7 @@ export function build(targetPath: string, opts?: BuildOptions): Promise<BuildRes
 
 /**
  * Validate a single plugin or every plugin under a repo root, in the order defined by §10.1.
+ * Accepts a repo path, plugin directory path, or plugin name under the configured plugins root.
  * Freshness severity follows the CI environment (§10.2).
  *
  * @public
@@ -126,6 +127,7 @@ export function migrate(_path: string, _opts?: MigrateOptions): Promise<MigrateR
 
 /**
  * Diagnose a plugin's support envelope: declared targets, missing artifacts, addable targets (§6.4).
+ * Pass a plugin directory path or a plugin name under the configured plugins root.
  *
  * @public
  */
@@ -137,7 +139,8 @@ export function checkSupport(pluginDir: string): Promise<SupportReport> {
  * Scaffold skeleton files for a new target in an existing plugin (§6.4). Preserve-or-warn, never
  * destructive: an already-materialized target (every file it would write already exists) is a
  * friendly no-op (`status: 'already-present'`) rather than a thrown error, and existing files are
- * never overwritten — see {@link AddTargetOutcome}.
+ * never overwritten — see {@link AddTargetOutcome}. Pass a plugin directory path or a plugin
+ * name under the configured plugins root.
  *
  * @public
  */

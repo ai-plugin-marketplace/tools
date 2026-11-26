@@ -38,6 +38,12 @@ pnpm add -D @ai-plugin-marketplace/cli
 | `aipm add-target <plugin> <target>` | Scaffold target-specific files for an existing plugin                                                                                               |
 | `aipm list-targets`                 | List target IDs this toolkit version knows about                                                                                                    |
 
+For `build`, `validate`, `lint`, `check-support`, and `add-target`, pass a plugin directory
+path or a bare plugin name. Bare names are looked up under the repo's configured `pluginsRoot`
+(default `plugins/`). An existing directory relative to your working directory takes precedence
+as a path. Plugin paths use the nearest ancestor `aipm.repo.ts` for repo-relative paths, including
+when `pluginsRoot` spans multiple directories.
+
 ### Flags
 
 | Flag                           | Applies to           | Description                                                                                                             |

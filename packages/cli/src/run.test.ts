@@ -13,7 +13,7 @@ import * as os from 'node:os';
 import * as path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { run } from './run.js';
 
@@ -391,6 +391,32 @@ describe('aipm argument errors (exit code 2)', () => {
     const { code, err } = await invoke(['scaffold']);
     expect(code).toBe(2);
     expect(err).toContain('requires a <name>');
+  });
+
+  it('checks support by bare name under the configured pluginsRoot', async () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'aipm-plugin-argument-'));
+    const cwd = vi.spyOn(process, 'cwd').mockReturnValue(root);
+    try {
+      fs.writeFileSync(
+        path.join(root, 'aipm.repo.ts'),
+        "export default { pluginsRoot: 'agent-plugins' };\n",
+      );
+      const pluginDir = path.join(root, 'agent-plugins', 'demo');
+      fs.mkdirSync(pluginDir, { recursive: true });
+      fs.writeFileSync(
+        path.join(pluginDir, 'aipm.config.ts'),
+        "export default { targets: ['claude'] };\n",
+      );
+
+      const { code, out, err } = await invoke(['check-support', 'demo']);
+
+      expect(err).toBe('');
+      expect(code).toBe(0);
+      expect(out).toContain('demo: declared [claude]');
+    } finally {
+      cwd.mockRestore();
+      fs.rmSync(root, { recursive: true });
+    }
   });
 
   it('requires a plugin for check-support', async () => {

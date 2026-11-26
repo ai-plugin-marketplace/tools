@@ -145,13 +145,6 @@ function takeOptionValues(
 const RULE_SEVERITIES = new Set<RuleSeverityOverride>(['error', 'warn', 'info', 'off']);
 const LINT_FORMATS = new Set<LintFormat>(['text', 'json', 'sarif']);
 
-/** Resolve a `<plugin>` CLI argument to a plugin directory: an explicit path, else `<cwd>/plugins/<arg>`. */
-function resolvePluginDir(arg: string): string {
-  const asPath = path.resolve(arg);
-  if (fs.existsSync(asPath) && fs.statSync(asPath).isDirectory()) return asPath;
-  return path.join(process.cwd(), 'plugins', arg);
-}
-
 /** Format a single finding as `[plugin] code (severity): message`, with an indented hint line. */
 function formatFinding(f: Finding): string {
   const scope = f.plugin !== undefined ? `[${f.plugin}] ` : '';
@@ -447,7 +440,7 @@ export async function run(argv: readonly string[], opts: RunOptions = {}): Promi
           err.write("aipm: 'check-support' requires a <plugin> argument.\n");
           return 2;
         }
-        const report = await checkSupport(resolvePluginDir(plugin));
+        const report = await checkSupport(plugin);
         reportSupport(report, out);
         return 0;
       }
@@ -464,7 +457,7 @@ export async function run(argv: readonly string[], opts: RunOptions = {}): Promi
           err.write(`aipm: unknown target '${target}'. Known: ${known.join(', ')}.\n`);
           return 2;
         }
-        const outcome = await addTarget(resolvePluginDir(plugin), target as TargetId);
+        const outcome = await addTarget(plugin, target as TargetId);
         reportAddTarget(outcome, plugin, out);
         return 0;
       }

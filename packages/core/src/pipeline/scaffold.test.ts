@@ -412,6 +412,19 @@ describe('runScaffold — marketplace registration', () => {
     return path.join(tmpDir, 'plugins');
   }
 
+  it('registers claude at the owning repo root with a nested pluginsRoot', async () => {
+    fs.writeFileSync(
+      path.join(tmpDir, 'aipm.repo.ts'),
+      "export default { pluginsRoot: 'extensions/ai/plugins' };\n",
+    );
+    const pluginsDir = path.join(tmpDir, 'extensions/ai/plugins');
+    await runScaffold('my-plugin', pluginsDir, { targets: ['claude'] });
+
+    expect(readRegistry(tmpDir, '.claude-plugin').plugins).toStrictEqual([
+      { name: 'my-plugin', source: './extensions/ai/plugins/my-plugin' },
+    ]);
+  });
+
   it('registers the plugin in both registries when claude+cursor are in the envelope', async () => {
     await runScaffold('my-plugin', pluginsRoot(), { targets: ['claude', 'cursor'] });
 
@@ -568,6 +581,25 @@ describe('runAddTarget — marketplace registration', () => {
   function pluginsRoot(): string {
     return path.join(tmpDir, 'plugins');
   }
+
+  it('registers cursor at the owning repo root with a nested pluginsRoot', async () => {
+    fs.writeFileSync(
+      path.join(tmpDir, 'aipm.repo.ts'),
+      "export default { pluginsRoot: 'extensions/ai/plugins' };\n",
+    );
+    const pluginsDir = path.join(tmpDir, 'extensions/ai/plugins');
+    const pluginDir = path.join(pluginsDir, 'my-plugin');
+    fs.mkdirSync(pluginDir, { recursive: true });
+    fs.writeFileSync(
+      path.join(pluginDir, 'aipm.config.ts'),
+      "export default { targets: ['claude'] };\n",
+    );
+    await runAddTarget(pluginDir, 'cursor');
+
+    expect(readRegistry(tmpDir, '.cursor-plugin').plugins).toStrictEqual([
+      { name: 'my-plugin', source: './extensions/ai/plugins/my-plugin' },
+    ]);
+  });
 
   it('registers cursor when adding it to an existing claude-only plugin; idempotent on re-run', async () => {
     await runScaffold('my-plugin', pluginsRoot(), { targets: ['claude'] });

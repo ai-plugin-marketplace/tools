@@ -8,7 +8,7 @@ import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
 
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { discoverPlugins } from './discover.js';
 import { ConfigLoadError } from './load-config.js';
@@ -124,7 +124,7 @@ describe('discoverPlugins — repo root, plugin-shaped but config-less (#91)', (
 });
 
 describe('discoverPlugins — single plugin', () => {
-  it('treats a directory with a config as a single plugin and derives dist from the grandparent', async () => {
+  it('treats a directory with a config as a single plugin in the default plugins layout', async () => {
     const pluginDir = path.join(root, 'plugins', 'solo');
     writeConfig(pluginDir);
 
@@ -178,6 +178,26 @@ describe('discoverPlugins — embedded marketplace (aipm.repo.ts)', () => {
     expect(result.repoRoot).toBe(path.resolve(root));
     expect(result.pluginDirs).toStrictEqual([]);
   });
+
+  it.each(['demo', 'extensions/ai/plugins/demo'])(
+    'resolves %s to the owning repo and dist directory with a nested pluginsRoot',
+    async (argument) => {
+      writeRepoConfig(root, "{ pluginsRoot: 'extensions/ai/plugins', distDir: 'build-out' }");
+      const pluginDir = path.join(root, 'extensions/ai/plugins/demo');
+      writeConfig(pluginDir);
+
+      const cwd = vi.spyOn(process, 'cwd').mockReturnValue(root);
+      try {
+        await expect(discoverPlugins(argument)).resolves.toStrictEqual({
+          repoRoot: root,
+          distDir: path.join(root, 'build-out'),
+          pluginDirs: [pluginDir],
+        });
+      } finally {
+        cwd.mockRestore();
+      }
+    },
+  );
 
   it('resolves the relocated distDir for single-plugin input', async () => {
     writeRepoConfig(root, `{ pluginsRoot: 'agent-plugins', distDir: 'build-out' }`);

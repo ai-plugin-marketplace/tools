@@ -24,6 +24,7 @@ import { randomUUID } from 'node:crypto';
 import { performance } from 'node:perf_hooks';
 
 import { PAYLOAD_ADAPTER_FILENAME, PAYLOAD_ADAPTER_SOURCE } from '../hooks/payload-adapter.js';
+import { BundleSource } from '../targets/bundle-source.js';
 import {
   CLAUDE_HOOKS_FILENAME,
   CLAUDE_HOOKS_SOURCES,
@@ -41,12 +42,18 @@ import { bundleKiroPlugin } from '../targets/kiro/bundle.js';
 import type { AipmWorkspace } from '../config.js';
 
 import { discoverPlugins, discoverRepoPlugins } from './discover.js';
+import type { Discovery } from './discover.js';
 import {
   assertGeneratorNotDowngraded,
   getGeneratorVersion,
   type StampedArtifact,
 } from './generator-version.js';
-import { createConfigCache, loadPluginConfig, loadWorkspaceConfig } from './load-config.js';
+import {
+  ConfigLoadError,
+  createConfigCache,
+  loadPluginConfig,
+  loadWorkspaceConfig,
+} from './load-config.js';
 import type { ConfigCache } from './load-config.js';
 import { containsPath, OutputPathResolver, pathsOverlap } from './output-path.js';
 import type { OutputPath } from './output-path.js';
@@ -271,12 +278,12 @@ export interface DistBundle {
   /** Absolute destination directory under `dist/`. */
   destDir: string;
   /** Rebuild the bundle into `into` (clears `into` first, per the bundlers' contract). */
-  regenerate: (into: string) => void;
+  regenerate: (into: string, source?: BundleSource) => void;
 }
 
 /**
  * Compute the `dist/**` bundles a plugin's envelope produces, **without writing**. Shared by
- * build (calls `regenerate(destDir)`) and freshness (calls `regenerate(tempDir)` then compares).
+ * build and freshness stage the bundle in a temporary directory.
  */
 export function computeDistBundles(
   pluginDir: string,
@@ -291,8 +298,8 @@ export function computeDistBundles(
     bundles.push({
       target: 'gemini',
       destDir: path.join(distDir, 'gemini', pluginName),
-      regenerate: (into) => {
-        bundleGeminiPlugin(pluginDir, into);
+      regenerate: (into, source) => {
+        bundleGeminiPlugin(pluginDir, into, source);
       },
     });
   }
@@ -301,8 +308,8 @@ export function computeDistBundles(
     bundles.push({
       target: 'kiro',
       destDir: path.join(distDir, 'kiro', pluginName),
-      regenerate: (into) => {
-        bundleKiroPlugin(pluginDir, into);
+      regenerate: (into, source) => {
+        bundleKiroPlugin(pluginDir, into, source);
       },
     });
   }
@@ -590,22 +597,6 @@ export function rootManifestPath(repoRoot: string): string {
 }
 
 /**
- * Bundle each single-artifact host into a fresh temp dir, returning the per-host destination dir.
- * The bundlers `rmSync` their destDir (gemini/bundle.ts, kiro/bundle.ts), so they MUST be pointed
- * at a throwaway temp directory — never the repo root or any real dir. Mirrors the
- * `regenerate`/temp pattern used by {@link computeDistBundles}.
- */
-function bundleHostToTemp(host: SingleArtifactHost, pluginDir: string): string {
-  const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), `aipm-root-${host}-`));
-  if (host === 'gemini') {
-    bundleGeminiPlugin(pluginDir, tempDir);
-  } else {
-    bundleKiroPlugin(pluginDir, tempDir);
-  }
-  return tempDir;
-}
-
-/**
  * A single repo-root file the toolkit generates. `relPath` is the path relative to the repo root
  * (POSIX-separated, the tracked-set form); `content` is the exact bytes. `owner` is the target the
  * file belongs to — a single-artifact host (`gemini`/`kiro`) or a repo-root registry target
@@ -705,6 +696,7 @@ export function computeRootArtifacts(
   repoRoot: string,
   plugins: readonly RegistryPluginInfo[],
   _workspace: AipmWorkspace,
+  source?: BundleSource,
 ): RootArtifacts {
   const files: RootArtifactFile[] = [];
   const findings: Finding[] = [];
@@ -729,10 +721,15 @@ export function computeRootArtifacts(
     // `source` is `./<rel>` POSIX from the repo root; resolve to the absolute plugin dir.
     const pluginDir = path.resolve(repoRoot, declarer.source);
 
-    let tempDir: string | undefined;
+    const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), `aipm-root-${host}-`));
     try {
-      tempDir = bundleHostToTemp(host, pluginDir);
-      for (const rel of collectFilesRelative(tempDir)) {
+      const bundleDir = path.join(tempDir, 'bundle');
+      if (host === 'gemini') {
+        bundleGeminiPlugin(pluginDir, bundleDir, source);
+      } else {
+        bundleKiroPlugin(pluginDir, bundleDir, source);
+      }
+      for (const rel of collectFilesRelative(bundleDir)) {
         // Tracked set is POSIX-separated (stable across platforms; the freshness oracle and
         // sidecar compare against this exact form).
         const relPosix = rel.split(path.sep).join('/');
@@ -740,13 +737,11 @@ export function computeRootArtifacts(
           relPath: relPosix,
           owner: host,
           plugin: declarer.name,
-          content: fs.readFileSync(path.join(tempDir, rel)),
+          content: fs.readFileSync(path.join(bundleDir, rel)),
         });
       }
     } finally {
-      if (tempDir !== undefined && fs.existsSync(tempDir)) {
-        fs.rmSync(tempDir, { recursive: true });
-      }
+      fs.rmSync(tempDir, { recursive: true, force: true });
     }
   }
 
@@ -1015,6 +1010,7 @@ function assertClaudeHooksFileOwned(
 interface PlannedWriter {
   contributor: string;
   kind: 'bundle' | 'hook' | 'workspace';
+  reserved?: true;
   locations: readonly OutputPath[];
 }
 
@@ -1029,9 +1025,15 @@ function planOutputCleanup(
   writers: readonly PlannedWriter[],
   orphans: readonly string[],
   sourceDirs: readonly string[],
+  bundleInputs: Iterable<OutputPath>,
   paths: OutputPathResolver,
 ): string[] {
   const sources = sourceDirs.map((dir) => ({ dir, ...paths.locate(dir) }));
+  const linkedInputs = [...bundleInputs].filter(({ links }) => links.length > 0);
+  const removedInput = (entry: OutputPath['entry']): OutputPath | undefined =>
+    linkedInputs.find(({ destination, links }) =>
+      [destination, ...links].some((input) => containsPath(entry.identity, input.identity)),
+    );
   const filePaths = new Map<string, PlannedWriter>();
   const usedLinks = new Map<string, Set<PlannedWriter>>();
   const incompatiblePaths: string[] = [];
@@ -1044,7 +1046,7 @@ function planOutputCleanup(
 
   for (const writer of writers) {
     for (const { path: outputPath, entry, destination, links, blockedBy } of writer.locations) {
-      if (writer.kind !== 'hook') {
+      if (writer.kind !== 'hook' && !writer.reserved) {
         for (const source of sources) {
           if (
             pathsOverlap(source.dir, outputPath) ||
@@ -1074,6 +1076,19 @@ function planOutputCleanup(
         usedLinks.set(link.identity, users);
       }
       if (writer.kind === 'bundle') {
+        if (writer.reserved) {
+          trees.push({ identity: entry.identity, writer });
+          if (destination.identity !== entry.identity) {
+            trees.push({ identity: destination.identity, writer });
+          }
+          continue;
+        }
+        const input = removedInput(entry);
+        if (input !== undefined) {
+          throw new Error(
+            `Bundle cleanup at '${entry.path}' would remove an entry used by bundle input '${input.path}'.`,
+          );
+        }
         for (const tree of trees) {
           if (pathsOverlap(tree.identity, entry.identity))
             conflict(tree.writer, writer, entry.path);
@@ -1122,7 +1137,9 @@ function planOutputCleanup(
     for (const tree of trees) {
       if (!containsPath(tree.identity, link)) continue;
       for (const writer of users) {
-        if (writer !== tree.writer) conflict(tree.writer, writer, link);
+        if (writer !== tree.writer && !(writer.reserved && tree.writer.reserved)) {
+          conflict(tree.writer, writer, link);
+        }
       }
     }
   }
@@ -1151,6 +1168,12 @@ function planOutputCleanup(
         throw new Error(`Workspace cleanup at '${orphan}' overlaps plugin source '${source.dir}'.`);
       }
     }
+    const input = removedInput(entry);
+    if (input !== undefined) {
+      throw new Error(
+        `Workspace cleanup at '${orphan}' would remove an entry used by bundle input '${input.path}'.`,
+      );
+    }
     if (entry.stat.isDirectory()) {
       throw new Error(`Cannot unlink workspace output '${orphan}': it is a directory.`);
     }
@@ -1162,7 +1185,10 @@ function planOutputCleanup(
 /**
  * Emit the preflighted hook artifacts and bundles for one plugin and return the `BuildResult` (without running validation — the caller orchestrates §5.4 validation once).
  */
-function buildOnePlugin({ pluginDir, bundles, hooks }: PlannedPlugin): BuildResult {
+function buildOnePlugin(
+  { pluginDir, bundles, hooks }: PlannedPlugin,
+  stagedBundles: ReadonlyMap<DistBundle, string>,
+): BuildResult {
   const start = performance.now();
   const pluginName = path.basename(pluginDir);
   const artifacts: GeneratedFile[] = [];
@@ -1191,7 +1217,10 @@ function buildOnePlugin({ pluginDir, bundles, hooks }: PlannedPlugin): BuildResu
 
   // ── dist/** bundle trees (sentinel-less, byte-parity with oracle) ──────────
   for (const bundle of bundles) {
-    bundle.regenerate(bundle.destDir);
+    const staged = stagedBundles.get(bundle);
+    if (fs.existsSync(bundle.destDir)) fs.rmSync(bundle.destDir, { recursive: true });
+    if (staged === undefined || !fs.existsSync(staged)) continue;
+    fs.cpSync(staged, bundle.destDir, { recursive: true });
     for (const rel of collectFilesRelative(bundle.destDir)) {
       artifacts.push({
         path: path.join(bundle.destDir, rel),
@@ -1275,6 +1304,7 @@ async function planWorkspaceOutput(
   workspace: AipmWorkspace,
   cache: ConfigCache,
   paths: OutputPathResolver,
+  source: BundleSource,
 ): Promise<{
   vendorRegistries: RegistryArtifact[];
   orphans: string[];
@@ -1287,7 +1317,7 @@ async function planWorkspaceOutput(
   const priorTracked = readRootManifestPaths(repoRoot);
   const { files: rootFiles, conflicts } = planRootArtifacts(
     repoRoot,
-    computeRootArtifacts(repoRoot, plugins, workspace),
+    computeRootArtifacts(repoRoot, plugins, workspace, source),
     rootRegistryArtifactFiles(repoRoot, registries),
     priorTracked,
     paths,
@@ -1306,6 +1336,150 @@ async function planWorkspaceOutput(
     rootFiles,
     manifest: rootFiles.length > 0 || fs.existsSync(manifest) ? manifest : undefined,
   };
+}
+
+/** Stage and preflight all outputs before touching repository files. */
+async function buildWithPreflight(
+  targetPath: string,
+  { repoRoot, pluginDirs, distDir }: Discovery,
+  configCache: ConfigCache,
+  stagingDir: string,
+): Promise<BuildResult[]> {
+  const pluginBuilds = await Promise.all(
+    pluginDirs.map(async (pluginDir): Promise<PlannedPlugin> => {
+      const { targets } = await loadPluginConfig(pluginDir, configCache);
+      const hooks = computePluginHookArtifacts(pluginDir, targets);
+      assertHookArtifactsInsidePlugin(pluginDir, hooks);
+      assertClaudeHooksFileOwned(pluginDir, hooks);
+      return { pluginDir, hooks, bundles: computeDistBundles(pluginDir, distDir, targets) };
+    }),
+  );
+  const paths = new OutputPathResolver();
+  const workspace = await loadWorkspaceConfig(repoRoot);
+  const allPluginDirs =
+    path.resolve(targetPath) === repoRoot ? pluginDirs : await discoverRepoPlugins(repoRoot);
+  const selectedDirs = new Set(pluginDirs.map((dir) => paths.locate(dir).destination.identity));
+  const writers: PlannedWriter[] = [];
+  for (const pluginDir of allPluginDirs) {
+    if (selectedDirs.has(paths.locate(pluginDir).destination.identity)) continue;
+    const { targets } = await loadPluginConfig(pluginDir, configCache).catch((error: unknown) => {
+      if (workspace !== undefined || !(error instanceof ConfigLoadError)) throw error;
+      // A dist-only selective build can proceed around a broken sibling, reserving both hosts.
+      return { targets: SINGLE_ARTIFACT_HOSTS };
+    });
+    for (const bundle of computeDistBundles(pluginDir, distDir, targets)) {
+      writers.push({
+        kind: 'bundle',
+        reserved: true,
+        contributor: `${bundle.target} bundle from plugin '${path.basename(pluginDir)}'`,
+        locations: [paths.locate(bundle.destDir)],
+      });
+    }
+  }
+
+  // Bundle inputs may link to hooks that have yet to be written.
+  const stagedHooks = new Map<string, { content: string; mode: number | undefined }>();
+  for (const { pluginDir, hooks, bundles } of pluginBuilds) {
+    const plugin = path.basename(pluginDir);
+    for (const hook of hooks) {
+      const location = paths.locate(hook.absPath);
+      stagedHooks.set(location.destination.identity, {
+        content: hook.expectedContent,
+        mode: hook.executable ? 0o755 : location.destination.stat?.mode,
+      });
+      writers.push({
+        kind: 'hook',
+        contributor: `${hook.target} hook output from plugin '${plugin}'`,
+        locations: [location],
+      });
+    }
+    for (const bundle of bundles) {
+      writers.push({
+        kind: 'bundle',
+        contributor: `${bundle.target} bundle from plugin '${plugin}'`,
+        locations: [paths.locate(bundle.destDir)],
+      });
+    }
+  }
+
+  const bundleInputs = new Map<string, OutputPath>();
+  const source = new BundleSource((src) => {
+    let location = bundleInputs.get(src);
+    if (location === undefined) {
+      location = paths.locate(src);
+      bundleInputs.set(src, location);
+    }
+    return location.blockedBy === undefined
+      ? stagedHooks.get(location.destination.identity)
+      : undefined;
+  });
+  const stagedBundles = new Map<DistBundle, string>();
+  for (const { bundles } of pluginBuilds) {
+    for (const bundle of bundles) {
+      const into = path.join(stagingDir, String(stagedBundles.size));
+      bundle.regenerate(into, source);
+      stagedBundles.set(bundle, into);
+    }
+  }
+
+  const workspaceOutput =
+    workspace === undefined
+      ? undefined
+      : await planWorkspaceOutput(repoRoot, allPluginDirs, workspace, configCache, paths, source);
+
+  if (workspaceOutput !== undefined) {
+    for (const registry of workspaceOutput.vendorRegistries) {
+      writers.push({
+        kind: 'workspace',
+        contributor: `the ${registry.target} registry`,
+        locations: [paths.locate(registry.absPath)],
+      });
+    }
+    for (const file of workspaceOutput.rootFiles) {
+      writers.push({
+        kind: 'workspace',
+        contributor: rootArtifactSource(file),
+        locations: file.locations,
+      });
+    }
+    if (workspaceOutput.manifest !== undefined) {
+      writers.push({
+        kind: 'workspace',
+        contributor: 'the generated-root manifest',
+        locations: [paths.locate(workspaceOutput.manifest)],
+      });
+    }
+  }
+  const cleanup = planOutputCleanup(
+    writers,
+    workspaceOutput?.orphans ?? [],
+    [...new Set([...pluginDirs, ...allPluginDirs])],
+    bundleInputs.values(),
+    paths,
+  );
+
+  const results = pluginBuilds.map((plugin) => buildOnePlugin(plugin, stagedBundles));
+  if (workspaceOutput !== undefined) {
+    const { vendorRegistries, rootFiles, manifest } = workspaceOutput;
+    const workspaceArtifacts: GeneratedFile[] = [];
+    for (const registry of vendorRegistries) {
+      writeFileEnsuringDir(registry.absPath, registry.expectedContent);
+      workspaceArtifacts.push({ path: registry.absPath, target: registry.target });
+    }
+    for (const file of rootFiles) {
+      const abs = path.join(repoRoot, file.relPath);
+      fs.mkdirSync(path.dirname(abs), { recursive: true });
+      fs.writeFileSync(abs, file.content);
+      workspaceArtifacts.push({ path: abs, target: file.target });
+    }
+    for (const orphan of cleanup) fs.rmSync(orphan);
+    if (manifest !== undefined) {
+      writeFileEnsuringDir(manifest, serializeRootManifest(rootFiles.map((file) => file.relPath)));
+      if (rootFiles.length > 0) workspaceArtifacts.push({ path: manifest, target: 'shared' });
+    }
+    for (const result of results) result.artifacts.push(...workspaceArtifacts);
+  }
+  return results;
 }
 
 // ---------------------------------------------------------------------------
@@ -1343,97 +1517,17 @@ export async function runBuild(targetPath: string, opts?: BuildOptions): Promise
   const stampedArtifacts = await collectStampedArtifacts(repoRoot, pluginDirs, configCache);
   assertGeneratorNotDowngraded(getGeneratorVersion(), stampedArtifacts, opts?.forceDowngrade);
 
-  const pluginBuilds = await Promise.all(
-    pluginDirs.map(async (pluginDir): Promise<PlannedPlugin> => {
-      const { targets } = await loadPluginConfig(pluginDir, configCache);
-      const hooks = computePluginHookArtifacts(pluginDir, targets);
-      assertHookArtifactsInsidePlugin(pluginDir, hooks);
-      assertClaudeHooksFileOwned(pluginDir, hooks);
-      return { pluginDir, hooks, bundles: computeDistBundles(pluginDir, distDir, targets) };
-    }),
-  );
-  const paths = new OutputPathResolver();
-  const writers: PlannedWriter[] = [];
-  for (const { pluginDir, hooks, bundles } of pluginBuilds) {
-    const plugin = path.basename(pluginDir);
-    for (const hook of hooks) {
-      writers.push({
-        kind: 'hook',
-        contributor: `${hook.target} hook output from plugin '${plugin}'`,
-        locations: [paths.locate(hook.absPath)],
-      });
-    }
-    for (const bundle of bundles) {
-      writers.push({
-        kind: 'bundle',
-        contributor: `${bundle.target} bundle from plugin '${plugin}'`,
-        locations: [paths.locate(bundle.destDir)],
-      });
-    }
-  }
-
-  const workspace = await loadWorkspaceConfig(repoRoot);
-  // Targeted builds still protect sibling sources. Workspace outputs represent the discovered repo.
-  const allPluginDirs =
-    path.resolve(targetPath) !== repoRoot &&
-    (workspace !== undefined || writers.some((w) => w.kind === 'bundle'))
-      ? await discoverRepoPlugins(repoRoot)
-      : pluginDirs;
-  const workspaceOutput =
-    workspace === undefined
-      ? undefined
-      : await planWorkspaceOutput(repoRoot, allPluginDirs, workspace, configCache, paths);
-
-  if (workspaceOutput !== undefined) {
-    for (const registry of workspaceOutput.vendorRegistries) {
-      writers.push({
-        kind: 'workspace',
-        contributor: `the ${registry.target} registry`,
-        locations: [paths.locate(registry.absPath)],
-      });
-    }
-    for (const file of workspaceOutput.rootFiles) {
-      writers.push({
-        kind: 'workspace',
-        contributor: rootArtifactSource(file),
-        locations: file.locations,
-      });
-    }
-    if (workspaceOutput.manifest !== undefined) {
-      writers.push({
-        kind: 'workspace',
-        contributor: 'the generated-root manifest',
-        locations: [paths.locate(workspaceOutput.manifest)],
-      });
-    }
-  }
-  const cleanup = planOutputCleanup(
-    writers,
-    workspaceOutput?.orphans ?? [],
-    [...new Set([...pluginDirs, ...allPluginDirs])],
-    paths,
-  );
-
-  const results = pluginBuilds.map(buildOnePlugin);
-  if (workspaceOutput !== undefined) {
-    const { vendorRegistries, rootFiles, manifest } = workspaceOutput;
-    const workspaceArtifacts: GeneratedFile[] = [];
-    for (const registry of vendorRegistries) {
-      writeFileEnsuringDir(registry.absPath, registry.expectedContent);
-      workspaceArtifacts.push({ path: registry.absPath, target: registry.target });
-    }
-    for (const file of rootFiles) {
-      const abs = path.join(repoRoot, file.relPath);
-      fs.mkdirSync(path.dirname(abs), { recursive: true });
-      fs.writeFileSync(abs, file.content);
-      workspaceArtifacts.push({ path: abs, target: file.target });
-    }
-    for (const orphan of cleanup) fs.rmSync(orphan);
-    if (manifest !== undefined) {
-      writeFileEnsuringDir(manifest, serializeRootManifest(rootFiles.map((file) => file.relPath)));
-      if (rootFiles.length > 0) workspaceArtifacts.push({ path: manifest, target: 'shared' });
-    }
-    for (const result of results) result.artifacts.push(...workspaceArtifacts);
+  const stagingDir = fs.mkdtempSync(path.join(os.tmpdir(), 'aipm-build-'));
+  let results: BuildResult[];
+  try {
+    results = await buildWithPreflight(
+      targetPath,
+      { repoRoot, pluginDirs, distDir },
+      configCache,
+      stagingDir,
+    );
+  } finally {
+    fs.rmSync(stagingDir, { recursive: true, force: true });
   }
 
   // §5.4: build runs validate before returning success. Skip freshness here — we just wrote the

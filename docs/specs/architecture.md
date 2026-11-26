@@ -279,9 +279,15 @@ To prevent this, every sentinel-carrying artifact is **stamped** with the genera
 2. **Guard.** At the start of `aipm build`, the toolkit reads the stamped version of every existing (committed) sentinel-carrying artifact. If the installed core version is **older** (by semver precedence, not string comparison) than any stamped version, the build **refuses** with a non-zero exit and a message naming both versions and suggesting `pnpm install`. Equal-or-newer installs, unstamped/first-time trees, and an empty artifact set all proceed and (re)stamp with the installed version. The `--force-downgrade` flag overrides the guard, proceeding and restamping with the older version.
 3. **All-or-nothing.** The guard runs before any write, so a refusal leaves the whole tree untouched — including the **sentinel-less** artifacts (`dist/**` bundles, marketplace registries, single-artifact-host root files), which carry no stamp of their own but are protected transitively: as long as at least one stamped artifact reveals the downgrade, the build aborts and rewrites nothing. A repo whose hooks-authoring plugins all emit at least one stamped hook artifact is fully covered; the guard's coverage is the union of stamped artifacts across the repo.
 
-Before changing repository files, `aipm build` checks hook files, bundle trees, workspace files, and cleanup paths together. Bundle trees must be disjoint from other outputs and discovered plugin sources. Cleanup also protects symlinks used to reach those sources. An orphan is removed by its directory entry, and a path claimed by current output is kept.
+Before changing repository files, `aipm build` checks hook files, bundle trees, workspace files, and cleanup paths together. Bundle trees must be disjoint from other outputs and discovered plugin sources. A selective build also reserves discovered siblings’ bundle destinations. Cleanup protects plugin source directories and the targets and symlink chains of bundle inputs. An orphan is removed by its directory entry, and a path claimed by current output is kept. Bundle staging sees planned hook bytes before hook files are written. Path resolution probes known entries, so ancestor directories need only grant search permission for traversal.
 
 Workspace builds compare repo-root files by filesystem destination, including parent symlinks and case aliases on case-insensitive filesystems. Different bytes produce a hard `root-artifact-collision` naming both contributors. Byte-identical output is written once and reported as `shared` when multiple targets contribute it. A generated file may not be an ancestor of another output.
+
+Known limitations:
+
+- Ownership is path-based. Separate hard links to the same inode can still receive competing writes.
+- When a remaining writer uses a leaf symlink, the generated-root manifest can retain the alias while losing ownership of its target.
+- Case handling probes known entries and inherits the parent policy when it cannot probe a directory. On NTFS, a directory with a different policy from its parent, including an empty directory, can therefore be misclassified.
 
 ### 4.4 Marketplace registry
 

@@ -32,28 +32,22 @@ export function pathsOverlap(first: string, second: string): boolean {
 export class OutputPathResolver {
   private readonly caseInsensitive = new Map<string, boolean>();
 
-  private ignoresCase(directory: PathEntry): boolean {
+  private ignoresCase(directory: PathEntry, name: string, stat: fs.Stats | undefined): boolean {
     const cached = this.caseInsensitive.get(directory.path);
     if (cached !== undefined) return cached;
 
-    let insensitive: boolean | undefined;
-    if (directory.stat?.isDirectory()) {
-      const names = new Set(fs.readdirSync(directory.path));
-      for (const name of names) {
-        const alternate = name.replace(/[a-z]/i, (letter) =>
-          letter === letter.toLowerCase() ? letter.toUpperCase() : letter.toLowerCase(),
-        );
-        if (alternate === name) continue;
-        // Two directory entries with different case may even be hard links to the same inode.
-        insensitive =
-          !names.has(alternate) &&
-          fs.lstatSync(path.join(directory.path, alternate), { throwIfNoEntry: false }) !==
-            undefined;
-        break;
-      }
+    const alternate = name.replace(/[a-z]/i, (letter) =>
+      letter === letter.toLowerCase() ? letter.toUpperCase() : letter.toLowerCase(),
+    );
+    // Probe a known child by name. This needs search permission, even when the directory
+    // cannot be listed. Without a known child to probe, inherit the parent's behavior.
+    if (alternate === name || stat === undefined) return directory.inheritedCaseInsensitivity;
+    const other = fs.lstatSync(path.join(directory.path, alternate), { throwIfNoEntry: false });
+    const insensitive = other?.dev === stat.dev && other.ino === stat.ino;
+    if (insensitive && !stat.isDirectory() && stat.nlink > 1) {
+      // The alternate may be another hard link. It cannot establish the directory's case policy.
+      return directory.inheritedCaseInsensitivity;
     }
-    // An empty or missing directory has nothing to probe. Inherit its parent's behavior.
-    insensitive ??= directory.inheritedCaseInsensitivity;
     this.caseInsensitive.set(directory.path, insensitive);
     return insensitive;
   }
@@ -91,7 +85,7 @@ export class OutputPathResolver {
         }
         const stat =
           blockedBy === undefined ? fs.lstatSync(entryPath, { throwIfNoEntry: false }) : undefined;
-        const parentIgnoresCase = this.ignoresCase(parent);
+        const parentIgnoresCase = this.ignoresCase(parent, name, stat);
         entry = {
           path: entryPath,
           identity: path.join(parent.identity, parentIgnoresCase ? name.toLowerCase() : name),

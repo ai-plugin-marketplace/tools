@@ -2,4 +2,4 @@
 '@ai-plugin-marketplace/core': patch
 ---
 
-Protect plugin source directories from overlapping bundle destinations. Refuse conflicting repo-root output before writing, and emit byte-identical shared files only once.
+Check bundle trees and generated files together before writing. Protect plugin sources and their symlinks during cleanup, keep paths owned by current output, and report byte-identical root files from multiple targets as shared.

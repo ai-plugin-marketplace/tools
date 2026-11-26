@@ -29,13 +29,18 @@
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import { runBuild } from './build.js';
 import { runValidate } from './validate.js';
 import { synthRegistryRepo } from '../test-support/synth-plugin.js';
 import type { SynthRegistryPlugin, SynthRegistryRepo } from '../test-support/synth-plugin.js';
 import type { Finding, FindingCode } from './types.js';
+
+vi.mock('node:fs', async (importOriginal) => {
+  const fs = await importOriginal<typeof import('node:fs')>();
+  return { ...fs, writeFileSync: vi.fn(fs.writeFileSync) };
+});
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -270,14 +275,17 @@ describe('single-artifact-host — collision guard', () => {
         return;
       }
 
-      const results = await runBuild(repo.repoRoot);
       const destination = path.join(repo.repoRoot, skill);
+      const write = vi.mocked(fs.writeFileSync);
+      write.mockClear();
+      const results = await runBuild(repo.repoRoot);
+      expect(write.mock.calls.filter(([file]) => file === destination)).toHaveLength(1);
       expect(fs.readFileSync(destination, 'utf-8')).toBe(content);
       expect(readSidecarPaths(repo.repoRoot).filter((rel) => rel === skill)).toEqual([skill]);
       for (const result of results) {
-        expect(result.artifacts.filter((artifact) => artifact.path === destination)).toHaveLength(
-          1,
-        );
+        expect(result.artifacts.filter((artifact) => artifact.path === destination)).toEqual([
+          { path: destination, target: 'shared' },
+        ]);
       }
       expect((await runValidate(repo.repoRoot, { ci: true })).passed).toBe(true);
     },
@@ -317,6 +325,220 @@ describe('single-artifact-host — collision guard', () => {
 
     const result = await runValidate(repo.repoRoot, { ci: true });
     expect(ofCode(result.findings, 'root-artifact-collision').length).toBeGreaterThanOrEqual(1);
+  });
+});
+
+describe('runBuild — output ownership across phases', () => {
+  let repo: SynthRegistryRepo | undefined;
+  afterEach(() => {
+    repo?.cleanup();
+  });
+
+  it('rejects a root file inside a bundle tree before writing any output', async () => {
+    const gemini = geminiPlugin('gem');
+    const kiro = kiroPlugin('kir');
+    const resource = 'skills/gemini/gem/GEMINI.md';
+    repo = synthRegistryRepo(
+      [
+        {
+          ...gemini,
+          targets: ['gemini', 'claude'],
+          files: { ...gemini.files, 'hooks/claude.yaml': 'schemaVersion: "0.1.0"\nhooks: {}\n' },
+        },
+        { ...kiro, files: { ...kiro.files, [resource]: '# Kiro\n' } },
+      ],
+      WORKSPACE,
+    );
+    fs.writeFileSync(
+      path.join(repo.repoRoot, 'aipm.repo.ts'),
+      "export default { distDir: 'skills' };",
+    );
+
+    await expect(runBuild(repo.repoRoot)).rejects.toThrow(
+      /Build output collision at .*GEMINI.md.*gemini bundle from plugin 'gem'.*plugin 'kir' \(kiro\)/,
+    );
+    expect(exists(repo.repoRoot, 'plugins', 'gem', 'hooks', 'hooks.json')).toBe(false);
+    expect(exists(repo.repoRoot, 'skills')).toBe(false);
+    expect(exists(repo.repoRoot, 'GEMINI.md')).toBe(false);
+    expect(exists(repo.repoRoot, ...SIDECAR_REL)).toBe(false);
+  });
+
+  it('keeps a current bundle file that was previously tracked as root output', async () => {
+    const kiro = kiroPlugin('kir');
+    const resource = 'skills/gemini/gem/GEMINI.md';
+    repo = synthRegistryRepo(
+      [geminiPlugin('gem'), { ...kiro, files: { ...kiro.files, [resource]: '# Kiro\n' } }],
+      WORKSPACE,
+    );
+    await runBuild(repo.repoRoot);
+    expect(readSidecarPaths(repo.repoRoot)).toContain(resource);
+
+    fs.rmSync(path.join(repo.repoRoot, 'plugins', 'kir', 'skills'), { recursive: true });
+    fs.writeFileSync(
+      path.join(repo.repoRoot, 'aipm.repo.ts'),
+      "export default { distDir: 'skills' };",
+    );
+
+    await runBuild(repo.repoRoot);
+    expect(fs.readFileSync(path.join(repo.repoRoot, resource), 'utf-8')).toBe('# gem\n');
+    expect(readSidecarPaths(repo.repoRoot)).not.toContain(resource);
+    expect(ofCode((await runValidate(repo.repoRoot, { ci: true })).findings, 'freshness')).toEqual(
+      [],
+    );
+  });
+
+  it('protects an intermediate link used to discover a plugin source', async () => {
+    repo = synthRegistryRepo([geminiPlugin('gem')]);
+    const hop = path.join(repo.repoRoot, 'dist', 'gemini', 'gem', 'hop');
+    fs.mkdirSync(path.dirname(hop), { recursive: true });
+    fs.symlinkSync(path.join(repo.repoRoot, 'plugins'), hop, 'junction');
+    fs.symlinkSync(hop, path.join(repo.repoRoot, 'plugin-alias'), 'junction');
+    fs.writeFileSync(
+      path.join(repo.repoRoot, 'aipm.repo.ts'),
+      "export default { pluginsRoot: 'plugin-alias' };",
+    );
+
+    await expect(runBuild(repo.repoRoot)).rejects.toThrow(/symlink.*hop.*plugin-alias/s);
+    expect(fs.lstatSync(hop).isSymbolicLink()).toBe(true);
+    expect(exists(repo.repoRoot, 'plugin-alias', 'gem', 'aipm.config.ts')).toBe(true);
+  });
+
+  it('rejects two bundle trees reached through different parent paths', async () => {
+    repo = synthRegistryRepo([comboPlugin('combo')]);
+    const gemini = path.join(repo.repoRoot, 'dist', 'gemini');
+    fs.mkdirSync(gemini, { recursive: true });
+    fs.symlinkSync(gemini, path.join(repo.repoRoot, 'dist', 'kiro'), 'junction');
+
+    await expect(runBuild(repo.repoRoot)).rejects.toThrow(/gemini.*kiro/s);
+    expect(fs.readdirSync(gemini)).toEqual([]);
+  });
+
+  for (const alias of ['symlink', 'case'] as const) {
+    it(
+      'compares root bytes at a common destination reached via a ' + alias + ' alias',
+      async () => {
+        const gemini = geminiPlugin('gem');
+        const kiro = kiroPlugin('kir');
+        const second = alias === 'case' ? 'A' : 'b';
+        repo = synthRegistryRepo(
+          [
+            { ...gemini, files: { ...gemini.files, 'skills/a/data.txt': 'Gemini' } },
+            { ...kiro, files: { ...kiro.files, ['skills/' + second + '/data.txt']: 'Kiro' } },
+          ],
+          WORKSPACE,
+        );
+        const skill = path.join(repo.repoRoot, 'skills', 'a');
+        if (alias === 'symlink') {
+          fs.mkdirSync(skill, { recursive: true });
+          fs.symlinkSync(skill, path.join(repo.repoRoot, 'skills', second), 'junction');
+        } else if (!exists(repo.repoRoot, 'PLUGINS')) {
+          await runBuild(repo.repoRoot);
+          expect(fs.readFileSync(path.join(skill, 'data.txt'), 'utf-8')).toBe('Gemini');
+          expect(fs.readFileSync(path.join(path.dirname(skill), 'A', 'data.txt'), 'utf-8')).toBe(
+            'Kiro',
+          );
+          return;
+        }
+
+        await expect(runBuild(repo.repoRoot)).rejects.toThrow(/root-artifact-collision.*gem.*kir/);
+        expect(exists(repo.repoRoot, 'dist')).toBe(false);
+        expect(exists(skill, 'data.txt')).toBe(false);
+        expect(
+          ofCode(
+            (await runValidate(repo.repoRoot, { ci: true })).findings,
+            'root-artifact-collision',
+          ),
+        ).toEqual([expect.objectContaining({ severity: 'hard' })]);
+      },
+    );
+  }
+
+  it('keeps a root file when its current writer uses a different parent alias', async () => {
+    const gemini = geminiPlugin('gem');
+    const kiro = kiroPlugin('kir');
+    const first = 'skills/a/data.txt';
+    const second = 'skills/b/data.txt';
+    repo = synthRegistryRepo(
+      [
+        { ...gemini, files: { ...gemini.files, [first]: 'shared' } },
+        { ...kiro, files: { ...kiro.files, [second]: 'shared' } },
+      ],
+      WORKSPACE,
+    );
+    const abs = path.join(repo.repoRoot, first);
+    fs.mkdirSync(path.dirname(abs), { recursive: true });
+    fs.symlinkSync(path.dirname(abs), path.dirname(path.join(repo.repoRoot, second)), 'junction');
+    await runBuild(repo.repoRoot);
+    expect(readSidecarPaths(repo.repoRoot)).toContain(first);
+    expect(readSidecarPaths(repo.repoRoot)).not.toContain(second);
+    expect((await runValidate(repo.repoRoot, { ci: true })).passed).toBe(true);
+
+    fs.rmSync(path.join(repo.repoRoot, 'plugins', 'gem', first));
+    await runBuild(repo.repoRoot);
+    expect(fs.readFileSync(abs, 'utf-8')).toBe('shared');
+    expect(readSidecarPaths(repo.repoRoot)).not.toContain(first);
+    expect(readSidecarPaths(repo.repoRoot)).toContain(second);
+    expect((await runValidate(repo.repoRoot, { ci: true })).passed).toBe(true);
+  });
+
+  it.each([false, true])(
+    'rejects a planned file that is also an output directory (already tracked: %s)',
+    async (tracked) => {
+      const gemini = geminiPlugin('gem');
+      const kiro = kiroPlugin('kir');
+      repo = synthRegistryRepo(
+        [
+          { ...gemini, files: { ...gemini.files, 'skills/review/data': 'Gemini' } },
+          { ...kiro, files: { ...kiro.files, 'skills/review/data/subdir/a.txt': 'Kiro' } },
+        ],
+        WORKSPACE,
+      );
+
+      if (tracked) {
+        const abs = path.join(repo.repoRoot, 'skills/review/data');
+        fs.mkdirSync(path.dirname(abs), { recursive: true });
+        fs.writeFileSync(abs, 'previous output');
+        const manifest = path.join(repo.repoRoot, ...SIDECAR_REL);
+        fs.mkdirSync(path.dirname(manifest), { recursive: true });
+        fs.writeFileSync(manifest, JSON.stringify({ version: 1, paths: ['skills/review/data'] }));
+      }
+
+      await expect(runBuild(repo.repoRoot)).rejects.toThrow(/skills\/review\/data.*gem.*kir/s);
+      expect(exists(repo.repoRoot, 'dist')).toBe(false);
+      if (tracked) {
+        expect(fs.readFileSync(path.join(repo.repoRoot, 'skills/review/data'), 'utf-8')).toBe(
+          'previous output',
+        );
+      } else {
+        expect(exists(repo.repoRoot, 'skills')).toBe(false);
+      }
+    },
+  );
+
+  it('builds a standalone plugin with no repo configuration or plugins container', async () => {
+    repo = synthRegistryRepo([geminiPlugin('gem')]);
+    fs.renameSync(path.join(repo.repoRoot, 'plugins'), path.join(repo.repoRoot, 'custom'));
+
+    await runBuild(path.join(repo.repoRoot, 'custom', 'gem'));
+    expect(exists(repo.repoRoot, 'dist', 'gemini', 'gem', 'gemini-extension.json')).toBe(true);
+    expect(exists(repo.repoRoot, 'GEMINI.md')).toBe(false);
+  });
+
+  it('unlinks an orphan symlink and preserves its target inside the plugin', async () => {
+    repo = synthRegistryRepo([geminiPlugin('gem')], WORKSPACE);
+    await runBuild(repo.repoRoot);
+    const source = path.join(repo.repoRoot, 'plugins', 'gem', 'GEMINI.md');
+    const orphan = path.join(repo.repoRoot, 'GEMINI.md');
+    fs.rmSync(orphan);
+    fs.symlinkSync(source, orphan, 'file');
+    fs.writeFileSync(
+      path.join(path.dirname(source), 'aipm.config.ts'),
+      "export default { version: '0.1.0', targets: ['claude'] };",
+    );
+
+    await runBuild(repo.repoRoot);
+    expect(fs.lstatSync(orphan, { throwIfNoEntry: false })).toBeUndefined();
+    expect(fs.readFileSync(source, 'utf-8')).toBe('# gem\n');
   });
 });
 

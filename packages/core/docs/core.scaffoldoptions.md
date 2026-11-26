@@ -4,7 +4,7 @@
 
 ## ScaffoldOptions interface
 
-Options for [scaffold()](./core.scaffold.md)<!-- -->.
+Options for scaffolding a new plugin.
 
 **Signature:**
 
@@ -51,6 +51,25 @@ string
 </td><td>
 
 _(Optional)_ Description field for the generated plugin.
+
+
+</td></tr>
+<tr><td>
+
+[searchAncestors?](./core.scaffoldoptions.searchancestors.md)
+
+
+</td><td>
+
+
+</td><td>
+
+boolean
+
+
+</td><td>
+
+_(Optional)_ Use the nearest repo layout within the checkout. Defaults to the working directory.
 
 
 </td></tr>

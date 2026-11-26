@@ -40,7 +40,8 @@ import { bundleKiroPlugin } from '../targets/kiro/bundle.js';
 
 import type { AipmWorkspace } from '../config.js';
 
-import { discoverPlugins } from './discover.js';
+import { discoverPlugins, discoverRepo } from './discover.js';
+import { readRepoLayout, registryPluginPath } from './resolve-plugin.js';
 import {
   assertGeneratorNotDowngraded,
   getGeneratorVersion,
@@ -60,6 +61,7 @@ import { runValidate } from './validate.js';
 import type {
   BuildOptions,
   BuildResult,
+  ValidationResult,
   Finding,
   GeneratedFile,
   GeneratedFileTarget,
@@ -549,10 +551,11 @@ export async function collectRegistryPlugins(
   pluginDirs: readonly string[],
   cache?: ConfigCache,
 ): Promise<RegistryPluginInfo[]> {
+  const layout = await readRepoLayout(repoRoot);
   const infos: RegistryPluginInfo[] = [];
   for (const pluginDir of pluginDirs) {
     const config = await loadPluginConfig(pluginDir, cache);
-    const source = `./${path.relative(repoRoot, pluginDir).split(path.sep).join('/')}`;
+    const source = `./${path.relative(repoRoot, registryPluginPath(layout, pluginDir)).split(path.sep).join('/')}`;
     infos.push({
       name: path.basename(pluginDir),
       source,
@@ -1125,7 +1128,17 @@ async function collectStampedArtifacts(
  *   a transform fails, or (when `failFast`) post-build validation reports hard findings.
  */
 export async function runBuild(targetPath: string, opts?: BuildOptions): Promise<BuildResult[]> {
-  const { repoRoot, pluginDirs, distDir } = await discoverPlugins(targetPath);
+  const { results } = await runBuildAndValidate(targetPath, opts, { skipFreshness: true });
+  return results;
+}
+
+export async function runBuildAndValidate(
+  targetPath: string,
+  opts: BuildOptions | undefined,
+  validationOptions: { ci?: boolean; skipFreshness?: boolean },
+): Promise<{ results: BuildResult[]; validation: ValidationResult }> {
+  const discovery = await discoverPlugins(targetPath, opts);
+  const { repoRoot, pluginDirs, distDir, isRepoRoot } = discovery;
 
   // One per-invocation config memo shared across the build loop and registry collection, so each
   // plugin's aipm.config.ts is transpiled once rather than reloaded per phase (see ConfigCache).
@@ -1158,8 +1171,7 @@ export async function runBuild(targetPath: string, opts?: BuildOptions): Promise
     // For repo-root input, pluginDirs already covers the whole repo — reuse it (and the warm
     // config cache) instead of re-discovering and reloading. Only single-plugin input needs a
     // repo-wide re-scan to make the registry repo-complete.
-    const isRepoRoot = path.resolve(targetPath) === repoRoot;
-    const allPluginDirs = isRepoRoot ? pluginDirs : (await discoverPlugins(repoRoot)).pluginDirs;
+    const allPluginDirs = isRepoRoot ? pluginDirs : (await discoverRepo(discovery)).pluginDirs;
     const registryPlugins = await collectRegistryPlugins(repoRoot, allPluginDirs, configCache);
     const registries = computeRegistryArtifacts(repoRoot, registryPlugins, workspace);
     // Split vendor-subdirectory registries (written + orphan-swept here, unchanged) from repo-root
@@ -1248,12 +1260,10 @@ export async function runBuild(targetPath: string, opts?: BuildOptions): Promise
     }
   }
 
-  // §5.4: build runs validate before returning success. Skip freshness here — we just wrote the
-  // artifacts, so they are fresh by construction; running it would be redundant work.
-  // The published-surface boundary check is skipped too: it concerns contributor files outside the
-  // plugins, which is `validate`'s business, not a reason for a build to fail.
-  const validation = await runValidate(targetPath, {
-    skipFreshness: true,
+  // The CLI reports freshness findings; the path-only build API skips this check after writing.
+  // The published-surface boundary check concerns contributor files outside the plugins.
+  const validation = await runValidate(discovery, {
+    ...validationOptions,
     skipPublishedSurfaceBoundary: true,
   });
   if (opts?.failFast && !validation.passed) {
@@ -1266,7 +1276,7 @@ export async function runBuild(targetPath: string, opts?: BuildOptions): Promise
     );
   }
 
-  return results;
+  return { results, validation };
 }
 
 /**

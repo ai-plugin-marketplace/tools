@@ -4,7 +4,7 @@
 
 ## validate() function
 
-Validate a single plugin or every plugin under a repo root, in the order defined by §10.1. Freshness severity follows the CI environment (§10.2).
+Validate a single plugin or every plugin under a repo root, in the order defined by §10.1. Accepts a repo path or plugin directory path. CLI name lookup is opt-in. Freshness severity follows the CI environment (§10.2).
 
 **Signature:**
 

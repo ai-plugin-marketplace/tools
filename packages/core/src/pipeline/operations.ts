@@ -10,11 +10,9 @@
  * @see docs/specs/architecture.md §8.1
  */
 
-import * as path from 'node:path';
-
-import { runBuild } from './build.js';
+import { runBuild, runBuildAndValidate } from './build.js';
 import { runInit } from './init.js';
-import { loadRepoConfig } from './load-config.js';
+import { findRepoLayout, readRepoLayout } from './resolve-plugin.js';
 import { runRefreshScaffold } from './scaffold-refresh.js';
 import { runScaffold, runAddTarget, runCheckSupport } from './scaffold.js';
 import { TARGET_IDS } from './types.js';
@@ -27,6 +25,7 @@ import type {
   InitOutcome,
   MigrateOptions,
   MigrateResult,
+  PluginArgumentOptions,
   RefreshOptions,
   RefreshOutcome,
   ScaffoldOptions,
@@ -42,9 +41,9 @@ function isCi(): boolean {
 }
 
 /**
- * Build a single plugin or every plugin under a repo root. `path` may be a plugin directory
- * (contains `aipm.config.ts`) or a repo root (contains `plugins/`); the orchestrator detects
- * which and returns a length-1 array for single-plugin input. See §5.2, §8.1.
+ * Build a single plugin or every plugin under a repo root. Pass a repo path, plugin directory
+ * path, or opt into CLI name lookup. Single-plugin input returns a
+ * length-1 array. See §5.2, §8.1.
  *
  * @public
  */
@@ -53,7 +52,21 @@ export function build(targetPath: string, opts?: BuildOptions): Promise<BuildRes
 }
 
 /**
+ * Build and validate the same discovered target, returning the build results and validation
+ * findings. The published-surface boundary check is reserved for standalone validation.
+ *
+ * @public
+ */
+export function buildAndValidate(
+  targetPath: string,
+  opts?: BuildOptions,
+): Promise<{ results: BuildResult[]; validation: ValidationResult }> {
+  return runBuildAndValidate(targetPath, opts, { ci: isCi() });
+}
+
+/**
  * Validate a single plugin or every plugin under a repo root, in the order defined by §10.1.
+ * Accepts a repo path or plugin directory path. CLI name lookup is opt-in.
  * Freshness severity follows the CI environment (§10.2).
  *
  * @public
@@ -95,18 +108,30 @@ export function refreshScaffold(
 }
 
 /**
- * Scaffold a new plugin under the cwd's configured plugins root (`<cwd>/plugins/<name>` by
- * default, or the relocated `pluginsRoot` from an `aipm.repo.ts`). The plugins directory is
- * derived from the current working directory, matching how `aipm scaffold` is invoked from a repo
- * root.
+ * Scaffold a plugin and return its repo-relative path.
  *
  * @public
  */
-export async function scaffold(name: string, opts: ScaffoldOptions = {}): Promise<void> {
+export function scaffold(
+  name: string,
+  opts: ScaffoldOptions & { returnPath: true },
+): Promise<string>;
+/**
+ * Scaffold a plugin under the working directory’s configured or default plugins root.
+ * Set `searchAncestors` to use the nearest repo layout within the checkout.
+ *
+ * @public
+ */
+export function scaffold(name: string, opts?: ScaffoldOptions): Promise<void>;
+/** @public */
+export async function scaffold(
+  name: string,
+  opts: ScaffoldOptions & { returnPath?: true } = {},
+): Promise<string | void> {
   const cwd = process.cwd();
-  const repoConfig = await loadRepoConfig(cwd);
-  const pluginsDir = path.join(cwd, repoConfig.pluginsRoot);
-  return runScaffold(name, pluginsDir, opts);
+  const layout = opts.searchAncestors ? await findRepoLayout(cwd) : await readRepoLayout(cwd);
+  const pluginPath = await runScaffold(name, layout.pluginsDir, opts, layout);
+  if (opts.returnPath) return pluginPath;
 }
 
 /**
@@ -126,23 +151,32 @@ export function migrate(_path: string, _opts?: MigrateOptions): Promise<MigrateR
 
 /**
  * Diagnose a plugin's support envelope: declared targets, missing artifacts, addable targets (§6.4).
+ * Pass a plugin directory path, or set `opts.lookupByName` to also accept bare plugin names.
  *
  * @public
  */
-export function checkSupport(pluginDir: string): Promise<SupportReport> {
-  return runCheckSupport(pluginDir);
+export function checkSupport(
+  pluginDir: string,
+  opts?: PluginArgumentOptions,
+): Promise<SupportReport> {
+  return runCheckSupport(pluginDir, opts?.lookupByName);
 }
 
 /**
  * Scaffold skeleton files for a new target in an existing plugin (§6.4). Preserve-or-warn, never
  * destructive: an already-materialized target (every file it would write already exists) is a
  * friendly no-op (`status: 'already-present'`) rather than a thrown error, and existing files are
- * never overwritten — see {@link AddTargetOutcome}.
+ * never overwritten — see {@link AddTargetOutcome}. Pass a plugin directory path, or set
+ * `opts.lookupByName` to also accept bare plugin names.
  *
  * @public
  */
-export function addTarget(pluginDir: string, target: TargetId): Promise<AddTargetOutcome> {
-  return runAddTarget(pluginDir, target);
+export function addTarget(
+  pluginDir: string,
+  target: TargetId,
+  opts?: PluginArgumentOptions,
+): Promise<AddTargetOutcome> {
+  return runAddTarget(pluginDir, target, opts?.lookupByName);
 }
 
 /**

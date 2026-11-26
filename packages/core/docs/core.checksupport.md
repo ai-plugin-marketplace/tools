@@ -4,12 +4,12 @@
 
 ## checkSupport() function
 
-Diagnose a plugin's support envelope: declared targets, missing artifacts, addable targets (§6.4).
+Diagnose a plugin's support envelope: declared targets, missing artifacts, addable targets (§6.4). Pass a plugin directory path, or set `opts.lookupByName` to also accept bare plugin names.
 
 **Signature:**
 
 ```typescript
-export declare function checkSupport(pluginDir: string): Promise<SupportReport>;
+export declare function checkSupport(pluginDir: string, opts?: PluginArgumentOptions): Promise<SupportReport>;
 ```
 
 ## Parameters
@@ -41,6 +41,22 @@ string
 
 
 </td><td>
+
+
+</td></tr>
+<tr><td>
+
+opts
+
+
+</td><td>
+
+[PluginArgumentOptions](./core.pluginargumentoptions.md)
+
+
+</td><td>
+
+_(Optional)_
 
 
 </td></tr>

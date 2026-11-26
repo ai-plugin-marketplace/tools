@@ -84,7 +84,7 @@ export const DEFAULT_SCAFFOLD_TARGETS = TARGET_IDS.filter(
  *
  * @public
  */
-export interface BuildOptions {
+export interface BuildOptions extends PluginArgumentOptions {
   /** Abort after the first hard validation finding. Default: false. */
   failFast?: boolean;
   /**
@@ -152,7 +152,7 @@ export interface GeneratedFile {
  *
  * @public
  */
-export interface ValidateOptions {
+export interface ValidateOptions extends PluginArgumentOptions {
   /** When true, skip the freshness check (§10.5). Default: false. */
   skipFreshness?: boolean;
   /**
@@ -272,11 +272,13 @@ export interface Finding {
 // Scaffold
 
 /**
- * Options for {@link scaffold}.
+ * Options for scaffolding a new plugin.
  *
  * @public
  */
 export interface ScaffoldOptions {
+  /** Use the nearest repo layout within the checkout. Defaults to the working directory. */
+  searchAncestors?: boolean;
   /** Targets to scaffold for. Defaults to all known targets. */
   targets?: readonly TargetId[];
   /** Description field for the generated plugin. */
@@ -402,6 +404,20 @@ export interface MigrateResult {
 
 // ---------------------------------------------------------------------------
 // Support
+
+/**
+ * Options for resolving plugin arguments.
+ *
+ * @public
+ */
+export interface PluginArgumentOptions {
+  /**
+   * Enable CLI resolution within the current checkout. A single-component name can fall back to
+   * the nearest plugins root. Existing paths take precedence except inside the configured output
+   * directory when a plugin with the same name exists.
+   */
+  lookupByName?: boolean;
+}
 
 /**
  * Diagnostic report from {@link checkSupport} describing a plugin's support envelope.

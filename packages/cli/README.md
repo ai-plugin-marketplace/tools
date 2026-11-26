@@ -38,6 +38,20 @@ pnpm add -D @ai-plugin-marketplace/cli
 | `aipm add-target <plugin> <target>` | Scaffold target-specific files for an existing plugin                                                                                               |
 | `aipm list-targets`                 | List target IDs this toolkit version knows about                                                                                                    |
 
+For `build`, `validate`, `lint`, `check-support`, and `add-target`, pass a plugin directory
+path or a single-component name such as `demo`, `./demo`, or `demo/`. Existing directories take
+precedence unless the directory is inside the configured build output and a plugin with the
+same name exists. Name lookup and CLI scaffolding use the nearest repo layout within the
+current Git checkout.
+
+A plugin's physical directory determines its identity. The nearest configured repo that claims
+its plugins root owns it. A configured plugins root can link within the repo, and marketplace
+entries use the configured path. Repo scans skip individual symlink entries.
+
+The core operations accept directory paths by default. Pass `{ lookupByName: true }` for CLI
+resolution. Core `scaffold` uses the working directory by default. Pass `{ searchAncestors: true }`
+to use the nearest layout within the checkout.
+
 ### Flags
 
 | Flag                           | Applies to           | Description                                                                                                             |

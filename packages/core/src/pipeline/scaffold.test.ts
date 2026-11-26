@@ -14,10 +14,11 @@ import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
 
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { DEFAULT_SCAFFOLD_TARGETS, TARGET_IDS } from './types.js';
 import { runBuild } from './build.js';
+import { addTarget, build, checkSupport, scaffold, validate } from '../index.js';
 import {
   parseDeclaredTargets,
   renderAipmConfig,
@@ -412,6 +413,19 @@ describe('runScaffold — marketplace registration', () => {
     return path.join(tmpDir, 'plugins');
   }
 
+  it('registers claude at the owning repo root with a nested pluginsRoot', async () => {
+    fs.writeFileSync(
+      path.join(tmpDir, 'aipm.repo.ts'),
+      "export default { pluginsRoot: 'extensions/ai/plugins' };\n",
+    );
+    const pluginsDir = path.join(tmpDir, 'extensions/ai/plugins');
+    await runScaffold('my-plugin', pluginsDir, { targets: ['claude'] });
+
+    expect(readRegistry(tmpDir, '.claude-plugin').plugins).toStrictEqual([
+      { name: 'my-plugin', source: './extensions/ai/plugins/my-plugin' },
+    ]);
+  });
+
   it('registers the plugin in both registries when claude+cursor are in the envelope', async () => {
     await runScaffold('my-plugin', pluginsRoot(), { targets: ['claude', 'cursor'] });
 
@@ -569,6 +583,25 @@ describe('runAddTarget — marketplace registration', () => {
     return path.join(tmpDir, 'plugins');
   }
 
+  it('registers cursor at the owning repo root with a nested pluginsRoot', async () => {
+    fs.writeFileSync(
+      path.join(tmpDir, 'aipm.repo.ts'),
+      "export default { pluginsRoot: 'extensions/ai/plugins' };\n",
+    );
+    const pluginsDir = path.join(tmpDir, 'extensions/ai/plugins');
+    const pluginDir = path.join(pluginsDir, 'my-plugin');
+    fs.mkdirSync(pluginDir, { recursive: true });
+    fs.writeFileSync(
+      path.join(pluginDir, 'aipm.config.ts'),
+      "export default { targets: ['claude'] };\n",
+    );
+    await runAddTarget(pluginDir, 'cursor', true);
+
+    expect(readRegistry(tmpDir, '.cursor-plugin').plugins).toStrictEqual([
+      { name: 'my-plugin', source: './extensions/ai/plugins/my-plugin' },
+    ]);
+  });
+
   it('registers cursor when adding it to an existing claude-only plugin; idempotent on re-run', async () => {
     await runScaffold('my-plugin', pluginsRoot(), { targets: ['claude'] });
     const pluginDir = path.join(pluginsRoot(), 'my-plugin');
@@ -689,5 +722,129 @@ describe('every default-scaffolded target emits a build artifact (issue #94)', (
     const [result] = await runBuild(repoRoot);
     const vercelArtifacts = result?.artifacts.filter((a) => a.target === 'vercel') ?? [];
     expect(vercelArtifacts).toStrictEqual([]);
+  });
+});
+
+describe('public compatibility operations', () => {
+  it('treats addTarget and checkSupport arguments as paths by default', async () => {
+    const pluginsDir = path.join(tmpDir, 'agent-plugins');
+    await runScaffold('demo', pluginsDir, { targets: ['claude'] });
+    const pluginDir = path.join(pluginsDir, 'demo');
+    fs.writeFileSync(
+      path.join(tmpDir, 'aipm.repo.ts'),
+      "export default { pluginsRoot: 'agent-plugins' };\n",
+    );
+
+    const cwd = vi.spyOn(process, 'cwd').mockReturnValue(tmpDir);
+    try {
+      await expect(addTarget('demo', 'cursor')).rejects.toThrow(/does not exist/);
+      await expect(checkSupport('demo')).rejects.toThrow(/does not exist/);
+      expect(read(pluginDir, '.cursor-plugin/plugin.json')).toBe('');
+      expect(parseDeclaredTargets(read(pluginDir, 'aipm.config.ts'))).toStrictEqual(['claude']);
+      expect(registryExists(tmpDir, '.cursor-plugin')).toBe(false);
+    } finally {
+      cwd.mockRestore();
+    }
+  });
+
+  it('still adds a target to an explicit path outside a relocated plugins root', async () => {
+    fs.writeFileSync(
+      path.join(tmpDir, 'aipm.repo.ts'),
+      "export default { pluginsRoot: 'agent-plugins' };",
+    );
+    const cwd = vi.spyOn(process, 'cwd').mockReturnValue(tmpDir);
+    try {
+      fs.mkdirSync(path.join(tmpDir, 'plugins/demo'), { recursive: true });
+      fs.writeFileSync(
+        path.join(tmpDir, 'plugins/demo/aipm.config.ts'),
+        "export default { targets: ['claude'] };",
+      );
+      await expect(addTarget(path.join('plugins', 'demo'), 'cursor')).resolves.toMatchObject({
+        status: 'added',
+      });
+      expect(readRegistry(tmpDir, '.cursor-plugin').plugins).toStrictEqual([
+        { name: 'demo', source: './plugins/demo' },
+      ]);
+    } finally {
+      cwd.mockRestore();
+    }
+  });
+
+  it('keeps core scaffold relative to cwd even inside an existing marketplace', async () => {
+    const cwd = path.join(tmpDir, 'docs');
+    fs.mkdirSync(cwd);
+    fs.writeFileSync(
+      path.join(tmpDir, 'aipm.repo.ts'),
+      "export default { pluginsRoot: 'agent-plugins' };",
+    );
+    const spy = vi.spyOn(process, 'cwd').mockReturnValue(cwd);
+    try {
+      await expect(scaffold('demo', { targets: ['claude'] })).resolves.toBeUndefined();
+      expect(fs.existsSync(path.join(cwd, 'plugins/demo/aipm.config.ts'))).toBe(true);
+      expect(fs.existsSync(path.join(tmpDir, 'agent-plugins'))).toBe(false);
+    } finally {
+      spy.mockRestore();
+    }
+  });
+
+  it('serializes the configured symlink route and accepts equivalent in-repo registry paths', async () => {
+    const sources = path.join(tmpDir, 'nested/sources');
+    fs.mkdirSync(sources, { recursive: true });
+    fs.symlinkSync(sources, path.join(tmpDir, 'plugins'), 'junction');
+    const cwd = vi.spyOn(process, 'cwd').mockReturnValue(fs.realpathSync(tmpDir));
+    try {
+      await scaffold('demo', { targets: ['claude'] });
+      await addTarget('plugins/demo', 'cursor');
+      expect(readRegistry(tmpDir, '.cursor-plugin').plugins).toStrictEqual([
+        { name: 'demo', source: './plugins/demo' },
+      ]);
+      expect(readRegistry(tmpDir, '.claude-plugin').plugins).toStrictEqual([
+        { name: 'demo', source: './plugins/demo' },
+      ]);
+      await build('plugins/demo');
+      await expect(validate('.')).resolves.toMatchObject({ passed: true });
+      await expect(validate('plugins/demo')).resolves.toMatchObject({ passed: true });
+      const registry = path.join(tmpDir, '.cursor-plugin/marketplace.json');
+      const contents = fs.readFileSync(registry, 'utf-8');
+      fs.writeFileSync(registry, contents.replace('./plugins/demo', './nested/sources/demo'));
+      await expect(validate('plugins/demo')).resolves.toMatchObject({ passed: true });
+
+      fs.writeFileSync(
+        path.join(tmpDir, 'aipm.workspace.ts'),
+        "export default { marketplace: { name: 'test-marketplace' } };",
+      );
+      await build('.');
+      expect(readRegistry(tmpDir, '.cursor-plugin').plugins).toMatchObject([
+        { name: 'demo', source: './plugins/demo' },
+      ]);
+    } finally {
+      cwd.mockRestore();
+    }
+  });
+
+  it('reads support by explicit path even when an ancestor repo config is invalid', async () => {
+    const pluginDir = buildFixture(['claude']);
+    fs.writeFileSync(path.join(tmpDir, 'aipm.repo.ts'), 'export default false;\n');
+
+    await expect(checkSupport(pluginDir)).resolves.toMatchObject({ declared: ['claude'] });
+  });
+
+  it('adds a target through an external alias using the real plugin name and registry', async () => {
+    const repo = path.join(tmpDir, 'marketplace');
+    const pluginsDir = path.join(repo, 'plugins');
+    await runScaffold('demo', pluginsDir, { targets: ['claude'] });
+    const pluginDir = path.join(pluginsDir, 'demo');
+    const alias = path.join(tmpDir, 'plugins', 'alias');
+    fs.mkdirSync(path.dirname(alias));
+    fs.symlinkSync(pluginDir, alias, 'junction');
+
+    await expect(checkSupport(alias)).resolves.toMatchObject({ plugin: 'demo' });
+    await addTarget(alias, 'cursor');
+
+    expect(readRegistry(repo, '.cursor-plugin').plugins).toStrictEqual([
+      { name: 'demo', source: './plugins/demo' },
+    ]);
+    expect(registryExists(tmpDir, '.cursor-plugin')).toBe(false);
+    expect(read(pluginDir, '.cursor-plugin/plugin.json')).toContain('"name": "demo"');
   });
 });

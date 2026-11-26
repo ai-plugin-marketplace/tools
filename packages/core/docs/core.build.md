@@ -4,7 +4,7 @@
 
 ## build() function
 
-Build a single plugin or every plugin under a repo root. `path` may be a plugin directory (contains `aipm.config.ts`<!-- -->) or a repo root (contains `plugins/`<!-- -->); the orchestrator detects which and returns a length-1 array for single-plugin input. See §5.2, §8.1.
+Build a single plugin or every plugin under a repo root. Pass a repo path, plugin directory path, or opt into CLI name lookup. Single-plugin input returns a length-1 array. See §5.2, §8.1.
 
 **Signature:**
 

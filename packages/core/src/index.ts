@@ -21,6 +21,7 @@ export type {
 
 export {
   build,
+  buildAndValidate,
   validate,
   scaffold,
   init,
@@ -72,5 +73,6 @@ export type {
   RefreshOutcome,
   MigrateOptions,
   MigrateResult,
+  PluginArgumentOptions,
   SupportReport,
 } from './pipeline/types.js';

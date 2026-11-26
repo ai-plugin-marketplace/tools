@@ -5,7 +5,7 @@
 ```ts
 
 // @public
-export function addTarget(pluginDir: string, target: TargetId): Promise<AddTargetOutcome>;
+export function addTarget(pluginDir: string, target: TargetId, opts?: PluginArgumentOptions): Promise<AddTargetOutcome>;
 
 // @public
 export interface AddTargetOutcome {
@@ -66,7 +66,13 @@ export function applyRuleSeverityOverrides(diagnostics: readonly Diagnostic[], o
 export function build(targetPath: string, opts?: BuildOptions): Promise<BuildResult[]>;
 
 // @public
-export interface BuildOptions {
+export function buildAndValidate(targetPath: string, opts?: BuildOptions): Promise<{
+    results: BuildResult[];
+    validation: ValidationResult;
+}>;
+
+// @public
+export interface BuildOptions extends PluginArgumentOptions {
     failFast?: boolean;
     forceDowngrade?: boolean;
 }
@@ -80,7 +86,7 @@ export interface BuildResult {
 }
 
 // @public
-export function checkSupport(pluginDir: string): Promise<SupportReport>;
+export function checkSupport(pluginDir: string, opts?: PluginArgumentOptions): Promise<SupportReport>;
 
 // @public
 export function defineConfig(config: AipmConfigInput): AipmConfig;
@@ -190,7 +196,7 @@ export interface JsonDocument {
 export function lint(targetPath: string, options?: LintOptions): Promise<LintResult>;
 
 // @public
-export interface LintOptions {
+export interface LintOptions extends PluginArgumentOptions {
     ci?: boolean;
 }
 
@@ -217,6 +223,11 @@ export interface MigrateResult {
     filesChanged: string[];
     migrationsApplied: number;
     status: 'no-migrations-needed' | 'applied' | 'failed';
+}
+
+// @public
+export interface PluginArgumentOptions {
+    lookupByName?: boolean;
 }
 
 // @public
@@ -282,11 +293,17 @@ export interface RuleContext {
 export type RuleSeverityOverride = 'error' | 'warn' | 'info' | 'off';
 
 // @public
+export function scaffold(name: string, opts: ScaffoldOptions & {
+    returnPath: true;
+}): Promise<string>;
+
+// @public
 export function scaffold(name: string, opts?: ScaffoldOptions): Promise<void>;
 
 // @public
 export interface ScaffoldOptions {
     description?: string;
+    searchAncestors?: boolean;
     targets?: readonly TargetId[];
 }
 
@@ -315,7 +332,7 @@ export function unknownRuleOverrideDiagnostics(overrides: ReadonlyMap<string, Ru
 export function validate(targetPath: string, opts?: ValidateOptions): Promise<ValidationResult>;
 
 // @public
-export interface ValidateOptions {
+export interface ValidateOptions extends PluginArgumentOptions {
     skipFreshness?: boolean;
     skipPublishedSurfaceBoundary?: boolean;
 }

@@ -41,7 +41,7 @@ import type { Diagnostic, LintOptions, LintResult } from './types.js';
  */
 export async function lint(targetPath: string, options?: LintOptions): Promise<LintResult> {
   const ci = options?.ci ?? false;
-  const { repoRoot, distDir, pluginDirs } = await discoverPlugins(targetPath);
+  const { repoRoot, distDir, pluginDirs } = await discoverPlugins(targetPath, options);
   const workspace = await loadWorkspaceConfig(repoRoot);
   const configCache = createConfigCache();
   // Registry generation opted in (aipm.workspace.ts present) — mirrors `runValidate`'s

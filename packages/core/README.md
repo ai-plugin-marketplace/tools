@@ -59,6 +59,8 @@ and validation pass, including freshness diagnostics. With `failFast: true`, bot
 reject on hard structural findings after writing artifacts. Artifact drift and freshness I/O
 failures are reported in the outcome's `validation`. Its findings include the usual `Finding`
 values and hard `BuildFreshnessIoFinding` diagnostics with code `freshness-io`.
+Ownership and collision findings come from generation, so they remain available if freshness
+checks cannot regenerate or read the affected artifacts.
 
 ### Key types
 

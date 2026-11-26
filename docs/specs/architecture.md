@@ -315,8 +315,8 @@ Invoked by `aipm validate` (or as a subphase of `aipm build`). Inspects on-disk 
 
 - Author produces inputs; Build produces outputs; Validate inspects both.
 - Both core build operations run validation once after writing artifacts. `build()` returns the per-plugin results array and skips freshness checks. `buildWithOutcome()` returns the results and validation findings, including freshness checks. With `failFast` enabled, either operation rejects on hard structural findings.
-- The CLI shares artifact generation and runs the structural preflight before its reporting pass. The reporting pass preserves validation order and retries the repo-root oracle if its preflight failed. Fatal errors go to stderr, and hard validation findings go to stdout with exit status 1. Artifact drift is hard in CI and soft locally. `buildWithOutcome()` records freshness I/O failures as hard diagnostics. Standalone validation also checks the published-surface boundary.
-- No phase calls another's internals; they communicate through on-disk state.
+- The CLI calls `buildWithOutcome()`. Within its validation pass, structural checks run before freshness checks, findings keep their reporting order, and only a failed repo-root oracle is retried. Fatal errors go to stderr, and hard validation findings go to stdout with exit status 1. Artifact drift is hard in CI and soft locally. `buildWithOutcome()` records freshness I/O failures as hard diagnostics. Standalone validation also checks the published-surface boundary.
+- Freshness compares generated artifacts with on-disk state. Build supplies the repo-root ownership findings it computed during generation, so those findings survive an incomplete freshness check.
 
 ---
 
@@ -445,7 +445,17 @@ export type TargetId =
 
 export interface BuildOutcome {
   results: BuildResult[];
-  validation: ValidationResult;
+  validation: {
+    findings: (Finding | BuildFreshnessIoFinding)[];
+    passed: boolean;
+  };
+}
+
+export interface BuildFreshnessIoFinding {
+  severity: 'hard';
+  code: 'freshness-io';
+  plugin?: string;
+  message: string;
 }
 
 export interface BuildResult {
@@ -483,7 +493,6 @@ export type FindingCode =
   | 'mcp-key-sync' // .mcp.json vs mcp.json server keys diverge
   | 'marketplace-registration' // plugin-to-registry projection is wrong
   | 'freshness' // generated file drifted from what `aipm build` would produce
-  | 'freshness-io' // filesystem operation prevented the freshness check (always hard)
   | 'single-artifact-host' // a single-artifact host (gemini/kiro) is declared by >1 plugin
   | 'root-artifact-collision' // a generated repo-root path is occupied by a non-toolkit file
   | 'default-marketplace-name' // marketplace name/owner is still a template placeholder (always soft)

@@ -56,8 +56,8 @@ import type {
   BuildResult,
   GeneratedFile,
   TargetId,
-  ValidationResult,
 } from './types.js';
+import type { RootOwnership } from './validate.js';
 import { runValidate } from './validate.js';
 
 // ---------------------------------------------------------------------------
@@ -312,23 +312,9 @@ export function runBuildWithOutcome(
   targetPath: string,
   opts?: BuildOptions,
 ): Promise<BuildOutcome> {
-  return buildAndValidate(targetPath, opts, 'outcome');
-}
-
-/** Package entry point for the CLI's legacy reporting behavior. */
-export async function buildForCli(
-  targetPath: string,
-  opts?: BuildOptions,
-): Promise<{ results: BuildResult[]; validation: ValidationResult }> {
-  const { results } = await buildAndValidate(targetPath, opts, 'legacy');
-  // Match the CLI's historical validation order after the build's structural preflight.
-  // This pass retries root-oracle failures skipped by the preflight and propagates the
-  // first fatal error it encounters, before the caller writes any validation output.
-  const validation = await runValidate(targetPath, {
-    skipPublishedSurfaceBoundary: true,
-    ci: Boolean(process.env['CI']),
-  });
-  return { results, validation };
+  // Internal handshake with the bundled CLI. BuildOptions remains the public contract.
+  const cli = opts !== undefined && Symbol.for('@ai-plugin-marketplace/cli/build') in opts;
+  return buildAndValidate(targetPath, opts, cli ? 'cli' : 'outcome');
 }
 
 /**
@@ -348,7 +334,7 @@ export async function buildForCli(
 async function buildAndValidate(
   targetPath: string,
   opts: BuildOptions | undefined,
-  mode: 'legacy' | 'outcome',
+  mode: 'legacy' | 'outcome' | 'cli',
 ): Promise<BuildOutcome> {
   const { repoRoot, pluginDirs, distDir } = await discoverPlugins(targetPath);
 
@@ -378,6 +364,7 @@ async function buildAndValidate(
   // Re-discovering from `repoRoot` (rather than reusing `pluginDirs`, which holds only the named
   // plugin for single-plugin input) is what makes the registry repo-complete. When no
   // `aipm.workspace.ts` is present, generation does nothing and the registries stay hand-authored.
+  let rootOwnership: RootOwnership | undefined;
   const workspace = await loadWorkspaceConfig(repoRoot);
   if (workspace !== undefined) {
     // For repo-root input, pluginDirs already covers the whole repo — reuse it (and the warm
@@ -426,7 +413,11 @@ async function buildAndValidate(
       computeRootArtifacts(repoRoot, registryPlugins, workspace),
       rootRegistryArtifactFiles(repoRoot, rootRegistries),
     );
-    const { collidedOwners } = detectRootCollisions(repoRoot, root, priorTracked);
+    const collisions = detectRootCollisions(repoRoot, root, priorTracked);
+    const { collidedOwners } = collisions;
+    if (mode === 'outcome') {
+      rootOwnership = { findings: [...root.findings, ...collisions.findings], collidedOwners };
+    }
 
     // The tracked set is only the paths we actually WRITE — files of a collided (suppressed) owner
     // are neither written nor tracked, so orphan removal can never delete an author-owned collider.
@@ -480,7 +471,9 @@ async function buildAndValidate(
     targetPath,
     {
       skipPublishedSurfaceBoundary: true,
-      ...(mode === 'outcome' ? { ci: Boolean(process.env['CI']) } : { skipFreshness: true }),
+      ...(mode === 'legacy' ? { skipFreshness: true } : { ci: Boolean(process.env['CI']) }),
+      preserveCliReporting: mode === 'cli',
+      rootOwnership,
     },
     mode === 'outcome'
       ? (error, plugin) => {

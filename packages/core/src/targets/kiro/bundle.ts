@@ -21,24 +21,24 @@ function copyFile(src: string, dest: string): void {
   fs.copyFileSync(src, dest);
 }
 
-function copyDir(src: string, dest: string): void {
-  if (!fs.existsSync(src)) return;
+function copyDir(src: string, dest: string, exists: typeof fs.existsSync): void {
+  if (!exists(src)) return;
   fs.mkdirSync(dest, { recursive: true });
   for (const entry of fs.readdirSync(src, { withFileTypes: true })) {
     const srcPath = path.join(src, entry.name);
     const destPath = path.join(dest, entry.name);
     if (entry.isDirectory()) {
-      copyDir(srcPath, destPath);
+      copyDir(srcPath, destPath, exists);
     } else {
       copyFile(srcPath, destPath);
     }
   }
 }
 
-function copyIfExists(src: string, dest: string): boolean {
-  if (!fs.existsSync(src)) return false;
+function copyIfExists(src: string, dest: string, exists: typeof fs.existsSync): boolean {
+  if (!exists(src)) return false;
   if (fs.statSync(src).isDirectory()) {
-    copyDir(src, dest);
+    copyDir(src, dest, exists);
   } else {
     copyFile(src, dest);
   }
@@ -76,9 +76,13 @@ export interface BundleKiroPluginResult {
  *
  * Impure (I/O): reads from `pluginDir`, writes to `destDir`.
  */
-export function bundleKiroPlugin(pluginDir: string, destDir: string): BundleKiroPluginResult {
+export function bundleKiroPlugin(
+  pluginDir: string,
+  destDir: string,
+  exists = fs.existsSync,
+): BundleKiroPluginResult {
   // Clear dest first, matching buildKiroStandalone's cleanDir behaviour.
-  if (fs.existsSync(destDir)) {
+  if (exists(destDir)) {
     fs.rmSync(destDir, { recursive: true });
   }
 
@@ -88,7 +92,7 @@ export function bundleKiroPlugin(pluginDir: string, destDir: string): BundleKiro
   // Canonical files (README.md/LICENSE are intentionally excluded — see module doc above)
   const files: string[] = ['POWER.md', 'mcp.json'];
   for (const file of files) {
-    if (copyIfExists(path.join(pluginDir, file), path.join(destDir, file))) {
+    if (copyIfExists(path.join(pluginDir, file), path.join(destDir, file), exists)) {
       emitted.push(file);
     }
   }
@@ -96,14 +100,14 @@ export function bundleKiroPlugin(pluginDir: string, destDir: string): BundleKiro
   // Canonical directories
   const dirs: string[] = ['steering', 'skills'];
   for (const dir of dirs) {
-    if (copyIfExists(path.join(pluginDir, dir), path.join(destDir, dir))) {
+    if (copyIfExists(path.join(pluginDir, dir), path.join(destDir, dir), exists)) {
       emitted.push(`${dir}/`);
     }
   }
 
   // Generate .kiro/agents/<name>.json from agent .md files
   const agentsSrc = path.join(pluginDir, 'agents');
-  if (fs.existsSync(agentsSrc)) {
+  if (exists(agentsSrc)) {
     const kiroAgentsDir = path.join(destDir, '.kiro', 'agents');
     let anyGenerated = false;
 

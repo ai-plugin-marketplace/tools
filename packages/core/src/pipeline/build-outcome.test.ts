@@ -249,3 +249,160 @@ it.each([
 
   expect(runValidate).toHaveBeenCalledTimes(1);
 });
+
+function geminiRepo(workspace?: { name: string }): SynthRegistryRepo {
+  return synthRegistryRepo(
+    [
+      {
+        name: 'gem',
+        targets: ['gemini'],
+        files: {
+          'gemini-extension.json': '{"name":"gem","version":"0.0.1"}',
+          'GEMINI.md': '# Gemini\n',
+          'commands/check.toml': 'prompt = "check"\n',
+        },
+      },
+    ],
+    workspace,
+  );
+}
+
+it.each(['oracle', 'sidecar'])(
+  'keeps a Gemini collision when the affected %s fails',
+  async (source) => {
+    repo = geminiRepo({ name: 'workspace' });
+    const root = repo.repoRoot;
+    const authorContext = path.join(root, 'GEMINI.md');
+    const manifest = path.join(root, '.aipm', 'generated-root.json');
+    fs.mkdirSync(path.dirname(manifest), { recursive: true });
+    fs.writeFileSync(manifest, '{"version":1,"paths":[]}\n');
+    fs.writeFileSync(authorContext, '# Author-owned\n');
+    const failure = Object.assign(new Error('Cannot check Gemini root freshness'), {
+      code: 'EACCES',
+      errno: -13,
+      syscall: source === 'oracle' ? 'mkdtemp' : 'open',
+    });
+    let rootAttempts = 0;
+    const mkdtempSync = fs.mkdtempSync;
+    vi.spyOn(fs, 'mkdtempSync').mockImplementation((prefix, options) => {
+      if (prefix.endsWith('aipm-root-gemini-') && ++rootAttempts % 2 === 0 && source === 'oracle') {
+        throw failure;
+      }
+      return mkdtempSync(prefix, options);
+    });
+    const readFileSync = fs.readFileSync;
+    vi.spyOn(fs, 'readFileSync').mockImplementation((file, options) => {
+      if (file === manifest && rootAttempts > 0 && rootAttempts % 2 === 0 && source === 'sidecar') {
+        throw failure;
+      }
+      return readFileSync(file, options);
+    });
+    syncBuiltinESMExports();
+
+    const { validation } = await buildWithOutcome(root);
+    expect(validation.passed).toBe(false);
+    expect(validation.findings.map(({ code }) => code)).toEqual([
+      'root-artifact-collision',
+      'freshness-io',
+    ]);
+    expect(validation.findings[0]?.message).toContain("'GEMINI.md' already exists");
+    expect(validation.findings[1]?.message).toBe(failure.message);
+    // Disarm the read injection for the next generation's ownership lookup.
+    rootAttempts = 0;
+    await expect(buildWithOutcome(root, { failFast: true })).rejects.toThrow(
+      'Build produced 1 hard validation finding(s):\n  [?] root-artifact-collision:',
+    );
+    expect(readFileSync(authorContext, 'utf-8')).toBe('# Author-owned\n');
+  },
+);
+
+it.skipIf(process.platform === 'win32')(
+  'reports a bundle symlink loop as a lookup error',
+  async () => {
+    vi.stubEnv('CI', '');
+    repo = geminiRepo();
+    const root = repo.repoRoot;
+    const bundle = path.join(root, 'dist', 'gemini', 'gem');
+    const mkdtempSync = fs.mkdtempSync;
+    vi.spyOn(fs, 'mkdtempSync').mockImplementation((prefix, options) => {
+      if (prefix.endsWith('aipm-freshness-') && !fs.lstatSync(bundle).isSymbolicLink()) {
+        fs.rmSync(bundle, { recursive: true });
+        fs.symlinkSync(path.basename(bundle), bundle);
+      }
+      return mkdtempSync(prefix, options);
+    });
+    syncBuiltinESMExports();
+
+    const { validation } = await buildWithOutcome(root, { failFast: true });
+    expect(validation.passed).toBe(false);
+    expect(validation.findings).toMatchObject([
+      { code: 'freshness-io', severity: 'hard', plugin: 'gem' },
+    ]);
+    expect(validation.findings[0]?.message).toContain('ELOOP');
+
+    const legacy = await validate(root);
+    expect(legacy.passed).toBe(true);
+    expect(legacy.findings).toHaveLength(3);
+    expect(
+      legacy.findings.every(
+        (finding) => finding.code === 'freshness' && finding.message.includes('is missing'),
+      ),
+    ).toBe(true);
+  },
+);
+
+it('keeps drift found before and after a read error in the same bundle', async () => {
+  vi.stubEnv('CI', '');
+  repo = geminiRepo();
+  const bundle = path.join(repo.repoRoot, 'dist', 'gemini', 'gem');
+  const failure = Object.assign(new Error('Cannot read the generated command'), {
+    code: 'EACCES',
+    errno: -13,
+    syscall: 'open',
+  });
+  const readFileSync = fs.readFileSync;
+  vi.spyOn(fs, 'readFileSync').mockImplementation((file, options) => {
+    if (file === path.join(bundle, 'commands', 'check.toml')) throw failure;
+    if (
+      file === path.join(bundle, 'GEMINI.md') ||
+      file === path.join(bundle, 'gemini-extension.json')
+    ) {
+      return Buffer.from('stale bytes');
+    }
+    return readFileSync(file, options);
+  });
+  syncBuiltinESMExports();
+
+  const { validation } = await buildWithOutcome(repo.repoRoot);
+  expect(validation.passed).toBe(false);
+  expect(validation.findings).toEqual([
+    expect.objectContaining({
+      code: 'freshness',
+      severity: 'soft',
+    }),
+    expect.objectContaining({
+      code: 'freshness',
+      severity: 'soft',
+    }),
+    { code: 'freshness-io', severity: 'hard', plugin: 'gem', message: failure.message },
+  ]);
+  expect(validation.findings[0]?.message).toContain("GEMINI.md' is stale");
+  expect(validation.findings[1]?.message).toContain("gemini-extension.json' is stale");
+});
+
+it('documents the outcome-only diagnostic in the architecture API example', () => {
+  const spec = fs.readFileSync(
+    new URL('../../../../docs/specs/architecture.md', import.meta.url),
+    'utf-8',
+  );
+  const outcome = spec
+    .split('export interface BuildOutcome {')[1]
+    ?.split('export interface BuildResult')[0];
+  expect(outcome).toContain('findings: (Finding | BuildFreshnessIoFinding)[];');
+  expect(outcome).toContain("code: 'freshness-io';");
+  const findingCode = spec
+    .split('export type FindingCode =')[1]
+    ?.split('export interface Finding')[0];
+  expect(findingCode).toBeDefined();
+  expect(findingCode).not.toContain("'freshness-io'");
+});

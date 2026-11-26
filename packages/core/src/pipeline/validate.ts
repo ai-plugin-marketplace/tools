@@ -34,12 +34,13 @@ import {
   managedRegistryPaths,
   managedVendorRegistryPaths,
   mergeRootArtifacts,
+  parseRootManifestPaths,
   readRootManifestPaths,
   rootManifestPath,
   rootRegistryArtifactFiles,
   serializeRootManifest,
 } from './artifacts.js';
-import type { RegistryArtifact } from './artifacts.js';
+import type { RegistryArtifact, RootArtifacts } from './artifacts.js';
 import { discoverPlugins } from './discover.js';
 import {
   ConfigLoadError,
@@ -1203,6 +1204,11 @@ export function validatePerTargetSchemas(
 // Freshness check (§10.5)
 // ---------------------------------------------------------------------------
 
+export interface RootOwnership {
+  findings: Finding[];
+  collidedOwners: ReadonlySet<TargetId>;
+}
+
 export type FreshnessIoHandler = (error: Error, plugin?: string) => void;
 
 /** Return whether the opt-in outcome captured a filesystem failure. */
@@ -1214,10 +1220,9 @@ function captureFreshnessIo(
   if (
     onIoError === undefined ||
     !(err instanceof Error) ||
-    !('syscall' in err) ||
-    typeof err.syscall !== 'string' ||
-    !('errno' in err) ||
-    typeof err.errno !== 'number'
+    !('code' in err) ||
+    typeof err.code !== 'string' ||
+    !/^(?:E[A-Z0-9]+|ERR_FS_[A-Z_]+)$/.test(err.code)
   ) {
     return false;
   }
@@ -1235,6 +1240,11 @@ function checkFreshnessFile(
   } catch (err) {
     if (!captureFreshnessIo(err, onIoError, plugin)) throw err;
   }
+}
+
+/** Strict freshness lookups treat only ENOENT as absence. Legacy checks use existsSync. */
+function freshnessExists(file: fs.PathLike): boolean {
+  return fs.statSync(file, { throwIfNoEntry: false }) !== undefined;
 }
 
 /**
@@ -1279,30 +1289,32 @@ export function checkFreshness(
 ): Finding[] {
   const findings: Finding[] = [];
   const pluginName = path.basename(pluginDir);
+  const exists = onIoError === undefined ? fs.existsSync : freshnessExists;
 
   // ── In-plugin hook JSONs ──────────────────────────────────────────────────
-  let hookArtifacts: ReturnType<typeof computePluginHookArtifacts>;
+  let hookArtifacts: ReturnType<typeof computePluginHookArtifacts> = [];
   try {
-    hookArtifacts = computePluginHookArtifacts(pluginDir, envelope);
+    hookArtifacts = computePluginHookArtifacts(pluginDir, envelope, undefined, exists);
   } catch (err) {
-    if (captureFreshnessIo(err, onIoError, pluginName)) return findings;
-    // A malformed hooks source means the transform can't run — surface as freshness drift.
-    const message = err instanceof Error ? err.message : String(err);
-    return [
-      freshnessFinding(
-        ci,
-        pluginName,
-        `Unable to compute expected hook output: ${message}`,
-        `fix the hooks source and run \`aipm build\`.`,
-      ),
-    ];
+    if (!captureFreshnessIo(err, onIoError, pluginName)) {
+      const message = err instanceof Error ? err.message : String(err);
+      findings.push(
+        freshnessFinding(
+          ci || onIoError !== undefined,
+          pluginName,
+          'Unable to compute expected hook output: ' + message,
+          'fix the hooks source and run `aipm build`.',
+        ),
+      );
+    }
+    if (onIoError === undefined) return findings;
   }
 
   for (const artifact of hookArtifacts) {
     checkFreshnessFile(
       () => {
         const rel = path.relative(pluginDir, artifact.absPath);
-        if (!fs.existsSync(artifact.absPath)) {
+        if (!exists(artifact.absPath)) {
           findings.push(
             freshnessFinding(
               ci,
@@ -1338,7 +1350,7 @@ export function checkFreshness(
   }
 
   // ── dist/** bundle trees (byte-parity via regeneration) ───────────────────
-  for (const bundle of computeDistBundles(pluginDir, distDir, envelope)) {
+  for (const bundle of computeDistBundles(pluginDir, distDir, envelope, exists)) {
     checkFreshnessFile(
       () => {
         let tempDir: string | undefined;
@@ -1346,15 +1358,30 @@ export function checkFreshness(
           const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'aipm-freshness-'));
           // The legacy validator only cleaned up after successful regeneration.
           if (onIoError !== undefined) tempDir = dir;
-          bundle.regenerate(dir);
+          try {
+            bundle.regenerate(dir);
+          } catch (err) {
+            if (onIoError === undefined) throw err;
+            if (!captureFreshnessIo(err, onIoError, pluginName)) {
+              const message = err instanceof Error ? err.message : String(err);
+              findings.push(
+                freshnessFinding(
+                  true,
+                  pluginName,
+                  'Unable to regenerate the ' + bundle.target + ' bundle: ' + message,
+                ),
+              );
+            }
+            return;
+          }
           tempDir = dir;
-          const drift = compareTrees(bundle.destDir, tempDir);
-          for (const rel of drift) {
+          const drift = compareTrees(bundle.destDir, tempDir, onIoError, pluginName);
+          for (const { rel, missing } of drift) {
             const distRel = path.relative(distDir, path.join(bundle.destDir, rel));
             // A drifted path that isn't on disk at all was never built (e.g. first build hasn't run
             // yet) — report it as `missing`, not `stale`, so the user isn't told a nonexistent file
             // "differs" from expected output (issue #97).
-            if (!fs.existsSync(path.join(bundle.destDir, rel))) {
+            if (missing ?? !fs.existsSync(path.join(bundle.destDir, rel))) {
               findings.push(
                 freshnessFinding(
                   ci,
@@ -1375,7 +1402,7 @@ export function checkFreshness(
             );
           }
         } finally {
-          if (tempDir !== undefined && fs.existsSync(tempDir)) {
+          if (tempDir !== undefined && exists(tempDir)) {
             fs.rmSync(tempDir, { recursive: true });
           }
         }
@@ -1409,6 +1436,7 @@ export async function checkRegistryFreshness(
   cache?: ConfigCache,
   onIoError?: FreshnessIoHandler,
 ): Promise<Finding[]> {
+  const exists = onIoError === undefined ? fs.existsSync : freshnessExists;
   let expected: RegistryArtifact[];
   try {
     const registryPlugins = await collectRegistryPlugins(repoRoot, pluginDirs, cache);
@@ -1425,7 +1453,7 @@ export async function checkRegistryFreshness(
     const message = err instanceof Error ? err.message : String(err);
     return [
       freshnessFinding(
-        ci,
+        ci || onIoError !== undefined,
         undefined,
         `Unable to compute expected marketplace registries: ${message}`,
         'fix the offending aipm.config.ts and run `aipm build`.',
@@ -1437,7 +1465,7 @@ export async function checkRegistryFreshness(
   for (const registry of expected) {
     checkFreshnessFile(() => {
       const rel = path.relative(repoRoot, registry.absPath);
-      if (!fs.existsSync(registry.absPath)) {
+      if (!exists(registry.absPath)) {
         findings.push(
           freshnessFinding(
             ci,
@@ -1467,7 +1495,9 @@ export async function checkRegistryFreshness(
   // but isn't expected — `aipm build` removes these, so its presence means the tree is stale.
   const expectedPaths = new Set(expected.map((r) => r.absPath));
   for (const orphan of managedVendorRegistryPaths(repoRoot)) {
-    if (!expectedPaths.has(orphan) && fs.existsSync(orphan)) {
+    if (expectedPaths.has(orphan)) continue;
+    checkFreshnessFile(() => {
+      if (!exists(orphan)) return;
       const rel = path.relative(repoRoot, orphan);
       findings.push(
         freshnessFinding(
@@ -1477,10 +1507,26 @@ export async function checkRegistryFreshness(
           'run `aipm build` to remove the orphaned registry, or add a plugin that declares its target.',
         ),
       );
-    }
+    }, onIoError);
   }
 
   return findings;
+}
+
+async function computeExpectedRootArtifacts(
+  repoRoot: string,
+  pluginDirs: readonly string[],
+  workspace: AipmWorkspace,
+  cache: ConfigCache | undefined,
+  onHostError?: (error: unknown) => void,
+  exists = fs.existsSync,
+): Promise<RootArtifacts> {
+  const plugins = await collectRegistryPlugins(repoRoot, pluginDirs, cache);
+  const registries = computeRegistryArtifacts(repoRoot, plugins, workspace);
+  return mergeRootArtifacts(
+    computeRootArtifacts(repoRoot, plugins, workspace, onHostError, exists),
+    rootRegistryArtifactFiles(repoRoot, registries),
+  );
 }
 
 /**
@@ -1512,68 +1558,62 @@ export async function checkRootArtifactFreshness(
   skipFreshness: boolean,
   cache?: ConfigCache,
   onIoError?: FreshnessIoHandler,
+  ownership?: RootOwnership,
+  preparedRoot?: RootArtifacts,
 ): Promise<Finding[]> {
+  const exists = onIoError === undefined ? fs.existsSync : freshnessExists;
+  const findings = [...(ownership?.findings ?? [])];
   const regenerationErrors: unknown[] = [];
-  const oracleFailure = (err: unknown): Finding => {
+  const onRegenerationError = (err: unknown): void => {
+    if (captureFreshnessIo(err, onIoError)) return;
     const message = err instanceof Error ? err.message : String(err);
-    return freshnessFinding(
-      ci,
-      undefined,
-      `Unable to compute expected repo-root artifacts: ${message}`,
-      'fix the offending aipm.config.ts and run `aipm build`.',
+    findings.push(
+      freshnessFinding(
+        ci || onIoError !== undefined,
+        undefined,
+        'Unable to compute expected repo-root artifacts: ' + message,
+        'fix the offending aipm.config.ts and run `aipm build`.',
+      ),
     );
   };
-  let root: ReturnType<typeof computeRootArtifacts>;
+  let root: RootArtifacts;
   try {
-    const plugins = await collectRegistryPlugins(repoRoot, pluginDirs, cache);
-    // Merge the repo-root registries (open-plugins) into the root-artifact set so ONE collision
-    // guard, sidecar tracked-set, and orphan sweep cover every repo-root file the toolkit owns
-    // (OP-D5/VT-4, option (a)). A foreign root marketplace.json therefore raises
-    // `root-artifact-collision` and is never overwritten or orphan-removed.
-    const rootRegistries = computeRegistryArtifacts(repoRoot, plugins, workspace).filter((r) =>
-      isRootRegistryTarget(r.target),
-    );
-    root = mergeRootArtifacts(
-      computeRootArtifacts(
+    root =
+      preparedRoot ??
+      (await computeExpectedRootArtifacts(
         repoRoot,
-        plugins,
+        pluginDirs,
         workspace,
-        onIoError === undefined
-          ? undefined
-          : (err) => {
-              regenerationErrors.push(err);
-            },
-      ),
-      rootRegistryArtifactFiles(repoRoot, rootRegistries),
-    );
+        cache,
+        onIoError === undefined ? undefined : (err) => regenerationErrors.push(err),
+        exists,
+      ));
   } catch (err) {
-    // A plugin config that won't load is reported per-plugin as envelope-invalid elsewhere; only
-    // surface the inability to compute the root oracle as freshness drift when freshness is checked.
-    if (skipFreshness || captureFreshnessIo(err, onIoError)) return [];
-    return [oracleFailure(err)];
+    if (!skipFreshness) onRegenerationError(err);
+    return findings;
   }
 
-  const findings: Finding[] = [];
+  for (const error of regenerationErrors) onRegenerationError(error);
 
-  // 1. N=1 gate findings (always hard, own code). Surfaced regardless of `skipFreshness` so the
-  // post-build validate (which skips freshness) still fails fast on an ambiguous host declaration.
-  findings.push(...root.findings);
-  for (const err of regenerationErrors) {
-    if (!captureFreshnessIo(err, onIoError)) findings.push(oracleFailure(err));
+  let priorTracked: string[] | undefined;
+  let manifestContent: string | undefined;
+  let collidedOwners: ReadonlySet<TargetId>;
+  if (ownership === undefined) {
+    findings.push(...root.findings);
+    priorTracked = readRootManifestPaths(repoRoot);
+    const collisions = detectRootCollisions(repoRoot, root, priorTracked);
+    collidedOwners = collisions.collidedOwners;
+    findings.push(...collisions.findings);
+  } else {
+    collidedOwners = ownership.collidedOwners;
+    // A sidecar read failure prevents checking orphans and the sidecar itself. Ownership
+    // already came from generation, so the individual emitted files can still be checked.
+    checkFreshnessFile(() => {
+      const manifestAbs = rootManifestPath(repoRoot);
+      if (exists(manifestAbs)) manifestContent = fs.readFileSync(manifestAbs, 'utf-8');
+      priorTracked = manifestContent === undefined ? [] : parseRootManifestPaths(manifestContent);
+    }, onIoError);
   }
-
-  // 2. Collision findings against the committed sidecar's tracked set (build's safety guard 3).
-  // Also surfaced regardless of `skipFreshness` — a collision is a structural refusal, not drift.
-  let priorTracked: string[];
-  try {
-    priorTracked = readRootManifestPaths(repoRoot, onIoError !== undefined);
-  } catch (err) {
-    if (captureFreshnessIo(err, onIoError)) return findings;
-    throw err;
-  }
-  const collisions = detectRootCollisions(repoRoot, root, priorTracked);
-  const { collidedOwners } = collisions;
-  findings.push(...collisions.findings);
 
   // The freshness-coded checks (missing/stale/orphan/sidecar) are skipped after a fresh build.
   if (skipFreshness) return findings;
@@ -1587,7 +1627,7 @@ export async function checkRootArtifactFreshness(
     expectedTracked.push(rel);
     checkFreshnessFile(() => {
       const abs = path.join(repoRoot, ...rel.split('/'));
-      if (!fs.existsSync(abs)) {
+      if (!exists(abs)) {
         findings.push(
           freshnessFinding(
             ci,
@@ -1613,7 +1653,7 @@ export async function checkRootArtifactFreshness(
   }
 
   // The complete tracked set is required to check for orphans and sidecar drift.
-  if (regenerationErrors.length > 0) return findings;
+  if (regenerationErrors.length > 0 || priorTracked === undefined) return findings;
 
   // 3b. Orphans: any path the committed sidecar recorded that build would no longer write but which
   // still sits on disk. `aipm build` removes these, so their presence means the tree is stale.
@@ -1621,7 +1661,8 @@ export async function checkRootArtifactFreshness(
   for (const rel of priorTracked) {
     if (expectedSet.has(rel)) continue;
     const abs = path.join(repoRoot, ...rel.split('/'));
-    if (fs.existsSync(abs)) {
+    checkFreshnessFile(() => {
+      if (!exists(abs)) return;
       findings.push(
         freshnessFinding(
           ci,
@@ -1630,7 +1671,7 @@ export async function checkRootArtifactFreshness(
           'run `aipm build` to remove the orphaned artifact.',
         ),
       );
-    }
+    }, onIoError);
   }
 
   // 3c. The sidecar manifest itself is a generated, freshness-checked artifact: its bytes must
@@ -1638,7 +1679,8 @@ export async function checkRootArtifactFreshness(
   // AND no sidecar exists, the expected state is "no sidecar" — only flag a stale/missing sidecar
   // when one is expected (non-empty tracked set) or one already exists on disk.
   const manifestAbs = rootManifestPath(repoRoot);
-  const manifestExists = fs.existsSync(manifestAbs);
+  const manifestExists =
+    ownership === undefined ? fs.existsSync(manifestAbs) : manifestContent !== undefined;
   if (expectedTracked.length > 0 || manifestExists) {
     const expectedManifest = serializeRootManifest(expectedTracked);
     if (!manifestExists) {
@@ -1652,7 +1694,11 @@ export async function checkRootArtifactFreshness(
       );
     } else {
       checkFreshnessFile(() => {
-        if (fs.readFileSync(manifestAbs, 'utf-8') === expectedManifest) return;
+        if (
+          (ownership === undefined ? fs.readFileSync(manifestAbs, 'utf-8') : manifestContent) ===
+          expectedManifest
+        )
+          return;
         findings.push(
           freshnessFinding(
             ci,
@@ -1672,9 +1718,15 @@ export async function checkRootArtifactFreshness(
  * Compare two directory trees and return the relative paths that differ (present in only one
  * side, or present in both with differing bytes). An empty result means the trees are identical.
  */
-function compareTrees(actualDir: string, expectedDir: string): string[] {
-  const actual = new Set(collectFilesRelative(actualDir));
-  const expected = new Set(collectFilesRelative(expectedDir));
+function compareTrees(
+  actualDir: string,
+  expectedDir: string,
+  onIoError: FreshnessIoHandler | undefined,
+  plugin: string,
+): { rel: string; missing?: boolean }[] {
+  const exists = onIoError === undefined ? fs.existsSync : freshnessExists;
+  const actual = new Set(collectFilesRelative(actualDir, exists));
+  const expected = new Set(collectFilesRelative(expectedDir, exists));
   const drift = new Set<string>();
 
   for (const rel of actual) {
@@ -1682,15 +1734,25 @@ function compareTrees(actualDir: string, expectedDir: string): string[] {
       drift.add(rel);
       continue;
     }
-    const a = fs.readFileSync(path.join(actualDir, rel));
-    const b = fs.readFileSync(path.join(expectedDir, rel));
-    if (!a.equals(b)) drift.add(rel);
+    checkFreshnessFile(
+      () => {
+        const a = fs.readFileSync(path.join(actualDir, rel));
+        const b = fs.readFileSync(path.join(expectedDir, rel));
+        if (!a.equals(b)) drift.add(rel);
+      },
+      onIoError,
+      plugin,
+    );
   }
   for (const rel of expected) {
     if (!actual.has(rel)) drift.add(rel);
   }
 
-  return [...drift].sort();
+  return [...drift].sort().map((rel) => ({
+    rel,
+    // Preserve the legacy validator's second lookup when it classifies drift.
+    ...(onIoError === undefined ? {} : { missing: !actual.has(rel) }),
+  }));
 }
 
 // ---------------------------------------------------------------------------
@@ -1720,7 +1782,11 @@ function compareTrees(actualDir: string, expectedDir: string): string[] {
  */
 export async function runValidate(
   targetPath: string,
-  opts?: ValidateOptions & { ci?: boolean },
+  opts?: ValidateOptions & {
+    ci?: boolean;
+    preserveCliReporting?: boolean;
+    rootOwnership?: RootOwnership | undefined;
+  },
   onFreshnessIoError?: FreshnessIoHandler,
 ): Promise<ValidationResult> {
   const ci = opts?.ci ?? false;
@@ -1744,6 +1810,8 @@ export async function runValidate(
   }
   const { repoRoot, distDir, pluginDirs } = discovery;
   const findings: Finding[] = [];
+  const pendingFreshness: { index: number; check: () => Promise<Finding[]> }[] = [];
+  const preserveCliReporting = opts?.preserveCliReporting === true;
 
   // One per-invocation config memo so each plugin's aipm.config.ts is transpiled once — reused by
   // the main loop below and the repo-level registry freshness step (see ConfigCache).
@@ -1845,7 +1913,13 @@ export async function runValidate(
     }
 
     // ── 5. Freshness ─────────────────────────────────────────────────────────
-    findings.push(...(await pluginFreshnessRule.check(ctx)).map((d) => diagnosticToFinding(d, ci)));
+    const check = async (): Promise<Finding[]> =>
+      (await pluginFreshnessRule.check(ctx)).map((d) => diagnosticToFinding(d, ci));
+    if (preserveCliReporting) {
+      pendingFreshness.push({ index: findings.length, check });
+    } else {
+      findings.push(...(await check()));
+    }
   }
 
   // ── 6. Repo-level default/placeholder marketplace-name check (always SOFT) ──
@@ -1902,18 +1976,63 @@ export async function runValidate(
       onFreshnessIoError,
       configCache,
     });
-    if (!skipFreshness) {
-      findings.push(
-        ...(await registryFreshnessRule.check(repoScopedCtx)).map((d) =>
-          diagnosticToFinding(d, ci),
-        ),
-      );
+    let preparedRoot: RootArtifacts | undefined;
+    if (preserveCliReporting) {
+      try {
+        preparedRoot = await computeExpectedRootArtifacts(
+          repoRoot,
+          allPluginDirs,
+          workspace,
+          configCache,
+        );
+      } catch {
+        // Preflight ignored root oracle errors. Retry the oracle at its reporting position.
+      }
+      if (preparedRoot !== undefined) {
+        // Keep the preflight sidecar read before the historical reporting read.
+        readRootManifestPaths(repoRoot);
+      }
     }
-    findings.push(
-      ...(await rootArtifactFreshnessRule.check(repoScopedCtx)).map((d) =>
-        diagnosticToFinding(d, ci),
-      ),
-    );
+
+    const checkRoot = async (): Promise<Finding[]> =>
+      checkRootArtifactFreshness(
+        repoRoot,
+        allPluginDirs,
+        workspace,
+        ci,
+        skipFreshness,
+        configCache,
+        onFreshnessIoError,
+        opts?.rootOwnership,
+        preparedRoot,
+      );
+    const checkRegistries = async (): Promise<Finding[]> =>
+      (await registryFreshnessRule.check(repoScopedCtx)).map((d) => diagnosticToFinding(d, ci));
+    if (preserveCliReporting) {
+      pendingFreshness.push({ index: findings.length, check: checkRegistries });
+      pendingFreshness.push({ index: findings.length, check: checkRoot });
+    } else {
+      if (!skipFreshness) findings.push(...(await checkRegistries()));
+      if (opts?.rootOwnership === undefined) {
+        findings.push(
+          ...(await rootArtifactFreshnessRule.check(repoScopedCtx)).map((d) =>
+            diagnosticToFinding(d, ci),
+          ),
+        );
+      } else {
+        findings.push(...(await checkRoot()));
+      }
+    }
+  }
+
+  // The CLI's historical preflight ran every structural check before freshness could throw.
+  // Execute the deferred checks in their original reporting order and insert their findings
+  // beside the corresponding structural findings.
+  let inserted = 0;
+  for (const { index, check } of pendingFreshness) {
+    const fresh = await check();
+    findings.splice(index + inserted, 0, ...fresh);
+    inserted += fresh.length;
   }
 
   // ── 8. Published-surface boundary: unpublished skills must be marked internal (#118) ──

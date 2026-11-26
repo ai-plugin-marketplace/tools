@@ -15,7 +15,6 @@ import * as path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import * as core from '@ai-plugin-marketplace/core';
 
 import { run } from './run.js';
 
@@ -337,18 +336,23 @@ describe('aipm build success-line ordering (issue #97)', () => {
     return pluginDir;
   }
 
-  it('reports the build’s hard finding without calling standalone validate', async () => {
-    const pluginDir = writeVersionMismatchedPlugin();
-    const validate = vi.spyOn(core, 'validate');
+  it('reports the hard finding after one internal validation pass', async () => {
+    writeVersionMismatchedPlugin();
+    const scan = vi.spyOn(fs, 'readdirSync');
+    syncBuiltinESMExports();
     try {
-      const { code, out } = await invoke(['build', pluginDir]);
+      const { code, out, err } = await invoke(['build', tmpDir]);
 
       expect(code).toBe(1);
-      expect(out).toContain('version-consistency');
+      expect(out).toContain('version-consistency (hard)');
       expect(out).not.toMatch(/Built \d+ plugin/);
-      expect(validate).not.toHaveBeenCalled();
+      expect(err).toBe('');
+      // Repo-root discovery scans plugins once for generation and once per internal validation.
+      const plugins = path.join(tmpDir, 'plugins');
+      expect(scan.mock.calls.filter(([directory]) => directory === plugins)).toHaveLength(2);
     } finally {
-      validate.mockRestore();
+      scan.mockRestore();
+      syncBuiltinESMExports();
     }
   });
 
@@ -417,38 +421,42 @@ describe('aipm build success-line ordering (issue #97)', () => {
     },
   );
 
-  it('retries a transient repo-root oracle failure after structural preflight in CI', async () => {
-    writeGeminiPlugin();
-    fs.writeFileSync(
-      path.join(tmpDir, 'aipm.workspace.ts'),
-      "export default { marketplace: { name: 'example-market' } };\n",
-    );
-    vi.stubEnv('CI', 'true');
-    const failure = Object.assign(new Error('Cannot create the preflight Gemini directory'), {
-      code: 'EACCES',
-      errno: -13,
-      syscall: 'mkdtemp',
-    });
-    const mkdtempSync = fs.mkdtempSync;
-    let rootAttempts = 0;
-    vi.spyOn(fs, 'mkdtempSync').mockImplementation((prefix, options) => {
-      if (prefix.endsWith('aipm-root-gemini-') && ++rootAttempts === 2) throw failure;
-      return mkdtempSync(prefix, options);
-    });
-    syncBuiltinESMExports();
-    try {
-      await expect(invoke(['build', tmpDir])).resolves.toEqual({
-        code: 0,
-        out: 'Built 1 plugin(s), 5 artifact(s).\nOK — no findings.\n',
-        err: '',
+  it.each([false, true])(
+    'only retries a failed repo-root oracle (transient failure: %s)',
+    async (transientFailure) => {
+      writeGeminiPlugin();
+      fs.writeFileSync(
+        path.join(tmpDir, 'aipm.workspace.ts'),
+        "export default { marketplace: { name: 'example-market' } };\n",
+      );
+      vi.stubEnv('CI', 'true');
+      const failure = Object.assign(new Error('Cannot create the preflight Gemini directory'), {
+        code: 'EACCES',
+        errno: -13,
+        syscall: 'mkdtemp',
       });
-      expect(rootAttempts).toBe(3);
-    } finally {
-      vi.restoreAllMocks();
+      const mkdtempSync = fs.mkdtempSync;
+      let rootAttempts = 0;
+      vi.spyOn(fs, 'mkdtempSync').mockImplementation((prefix, options) => {
+        if (prefix.endsWith('aipm-root-gemini-') && ++rootAttempts === 2 && transientFailure)
+          throw failure;
+        return mkdtempSync(prefix, options);
+      });
       syncBuiltinESMExports();
-      vi.unstubAllEnvs();
-    }
-  });
+      try {
+        await expect(invoke(['build', tmpDir])).resolves.toEqual({
+          code: 0,
+          out: 'Built 1 plugin(s), 5 artifact(s).\nOK — no findings.\n',
+          err: '',
+        });
+        expect(rootAttempts).toBe(transientFailure ? 3 : 2);
+      } finally {
+        vi.restoreAllMocks();
+        syncBuiltinESMExports();
+        vi.unstubAllEnvs();
+      }
+    },
+  );
 
   it('still prints "Built N plugin(s)" before validation output on a clean run', async () => {
     // A `vercel`-only plugin needs no marketplace.json registry and no hooks source (a bare

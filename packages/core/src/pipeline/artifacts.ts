@@ -53,10 +53,13 @@ export interface PluginHookArtifact {
 }
 
 /** First existing hooks YAML candidate (`claude.yaml`, then `claude.yml`), or `undefined`. */
-function findHooksYaml(pluginDir: string): { absPath: string; source: string } | undefined {
+function findHooksYaml(
+  pluginDir: string,
+  exists: typeof fs.existsSync,
+): { absPath: string; source: string } | undefined {
   for (const name of ['claude.yaml', 'claude.yml']) {
     const absPath = path.join(pluginDir, 'hooks', name);
-    if (fs.existsSync(absPath)) {
+    if (exists(absPath)) {
       return { absPath, source: `hooks/${name}` };
     }
   }
@@ -102,8 +105,9 @@ export function computePluginHookArtifacts(
   pluginDir: string,
   envelope: readonly TargetId[],
   version: string = getGeneratorVersion(),
+  exists = fs.existsSync,
 ): PluginHookArtifact[] {
-  const yaml = findHooksYaml(pluginDir);
+  const yaml = findHooksYaml(pluginDir, exists);
   if (!yaml) return [];
 
   const envelopeSet = new Set(envelope);
@@ -237,6 +241,7 @@ export function computeDistBundles(
   pluginDir: string,
   distDir: string,
   envelope: readonly TargetId[],
+  exists = fs.existsSync,
 ): DistBundle[] {
   const pluginName = path.basename(pluginDir);
   const envelopeSet = new Set(envelope);
@@ -247,7 +252,7 @@ export function computeDistBundles(
       target: 'gemini',
       destDir: path.join(distDir, 'gemini', pluginName),
       regenerate: (into) => {
-        bundleGeminiPlugin(pluginDir, into);
+        bundleGeminiPlugin(pluginDir, into, exists);
       },
     });
   }
@@ -257,7 +262,7 @@ export function computeDistBundles(
       target: 'kiro',
       destDir: path.join(distDir, 'kiro', pluginName),
       regenerate: (into) => {
-        bundleKiroPlugin(pluginDir, into);
+        bundleKiroPlugin(pluginDir, into, exists);
       },
     });
   }
@@ -550,14 +555,17 @@ export function rootManifestPath(repoRoot: string): string {
  * at a throwaway temp directory — never the repo root or any real dir. Mirrors the
  * `regenerate`/temp pattern used by {@link computeDistBundles}.
  */
-function bundleHostToTemp(host: SingleArtifactHost, pluginDir: string): string {
-  const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), `aipm-root-${host}-`));
+function bundleRootHost(
+  host: SingleArtifactHost,
+  pluginDir: string,
+  tempDir: string,
+  exists: typeof fs.existsSync,
+): void {
   if (host === 'gemini') {
-    bundleGeminiPlugin(pluginDir, tempDir);
+    bundleGeminiPlugin(pluginDir, tempDir, exists);
   } else {
-    bundleKiroPlugin(pluginDir, tempDir);
+    bundleKiroPlugin(pluginDir, tempDir, exists);
   }
-  return tempDir;
 }
 
 /**
@@ -670,6 +678,7 @@ export function computeRootArtifacts(
   plugins: readonly RegistryPluginInfo[],
   _workspace: AipmWorkspace,
   onHostError?: (error: unknown) => void,
+  exists = fs.existsSync,
 ): RootArtifacts {
   const files: RootArtifactFile[] = [];
   const findings: Finding[] = [];
@@ -696,7 +705,7 @@ export function computeRootArtifacts(
   for (const [host, declarer] of owners) {
     const pluginDir = path.resolve(repoRoot, declarer.source);
     try {
-      for (const file of readRootHostFiles(host, pluginDir)) files.push(file);
+      for (const file of readRootHostFiles(host, pluginDir, exists)) files.push(file);
     } catch (err) {
       if (onHostError === undefined) throw err;
       onHostError(err);
@@ -707,16 +716,25 @@ export function computeRootArtifacts(
   return { files, trackedPaths, findings };
 }
 
-function readRootHostFiles(host: SingleArtifactHost, pluginDir: string): RootArtifactFile[] {
-  const tempDir = bundleHostToTemp(host, pluginDir);
+function readRootHostFiles(
+  host: SingleArtifactHost,
+  pluginDir: string,
+  exists: typeof fs.existsSync,
+): RootArtifactFile[] {
+  const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'aipm-root-' + host + '-'));
+  let regenerated = false;
   try {
-    return collectFilesRelative(tempDir).map((rel) => ({
+    bundleRootHost(host, pluginDir, tempDir, exists);
+    regenerated = true;
+    return collectFilesRelative(tempDir, exists).map((rel) => ({
       relPath: rel.split(path.sep).join('/'),
       owner: host,
       content: fs.readFileSync(path.join(tempDir, rel)),
     }));
   } finally {
-    if (fs.existsSync(tempDir)) fs.rmSync(tempDir, { recursive: true });
+    if ((regenerated || exists !== fs.existsSync) && fs.existsSync(tempDir)) {
+      fs.rmSync(tempDir, { recursive: true });
+    }
   }
 }
 
@@ -788,15 +806,22 @@ export function serializeRootManifest(trackedPaths: readonly string[]): string {
  * Read the prior generated-root sidecar manifest, returning the tracked-path set it recorded.
  * Returns an empty array when the sidecar is absent or unparseable — a missing/corrupt sidecar is
  * treated as "nothing tracked yet" (a clean first build), and the collision guard then protects any
- * pre-existing root files. With `reportReadError`, a failed read throws before parsing.
+ * pre-existing root files.
  * POSIX-separated paths are returned as-is.
  */
-export function readRootManifestPaths(repoRoot: string, reportReadError = false): string[] {
+export function readRootManifestPaths(repoRoot: string): string[] {
   const manifestPath = rootManifestPath(repoRoot);
   if (!fs.existsSync(manifestPath)) return [];
-  const content = reportReadError ? fs.readFileSync(manifestPath, 'utf-8') : undefined;
   try {
-    const parsed = JSON.parse(content ?? fs.readFileSync(manifestPath, 'utf-8')) as unknown;
+    return parseRootManifestPaths(fs.readFileSync(manifestPath, 'utf-8'));
+  } catch {
+    return [];
+  }
+}
+
+export function parseRootManifestPaths(content: string): string[] {
+  try {
+    const parsed = JSON.parse(content) as unknown;
     if (
       typeof parsed === 'object' &&
       parsed !== null &&
@@ -813,12 +838,12 @@ export function readRootManifestPaths(repoRoot: string, reportReadError = false)
 }
 
 /** Collect every file path under `dir`, relative to `dir`. Returns `[]` if `dir` is absent. */
-export function collectFilesRelative(dir: string): string[] {
-  if (!fs.existsSync(dir)) return [];
+export function collectFilesRelative(dir: string, exists = fs.existsSync): string[] {
+  if (!exists(dir)) return [];
   const out: string[] = [];
   for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
     if (entry.isDirectory()) {
-      for (const sub of collectFilesRelative(path.join(dir, entry.name))) {
+      for (const sub of collectFilesRelative(path.join(dir, entry.name), exists)) {
         out.push(path.join(entry.name, sub));
       }
     } else {

@@ -312,12 +312,17 @@ rules applied to _other_ targets are soft advisories (§7).
 
 Every other requirement reuses an existing code with its existing meaning: `schema-invalid` for Zod
 failures (the new `open-plugins` schema plugs into `TARGET_VALIDATORS`, `validate.ts:935`),
-`marketplace-registration` for the root-registry projection (extend `MARKETPLACE_REGISTRY_CHECKS`,
-`validate.ts:749`, with an `open-plugins` descriptor using `extractStringSource`),
+`marketplace-registration` for the root-registry projection,
 `root-artifact-collision` for the root-file guard, `name-consistency` and `envelope-adherence` from
 the cross-target validators (`validate.ts:913`). This honors the api-semantics rule: a code means one
 thing across the codebase; we do not overload `marketplace-registration` to also mean "metadata dir
 dirty."
+
+For hand-authored registries, validation and lint use the Open Plugins marketplace schema before
+checking membership and source paths. Schema violations produce a hard `marketplace-registration`
+finding for plugins that declare Open Plugins. The validation pipeline runs registration under
+the multi-target consistency check (`architecture.md` §10.1). For generated registries, validation
+uses freshness.
 
 ---
 

@@ -19,6 +19,7 @@ import { validateCodexPlugin } from '../targets/codex/validate.js';
 import { validateCursorPlugin } from '../targets/cursor/validate.js';
 import { validateGeminiPlugin } from '../targets/gemini/validate.js';
 import { validateKiroPlugin } from '../targets/kiro/validate.js';
+import { openPluginsMarketplaceSchema } from '../targets/open-plugins/schemas.js';
 import { validateOpenPluginsPlugin } from '../targets/open-plugins/validate.js';
 import { validateVercelPlugin } from '../targets/vercel/validate.js';
 import {
@@ -183,7 +184,7 @@ const objectSourceMarketplaceSchema = z
  *   - `found`: an entry exists; `source` is the value to normalise and compare to `./plugins/<name>`.
  */
 type SourceExtraction =
-  | { status: 'parse-error' }
+  | { status: 'parse-error'; details?: string }
   | { status: 'not-listed' }
   | { status: 'found'; source: string };
 
@@ -977,6 +978,7 @@ export function validateMcpKeySync(pluginDir: string, envelope: readonly TargetI
  * The marketplace registries this validator knows about, one descriptor per registry-backed
  * target. Claude/Cursor use string-source entries at `.<target>-plugin/marketplace.json`; Codex
  * uses an object-source entry (`source: { source, path }`) at `.agents/plugins/marketplace.json`.
+ * Open Plugins uses its target schema for the repo-root `marketplace.json`.
  *
  * Keeping the per-registry differences (path + source extraction) in data lets the validation
  * loop below stay a single, shape-agnostic pass rather than duplicating it per registry.
@@ -1002,7 +1004,7 @@ const MARKETPLACE_REGISTRY_CHECKS: MarketplaceRegistryDescriptor[] = [
   {
     target: 'open-plugins',
     marketplaceRel: ['marketplace.json'],
-    extractSource: extractStringSource,
+    extractSource: extractOpenPluginsSource,
   },
 ];
 
@@ -1010,6 +1012,15 @@ const MARKETPLACE_REGISTRY_CHECKS: MarketplaceRegistryDescriptor[] = [
 function extractStringSource(raw: unknown, pluginName: string): SourceExtraction {
   const parsed = stringSourceMarketplaceSchema.safeParse(raw);
   if (!parsed.success) return { status: 'parse-error' };
+  const entry = parsed.data.plugins.find((p) => p.name === pluginName);
+  if (!entry) return { status: 'not-listed' };
+  return { status: 'found', source: entry.source };
+}
+
+/** Validate the Open Plugins registry and extract the matching entry's relative source. */
+function extractOpenPluginsSource(raw: unknown, pluginName: string): SourceExtraction {
+  const parsed = openPluginsMarketplaceSchema.safeParse(raw);
+  if (!parsed.success) return { status: 'parse-error', details: z.prettifyError(parsed.error) };
   const entry = parsed.data.plugins.find((p) => p.name === pluginName);
   if (!entry) return { status: 'not-listed' };
   return { status: 'found', source: entry.source };
@@ -1035,6 +1046,8 @@ function extractCodexSource(raw: unknown, pluginName: string): SourceExtraction 
  * - If `codex` is in the envelope, the plugin MUST appear in
  *   `<repoRoot>/.agents/plugins/marketplace.json` with an object `source` whose `path` is
  *   `./plugins/<name>`.
+ * - If `open-plugins` is in the envelope, the root `marketplace.json` MUST satisfy the Open
+ *   Plugins marketplace schema and list the plugin with its `./`-prefixed repo-relative source.
  * - If a target is NOT in the envelope, the plugin MUST NOT be listed in that marketplace.
  *
  * The per-registry path and source extraction are data-driven (see
@@ -1056,8 +1069,8 @@ export function validateMarketplaceRegistration(
   // The expected source is the plugin directory's path relative to the repo root (the location
   // hosts resolve `source` against). Default topology → `plugins/<name>`; an embedded marketplace
   // with a relocated `pluginsRoot` → e.g. `agent-plugins/<name>`. POSIX separators are forced so
-  // the comparison is stable on Windows. Both `./<rel>` and `<rel>` are accepted; the canonical
-  // form carries the `./` prefix (§4.4).
+  // the comparison is stable on Windows. The comparison accepts either spelling (§4.4). The
+  // Open Plugins schema requires the canonical `./` prefix before the comparison runs.
   const relFromRepo = path.relative(repoRoot, pluginDir).split(path.sep).join('/');
   const expectedSource = `./${relFromRepo}`;
   const normalizedExpected = relFromRepo;
@@ -1090,7 +1103,8 @@ export function validateMarketplaceRegistration(
           hard(
             'marketplace-registration',
             pluginName,
-            `Failed to parse marketplace file '${marketplacePath}'.`,
+            `Failed to parse marketplace file '${marketplacePath}'.` +
+              (extraction.details === undefined ? '' : `\n${extraction.details}`),
           ),
         );
       }

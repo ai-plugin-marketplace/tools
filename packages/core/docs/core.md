@@ -50,6 +50,17 @@ Apply `--rule` overrides to a diagnostic list: a diagnostic whose `ruleId` has a
 
 </td><td>
 
+Build a single plugin or every plugin under a repo root. Returns an array with one result per built plugin. Post-build validation skips freshness checks and the published-surface boundary. Use [buildWithOutcome()](./core.buildwithoutcome.md) to receive validation findings alongside the results.
+
+
+</td></tr>
+<tr><td>
+
+[buildWithOutcome(targetPath, opts)](./core.buildwithoutcome.md)
+
+
+</td><td>
+
 Build a single plugin or every plugin under a repo root. Returns one result per built plugin along with post-build validation findings. Artifact drift is hard in CI and soft locally. Filesystem failures that prevent freshness checks are hard findings in either environment. The published-surface boundary check runs only in standalone [validate()](./core.validate.md)<!-- -->.
 
 Setting [BuildOptions.failFast](./core.buildoptions.failfast.md) rejects with a summary of hard findings outside freshness checks after generation and validation complete. Inspect the returned `validation.passed` for failures from freshness checks.
@@ -284,7 +295,7 @@ Options for [build()](./core.build.md)<!-- -->.
 
 </td><td>
 
-Artifacts and post-build diagnostics from [build()](./core.build.md)<!-- -->.
+Artifacts and post-build diagnostics from [buildWithOutcome()](./core.buildwithoutcome.md)<!-- -->.
 
 
 </td></tr>

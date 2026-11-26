@@ -314,7 +314,8 @@ Invoked by `aipm validate` (or as a subphase of `aipm build`). Inspects on-disk 
 ### 5.4 Phase invariants
 
 - Author produces inputs; Build produces outputs; Validate inspects both.
-- Build runs validation once after writing artifacts and returns the findings with the per-plugin results. The CLI reports those findings and exits with status 1 for hard findings. Artifact drift is hard in CI and soft locally. Freshness I/O failures are hard in both environments when returned from a build. Standalone validation propagates the original filesystem error and also checks the published-surface boundary.
+- Both core build operations run validation once after writing artifacts. `build()` returns the per-plugin results array and skips freshness checks. `buildWithOutcome()` returns the results and validation findings, including freshness checks. With `failFast` enabled, either operation rejects on hard structural findings.
+- The CLI uses `buildWithOutcome()` to report those findings and exits with status 1 for hard findings. Artifact drift is hard in CI and soft locally. Freshness I/O failures are hard in both environments and the CLI prints them to stderr. Standalone validation propagates the original filesystem error and also checks the published-surface boundary.
 - No phase calls another's internals; they communicate through on-disk state.
 
 ---
@@ -423,7 +424,8 @@ export function defineConfig(config: AipmConfigInput): AipmConfig;
 
 // Operations
 export function init(dir: string, opts?: InitOptions): Promise<InitOutcome>;
-export function build(path: string, opts?: BuildOptions): Promise<BuildOutcome>;
+export function build(path: string, opts?: BuildOptions): Promise<BuildResult[]>;
+export function buildWithOutcome(path: string, opts?: BuildOptions): Promise<BuildOutcome>;
 export function validate(path: string, opts?: ValidateOptions): Promise<ValidationResult>;
 export function scaffold(name: string, opts: ScaffoldOptions): Promise<void>;
 export function migrate(path: string, opts?: MigrateOptions): Promise<MigrateResult>;
@@ -540,16 +542,16 @@ export interface InitOutcome {
 
 **Subcommands.**
 
-| Subcommand                          | Wraps                                  |
-| ----------------------------------- | -------------------------------------- |
-| `aipm init [dir]`                   | `core.init(dir)` — default cwd         |
-| `aipm build [path]`                 | `core.build(path)` — default cwd       |
-| `aipm validate [path]`              | `core.validate(path)`                  |
-| `aipm scaffold <name>`              | `core.scaffold(name)`                  |
-| `aipm migrate [path]`               | `core.migrate(path)` — no-op in v0.1.0 |
-| `aipm check-support <plugin>`       | `core.checkSupport(pluginDir)`         |
-| `aipm add-target <plugin> <target>` | `core.addTarget(pluginDir, target)`    |
-| `aipm list-targets`                 | `core.listTargets()`                   |
+| Subcommand                          | Wraps                                       |
+| ----------------------------------- | ------------------------------------------- |
+| `aipm init [dir]`                   | `core.init(dir)` — default cwd              |
+| `aipm build [path]`                 | `core.buildWithOutcome(path)` — default cwd |
+| `aipm validate [path]`              | `core.validate(path)`                       |
+| `aipm scaffold <name>`              | `core.scaffold(name)`                       |
+| `aipm migrate [path]`               | `core.migrate(path)` — no-op in v0.1.0      |
+| `aipm check-support <plugin>`       | `core.checkSupport(pluginDir)`              |
+| `aipm add-target <plugin> <target>` | `core.addTarget(pluginDir, target)`         |
+| `aipm list-targets`                 | `core.listTargets()`                        |
 
 **Naming convention.** CLI subcommand names are kebab-case; `core` exports are camelCase. The CLI handles the mapping at its argv boundary; downstream consumers never see the hyphenated form.
 

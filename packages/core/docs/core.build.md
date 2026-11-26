@@ -4,14 +4,12 @@
 
 ## build() function
 
-Build a single plugin or every plugin under a repo root. Returns one result per built plugin along with post-build validation findings. Artifact drift is hard in CI and soft locally. Filesystem failures that prevent freshness checks are hard findings in either environment. The published-surface boundary check runs only in standalone [validate()](./core.validate.md)<!-- -->.
-
-Setting [BuildOptions.failFast](./core.buildoptions.failfast.md) rejects with a summary of hard findings outside freshness checks after generation and validation complete. Inspect the returned `validation.passed` for failures from freshness checks.
+Build a single plugin or every plugin under a repo root. Returns an array with one result per built plugin. Post-build validation skips freshness checks and the published-surface boundary. Use [buildWithOutcome()](./core.buildwithoutcome.md) to receive validation findings alongside the results.
 
 **Signature:**
 
 ```typescript
-export declare function build(targetPath: string, opts?: BuildOptions): Promise<BuildOutcome>;
+export declare function build(targetPath: string, opts?: BuildOptions): Promise<BuildResult[]>;
 ```
 
 ## Parameters
@@ -66,5 +64,5 @@ _(Optional)_
 
 **Returns:**
 
-Promise&lt;[BuildOutcome](./core.buildoutcome.md)<!-- -->&gt;
+Promise&lt;[BuildResult](./core.buildresult.md)<!-- -->\[\]&gt;
 

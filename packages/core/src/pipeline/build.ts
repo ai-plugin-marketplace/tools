@@ -292,8 +292,20 @@ async function collectStampedArtifacts(
 }
 
 // ---------------------------------------------------------------------------
-// Public entry point
+// Build entry points
 // ---------------------------------------------------------------------------
+
+export async function runBuild(targetPath: string, opts?: BuildOptions): Promise<BuildResult[]> {
+  const { results } = await buildAndValidate(targetPath, opts, false);
+  return results;
+}
+
+export function runBuildWithOutcome(
+  targetPath: string,
+  opts?: BuildOptions,
+): Promise<BuildOutcome> {
+  return buildAndValidate(targetPath, opts, true);
+}
 
 /**
  * Build one plugin or every plugin under a repo root (§8.1). `targetPath` is detected as a single
@@ -304,11 +316,16 @@ async function collectStampedArtifacts(
  *
  * @param targetPath - Absolute path to a plugin directory or repo root.
  * @param opts - Build options.
+ * @param includeFreshness - Whether to check freshness for the returned diagnostics.
  * @returns One `BuildResult` per built plugin and the combined validation result.
  * @throws {Error} If `targetPath` is neither a plugin nor a repo root, a config fails to load,
  *   a transform fails, or (when `failFast`) post-build validation reports hard non-freshness findings.
  */
-export async function runBuild(targetPath: string, opts?: BuildOptions): Promise<BuildOutcome> {
+async function buildAndValidate(
+  targetPath: string,
+  opts: BuildOptions | undefined,
+  includeFreshness: boolean,
+): Promise<BuildOutcome> {
   const { repoRoot, pluginDirs, distDir } = await discoverPlugins(targetPath);
 
   // One per-invocation config memo shared across the build loop and registry collection, so each
@@ -432,12 +449,13 @@ export async function runBuild(targetPath: string, opts?: BuildOptions): Promise
     }
   }
 
-  // Match standalone validation's freshness severity. The published-surface boundary check
-  // belongs to standalone validate because it concerns contributor files outside the plugins.
+  // The results-only build skips freshness. The outcome API checks it with the same severity
+  // as standalone validation. The published-surface boundary belongs to standalone validation.
   const validation = await runValidate(targetPath, {
-    ci: Boolean(process.env['CI']),
     skipPublishedSurfaceBoundary: true,
-    reportFreshnessIo: true,
+    ...(includeFreshness
+      ? { ci: Boolean(process.env['CI']), reportFreshnessIo: true }
+      : { skipFreshness: true }),
   });
   if (opts?.failFast) {
     // Preserve the rejection criteria of post-build validation with freshness skipped.

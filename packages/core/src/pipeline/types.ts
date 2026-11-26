@@ -87,7 +87,7 @@ export const DEFAULT_SCAFFOLD_TARGETS = TARGET_IDS.filter(
 export interface BuildOptions {
   /**
    * Throw an error summarizing hard structural findings after artifact generation and validation.
-   * Freshness findings, including I/O failures, stay in the returned validation result.
+   * With {@link buildWithOutcome}, freshness findings stay in the returned validation result.
    * Default: false.
    */
   failFast?: boolean;
@@ -101,7 +101,7 @@ export interface BuildOptions {
 }
 
 /**
- * Artifacts and post-build diagnostics from {@link build}.
+ * Artifacts and post-build diagnostics from {@link buildWithOutcome}.
  *
  * @public
  */

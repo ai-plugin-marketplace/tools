@@ -12,7 +12,7 @@
 
 import * as path from 'node:path';
 
-import { runBuild } from './build.js';
+import { runBuild, runBuildWithOutcome } from './build.js';
 import { runInit } from './init.js';
 import { loadRepoConfig } from './load-config.js';
 import { runRefreshScaffold } from './scaffold-refresh.js';
@@ -23,6 +23,7 @@ import type {
   AddTargetOutcome,
   BuildOptions,
   BuildOutcome,
+  BuildResult,
   InitOptions,
   InitOutcome,
   MigrateOptions,
@@ -42,6 +43,17 @@ function isCi(): boolean {
 }
 
 /**
+ * Build a single plugin or every plugin under a repo root. Returns an array with one result per
+ * built plugin. Post-build validation skips freshness checks and the published-surface boundary.
+ * Use {@link buildWithOutcome} to receive validation findings alongside the results.
+ *
+ * @public
+ */
+export function build(targetPath: string, opts?: BuildOptions): Promise<BuildResult[]> {
+  return runBuild(targetPath, opts);
+}
+
+/**
  * Build a single plugin or every plugin under a repo root. Returns one result per built plugin
  * along with post-build validation findings. Artifact drift is hard in CI and soft locally.
  * Filesystem failures that prevent freshness checks are hard findings in either environment.
@@ -53,8 +65,8 @@ function isCi(): boolean {
  *
  * @public
  */
-export function build(targetPath: string, opts?: BuildOptions): Promise<BuildOutcome> {
-  return runBuild(targetPath, opts);
+export function buildWithOutcome(targetPath: string, opts?: BuildOptions): Promise<BuildOutcome> {
+  return runBuildWithOutcome(targetPath, opts);
 }
 
 /**

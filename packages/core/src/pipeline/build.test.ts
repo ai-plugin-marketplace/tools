@@ -25,6 +25,7 @@ import { PAYLOAD_ADAPTER_FILENAME, PAYLOAD_ADAPTER_SOURCE } from '../hooks/paylo
 import { convertClaudeHooksYamlToJson } from '../targets/claude/transform.js';
 import { convertClaudeHooksYamlToCursorJson } from '../targets/cursor/transform.js';
 import { CURSOR_SHIM_FILENAME, CURSOR_SHIM_RUNNER_SOURCE } from '../targets/cursor/shim-runner.js';
+import { build, buildWithOutcome } from '../index.js';
 import { computePluginHookArtifacts } from './artifacts.js';
 import { runBuild } from './build.js';
 import { GeneratorDowngradeError, getGeneratorVersion } from './generator-version.js';
@@ -197,7 +198,7 @@ describeMaybe('runBuild — BuildResult shape (§8.1)', () => {
 
   it('returns a length-1 array for single-plugin input with the correct plugin name and dir', async () => {
     repo = synthPluginRepo(['claude', 'gemini']);
-    const { results } = await runBuild(repo.pluginDir);
+    const results = await runBuild(repo.pluginDir);
     expect(results).toHaveLength(1);
     expect(results[0]?.plugin).toBe(SYNTH_PLUGIN_NAME);
     expect(results[0]?.pluginDir).toBe(repo.pluginDir);
@@ -207,9 +208,7 @@ describeMaybe('runBuild — BuildResult shape (§8.1)', () => {
 
   it('records the claude hook JSON with target=claude and the right source', async () => {
     repo = synthPluginRepo(ALL_SYNTH_TARGETS);
-    const {
-      results: [result],
-    } = await runBuild(repo.repoRoot);
+    const [result] = await runBuild(repo.repoRoot);
 
     const claudeArtifact = result?.artifacts.find(
       (a) => a.path === path.join(repo.pluginDir, 'hooks', 'hooks.json'),
@@ -221,9 +220,7 @@ describeMaybe('runBuild — BuildResult shape (§8.1)', () => {
 
   it('records dist gemini and kiro bundle files with the right target', async () => {
     repo = synthPluginRepo(ALL_SYNTH_TARGETS);
-    const {
-      results: [result],
-    } = await runBuild(repo.repoRoot);
+    const [result] = await runBuild(repo.repoRoot);
     const artifacts = result?.artifacts ?? [];
 
     const geminiExt = artifacts.find(
@@ -241,9 +238,7 @@ describeMaybe('runBuild — BuildResult shape (§8.1)', () => {
 
   it('records the cursor hook JSON with target=cursor and the right source', async () => {
     repo = synthPluginRepo(ALL_SYNTH_TARGETS);
-    const {
-      results: [result],
-    } = await runBuild(repo.repoRoot);
+    const [result] = await runBuild(repo.repoRoot);
 
     const cursorArtifact = result?.artifacts.find(
       (a) => a.path === path.join(repo.pluginDir, 'hooks', 'cursor.json'),
@@ -255,9 +250,7 @@ describeMaybe('runBuild — BuildResult shape (§8.1)', () => {
 
   it('emits only hooks/cursor.json for cursor (no dist tree) and nothing for vercel', async () => {
     repo = synthPluginRepo(['cursor', 'vercel']);
-    const {
-      results: [result],
-    } = await runBuild(repo.pluginDir);
+    const [result] = await runBuild(repo.pluginDir);
     // No dist trees: cursor/vercel have no bundle step.
     expect(fs.existsSync(path.join(repo.repoRoot, 'dist'))).toBe(false);
     // Claude is not declared → its hook file is absent.
@@ -283,17 +276,32 @@ describeMaybe('runBuild — post-build validation (§5.4)', () => {
     repo.cleanup();
   });
 
-  it('throws under failFast when an artifact exists for a target outside the envelope', async () => {
+  it('public build rejects under failFast when an artifact exists outside the envelope', async () => {
     // Declare only claude, but the plugin still carries gemini-extension.json etc. → adherence.
     repo = synthPluginRepo(['claude']);
-    await expect(runBuild(repo.pluginDir, { failFast: true })).rejects.toThrow(
-      /envelope-adherence/,
+    await expect(build(repo.pluginDir, { failFast: true })).rejects.toThrow(
+      `[${SYNTH_PLUGIN_NAME}] envelope-adherence:`,
     );
+    expect(fs.existsSync(path.join(repo.pluginDir, 'hooks', 'hooks.json'))).toBe(true);
   });
 
-  it('returns generated artifacts and hard post-build findings together', async () => {
+  it('public build returns the results array by default even with hard findings', async () => {
     repo = synthPluginRepo(['claude']);
-    const { results, validation } = await runBuild(repo.pluginDir);
+    const results = await build(repo.pluginDir);
+
+    expect(Array.isArray(results)).toBe(true);
+    expect(results).toHaveLength(1);
+    expect(results[0]).toMatchObject({ plugin: SYNTH_PLUGIN_NAME, pluginDir: repo.pluginDir });
+    expect(results[0]?.artifacts).toContainEqual({
+      path: path.join(repo.pluginDir, 'hooks', 'hooks.json'),
+      source: `${SYNTH_PLUGIN_NAME}/hooks/claude.yaml`,
+      target: 'claude',
+    });
+  });
+
+  it('buildWithOutcome returns generated artifacts and hard post-build findings together', async () => {
+    repo = synthPluginRepo(['claude']);
+    const { results, validation } = await buildWithOutcome(repo.pluginDir);
 
     expect(results).toHaveLength(1);
     expect(results[0]?.artifacts).toContainEqual({
@@ -315,7 +323,7 @@ describeMaybe('runBuild — post-build validation (§5.4)', () => {
   it('a clean all-targets build passes post-build validation under failFast', async () => {
     repo = synthPluginRepo(ALL_SYNTH_TARGETS);
     // No throw means post-build validate found no hard findings.
-    const { results } = await runBuild(repo.repoRoot, { failFast: true });
+    const results = await build(repo.repoRoot, { failFast: true });
     expect(results).toHaveLength(1);
   });
 });

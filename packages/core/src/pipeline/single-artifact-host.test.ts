@@ -31,7 +31,7 @@ import * as path from 'node:path';
 
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
-import { build } from '../index.js';
+import { build, buildWithOutcome } from '../index.js';
 import { runBuild } from './build.js';
 import { runValidate } from './validate.js';
 import { synthRegistryRepo } from '../test-support/synth-plugin.js';
@@ -138,7 +138,12 @@ describe('single-artifact-host — root emission (workspace present, N=1)', () =
       WORKSPACE,
     );
 
-    const { results, validation } = await build(repo.repoRoot, { failFast: true });
+    const legacyResults = await build(repo.repoRoot, { failFast: true });
+    const { results, validation } = await buildWithOutcome(repo.repoRoot, { failFast: true });
+
+    expect(legacyResults.map((result) => result.artifacts)).toStrictEqual(
+      results.map((result) => result.artifacts),
+    );
 
     expect(results.map((result) => result.plugin).sort()).toEqual(['gem', 'kir']);
     expect(validation.passed).toBe(false);
@@ -199,7 +204,7 @@ describe('single-artifact-host — root emission (workspace present, N=1)', () =
   // of picking one of the actual owners.
   it("records the sidecar manifest artifact with target `'shared'` when multiple hosts emit", async () => {
     repo = synthRegistryRepo([geminiPlugin('gem'), kiroPlugin('kir')], WORKSPACE);
-    const { results } = await runBuild(repo.repoRoot);
+    const results = await runBuild(repo.repoRoot);
 
     const manifestAbs = path.join(repo.repoRoot, ...SIDECAR_REL);
     const sidecarArtifacts = results.flatMap((r) =>

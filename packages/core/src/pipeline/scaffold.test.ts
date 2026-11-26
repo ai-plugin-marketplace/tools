@@ -660,9 +660,7 @@ describe('every default-scaffolded target emits a build artifact (issue #94)', (
     );
     expect(declaredTargets.length).toBeGreaterThan(0);
 
-    const {
-      results: [result],
-    } = await runBuild(repoRoot);
+    const [result] = await runBuild(repoRoot);
     expect(result).toBeDefined();
 
     const emittedTargets = new Set(result?.artifacts.map((a) => a.target) ?? []);
@@ -688,9 +686,7 @@ describe('every default-scaffolded target emits a build artifact (issue #94)', (
     });
     clearHandAuthoredRootRegistry(repoRoot);
 
-    const {
-      results: [result],
-    } = await runBuild(repoRoot);
+    const [result] = await runBuild(repoRoot);
     const vercelArtifacts = result?.artifacts.filter((a) => a.target === 'vercel') ?? [];
     expect(vercelArtifacts).toStrictEqual([]);
   });

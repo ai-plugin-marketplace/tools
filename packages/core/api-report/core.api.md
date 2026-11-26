@@ -63,7 +63,7 @@ export interface AipmWorkspaceInput {
 export function applyRuleSeverityOverrides(diagnostics: readonly Diagnostic[], overrides: ReadonlyMap<string, RuleSeverityOverride>): Diagnostic[];
 
 // @public
-export function build(targetPath: string, opts?: BuildOptions): Promise<BuildOutcome>;
+export function build(targetPath: string, opts?: BuildOptions): Promise<BuildResult[]>;
 
 // @public
 export interface BuildOptions {
@@ -84,6 +84,9 @@ export interface BuildResult {
     plugin: string;
     pluginDir: string;
 }
+
+// @public
+export function buildWithOutcome(targetPath: string, opts?: BuildOptions): Promise<BuildOutcome>;
 
 // @public
 export function checkSupport(pluginDir: string): Promise<SupportReport>;

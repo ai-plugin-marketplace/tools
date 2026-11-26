@@ -4,7 +4,7 @@
 
 ## BuildOutcome interface
 
-Artifacts and post-build diagnostics from [build()](./core.build.md)<!-- -->.
+Artifacts and post-build diagnostics from [buildWithOutcome()](./core.buildwithoutcome.md)<!-- -->.
 
 **Signature:**
 

@@ -23,7 +23,7 @@ import { fileURLToPath } from 'node:url';
 import {
   addTarget,
   applyRuleSeverityOverrides,
-  build,
+  buildWithOutcome,
   checkSupport,
   init,
   lint,
@@ -315,7 +315,7 @@ export async function run(argv: readonly string[], opts: RunOptions = {}): Promi
         // Resolve the target from the first non-flag positional so `aipm build --force-downgrade`
         // does not mistake the flag for a path.
         const target = rest.find((a) => !a.startsWith('-')) ?? process.cwd();
-        const { results, validation } = await build(target, { forceDowngrade });
+        const { results, validation } = await buildWithOutcome(target, { forceDowngrade });
         const artifactCount = results.reduce((n, r) => n + r.artifacts.length, 0);
         // §5.4: build runs validate before reporting success. The success summary is written
         // only when validate passes — printing it unconditionally would put a "Built N

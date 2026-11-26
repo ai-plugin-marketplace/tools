@@ -20,6 +20,7 @@ All exports are available from the root import path — there are no public subp
 import {
   defineConfig,
   build,
+  buildWithOutcome,
   validate,
   scaffold,
   init,
@@ -40,20 +41,23 @@ import {
 
 ### Operations
 
-| Export         | Description                                                        |
-| -------------- | ------------------------------------------------------------------ |
-| `init`         | Scaffold a new plugin repo at a given directory                    |
-| `build`        | Build artifacts for a plugin or all plugins under a repo root      |
-| `validate`     | Inspect on-disk state and return `ValidationResult` (read-only)    |
-| `scaffold`     | Create a new plugin directory from templates                       |
-| `migrate`      | Apply schema migrations (no-op in v0.1.0; real in future releases) |
-| `checkSupport` | Report missing artifacts and expansion suggestions for a plugin    |
-| `addTarget`    | Scaffold skeleton files for a new target in an existing plugin     |
-| `listTargets`  | Return the `TargetId` values this toolkit version recognises       |
+| Export             | Description                                                        |
+| ------------------ | ------------------------------------------------------------------ |
+| `init`             | Scaffold a new plugin repo at a given directory                    |
+| `build`            | Build artifacts for a plugin or all plugins under a repo root      |
+| `buildWithOutcome` | Build artifacts and return post-build validation findings          |
+| `validate`         | Inspect on-disk state and return `ValidationResult` (read-only)    |
+| `scaffold`         | Create a new plugin directory from templates                       |
+| `migrate`          | Apply schema migrations (no-op in v0.1.0; real in future releases) |
+| `checkSupport`     | Report missing artifacts and expansion suggestions for a plugin    |
+| `addTarget`        | Scaffold skeleton files for a new target in an existing plugin     |
+| `listTargets`      | Return the `TargetId` values this toolkit version recognises       |
 
-`build()` returns `{ results, validation }`. With `failFast: true`, it rejects after writing
-artifacts and completing validation if there are hard findings outside freshness checks. Artifact
-drift and freshness I/O failures are reported in `validation` even with `failFast` enabled.
+`build()` returns a `BuildResult[]` and skips freshness checks during post-build validation.
+Use `buildWithOutcome()` with the same arguments to get `{ results, validation }` from one build
+and validation pass, including freshness diagnostics. With `failFast: true`, both functions
+reject on hard structural findings after writing artifacts. Artifact drift and freshness I/O
+failures are reported in the outcome's `validation`.
 
 ### Key types
 

@@ -21,6 +21,7 @@ export type {
 
 export {
   build,
+  buildWithOutcome,
   validate,
   scaffold,
   init,

@@ -422,7 +422,7 @@ describe('aipm build success-line ordering (issue #97)', () => {
   );
 
   it.each([false, true])(
-    'only retries a failed repo-root oracle (transient failure: %s)',
+    'computes the repo-root oracle at reporting time (transient preflight failure: %s)',
     async (transientFailure) => {
       writeGeminiPlugin();
       fs.writeFileSync(
@@ -449,7 +449,7 @@ describe('aipm build success-line ordering (issue #97)', () => {
           out: 'Built 1 plugin(s), 5 artifact(s).\nOK — no findings.\n',
           err: '',
         });
-        expect(rootAttempts).toBe(transientFailure ? 3 : 2);
+        expect(rootAttempts).toBe(3);
       } finally {
         vi.restoreAllMocks();
         syncBuiltinESMExports();
@@ -457,6 +457,38 @@ describe('aipm build success-line ordering (issue #97)', () => {
       }
     },
   );
+
+  it('reports root drift when the source and dist bundle change after preflight', async () => {
+    writeGeminiPlugin();
+    fs.writeFileSync(
+      path.join(tmpDir, 'aipm.workspace.ts'),
+      "export default { marketplace: { name: 'example-market' } };\n",
+    );
+    vi.stubEnv('CI', 'true');
+    const mkdtempSync = fs.mkdtempSync;
+    vi.spyOn(fs, 'mkdtempSync').mockImplementation((prefix, options) => {
+      if (prefix.endsWith('aipm-freshness-')) {
+        for (const dir of ['plugins/gem', 'dist/gemini/gem']) {
+          fs.writeFileSync(path.join(tmpDir, dir, 'GEMINI.md'), '# Changed after preflight\n');
+        }
+      }
+      return mkdtempSync(prefix, options);
+    });
+    syncBuiltinESMExports();
+    try {
+      await expect(invoke(['build', tmpDir])).resolves.toEqual({
+        code: 1,
+        out:
+          "freshness (hard): Generated repo-root artifact 'GEMINI.md' is stale — it differs from what `aipm build` would produce (hand-edited or out of date).\n" +
+          "    hint: run `aipm build` to regenerate it; edit the owning plugin's source, not the generated repo-root file.\n",
+        err: '',
+      });
+    } finally {
+      vi.restoreAllMocks();
+      syncBuiltinESMExports();
+      vi.unstubAllEnvs();
+    }
+  });
 
   it('still prints "Built N plugin(s)" before validation output on a clean run', async () => {
     // A `vercel`-only plugin needs no marketplace.json registry and no hooks source (a bare

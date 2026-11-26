@@ -314,8 +314,8 @@ Invoked by `aipm validate` (or as a subphase of `aipm build`). Inspects on-disk 
 ### 5.4 Phase invariants
 
 - Author produces inputs; Build produces outputs; Validate inspects both.
-- Both core build operations run validation once after writing artifacts. `build()` returns the per-plugin results array and skips freshness checks. `buildWithOutcome()` returns the results and validation findings, including freshness checks. With `failFast` enabled, either operation rejects on hard structural findings.
-- The CLI calls `buildWithOutcome()`. Within its validation pass, structural checks run before freshness checks, findings keep their reporting order, and only a failed repo-root oracle is retried. Fatal errors go to stderr, and hard validation findings go to stdout with exit status 1. Artifact drift is hard in CI and soft locally. `buildWithOutcome()` records freshness I/O failures as hard diagnostics. Standalone validation also checks the published-surface boundary.
+- Both core build operations run validation once after writing artifacts. `build()` returns the per-plugin results array and skips freshness checks. `buildWithOutcome()` returns the results and validation findings, including freshness checks. With `failFast` enabled, either operation rejects on hard structural findings. `buildWithOutcome()` also rejects when a filesystem error prevents a structural or freshness check.
+- The CLI calls `buildWithOutcome()`. Within its validation pass, structural checks run before freshness checks, findings keep their reporting order, and expected repo-root artifact bytes are regenerated at the reporting step. Fatal errors go to stderr, and hard validation findings go to stdout with exit status 1. Artifact drift is hard in CI and soft locally. `buildWithOutcome()` records validation I/O failures as hard diagnostics. Standalone validation also checks the published-surface boundary.
 - Freshness compares generated artifacts with on-disk state. Build supplies the repo-root ownership findings it computed during generation, so those findings survive an incomplete freshness check.
 
 ---

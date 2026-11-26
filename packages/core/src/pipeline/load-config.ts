@@ -178,13 +178,14 @@ export function createConfigCache(): ConfigCache {
 export async function loadPluginConfig(
   pluginDir: string,
   cache?: ConfigCache,
+  exists = fs.existsSync,
 ): Promise<AipmConfig> {
   const cached = cache?.get(pluginDir);
   if (cached !== undefined) return cached;
 
   const configPath = configPathFor(pluginDir);
 
-  if (!fs.existsSync(configPath)) {
+  if (!exists(configPath)) {
     throw new ConfigLoadError(
       `No ${AIPM_CONFIG_FILENAME} found in ${pluginDir}. Every plugin must declare a support envelope (spec §6.1).`,
     );
@@ -220,8 +221,8 @@ export interface ResolvedRepoConfig {
 export const DEFAULT_REPO_CONFIG: ResolvedRepoConfig = { pluginsRoot: 'plugins', distDir: 'dist' };
 
 /** True iff `repoRoot` contains an `aipm.repo.ts`. */
-export function hasRepoConfig(repoRoot: string): boolean {
-  return fs.existsSync(path.join(repoRoot, AIPM_REPO_CONFIG_FILENAME));
+export function hasRepoConfig(repoRoot: string, exists = fs.existsSync): boolean {
+  return exists(path.join(repoRoot, AIPM_REPO_CONFIG_FILENAME));
 }
 
 /**
@@ -236,9 +237,12 @@ export function hasRepoConfig(repoRoot: string): boolean {
  * @returns The resolved repo config.
  * @throws {ConfigLoadError} If the file exists but cannot be imported or fails validation.
  */
-export async function loadRepoConfig(repoRoot: string): Promise<ResolvedRepoConfig> {
+export async function loadRepoConfig(
+  repoRoot: string,
+  exists = fs.existsSync,
+): Promise<ResolvedRepoConfig> {
   const configPath = path.join(repoRoot, AIPM_REPO_CONFIG_FILENAME);
-  if (!fs.existsSync(configPath)) {
+  if (!exists(configPath)) {
     return { ...DEFAULT_REPO_CONFIG };
   }
 
@@ -271,9 +275,12 @@ export function hasWorkspaceConfig(repoRoot: string): boolean {
  * @returns The validated workspace config, or `undefined` when no `aipm.workspace.ts` exists.
  * @throws {ConfigLoadError} If the file exists but cannot be imported or fails validation.
  */
-export async function loadWorkspaceConfig(repoRoot: string): Promise<AipmWorkspace | undefined> {
+export async function loadWorkspaceConfig(
+  repoRoot: string,
+  exists = fs.existsSync,
+): Promise<AipmWorkspace | undefined> {
   const configPath = path.join(repoRoot, AIPM_WORKSPACE_CONFIG_FILENAME);
-  if (!fs.existsSync(configPath)) {
+  if (!exists(configPath)) {
     return undefined;
   }
 

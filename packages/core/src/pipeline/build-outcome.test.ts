@@ -99,7 +99,7 @@ it.each(['', 'true'])(
     expect(makeTempDir.mock.calls.some(([prefix]) => prefix.endsWith('aipm-freshness-'))).toBe(
       false,
     );
-    const { results, validation } = await buildWithOutcome(repo.repoRoot, { failFast: true });
+    const { results, validation } = await buildWithOutcome(repo.repoRoot);
 
     expect(legacyResults[0]?.artifacts).toStrictEqual(results[0]?.artifacts);
     const manifestPath = path.join(repo.repoRoot, 'dist', 'gemini', 'gem', 'gemini-extension.json');
@@ -112,6 +112,9 @@ it.each(['', 'true'])(
       plugin: 'gem',
       message: failure.message,
     });
+    await expect(buildWithOutcome(repo.repoRoot, { failFast: true })).rejects.toThrow(
+      'freshness-io: ' + failure.message,
+    );
     await expect(validate(repo.repoRoot)).rejects.toBe(failure);
   },
 );
@@ -177,7 +180,7 @@ it.each(['compare', 'regenerate'])(
       message: failure.message,
     });
     await expect(buildWithOutcome(repo.repoRoot, { failFast: true })).rejects.toThrow(
-      failureSummary,
+      /2 hard validation finding\(s\):[\s\S]+single-artifact-host:[\s\S]+freshness-io:/,
     );
   },
 );
@@ -214,7 +217,7 @@ it('keeps Gemini drift when the same plugin’s Kiro freshness check fails', asy
   });
   syncBuiltinESMExports();
 
-  const { validation } = await buildWithOutcome(repo.repoRoot, { failFast: true });
+  const { validation } = await buildWithOutcome(repo.repoRoot);
 
   expect(validation.passed).toBe(false);
   expect(validation.findings).toEqual([
@@ -310,7 +313,7 @@ it.each(['oracle', 'sidecar'])(
     // Disarm the read injection for the next generation's ownership lookup.
     rootAttempts = 0;
     await expect(buildWithOutcome(root, { failFast: true })).rejects.toThrow(
-      'Build produced 1 hard validation finding(s):\n  [?] root-artifact-collision:',
+      /2 hard validation finding\(s\):[\s\S]+root-artifact-collision:[\s\S]+freshness-io:/,
     );
     expect(readFileSync(authorContext, 'utf-8')).toBe('# Author-owned\n');
   },
@@ -333,7 +336,7 @@ it.skipIf(process.platform === 'win32')(
     });
     syncBuiltinESMExports();
 
-    const { validation } = await buildWithOutcome(root, { failFast: true });
+    const { validation } = await buildWithOutcome(root);
     expect(validation.passed).toBe(false);
     expect(validation.findings).toMatchObject([
       { code: 'freshness-io', severity: 'hard', plugin: 'gem' },
@@ -388,6 +391,242 @@ it('keeps drift found before and after a read error in the same bundle', async (
   ]);
   expect(validation.findings[0]?.message).toContain("GEMINI.md' is stale");
   expect(validation.findings[1]?.message).toContain("gemini-extension.json' is stale");
+});
+
+it.skipIf(process.platform === 'win32')(
+  'retains generation collisions and checks plugins when workspace lookup fails',
+  async () => {
+    repo = geminiRepo({ name: 'workspace' });
+    const root = repo.repoRoot;
+    const workspace = path.join(root, 'aipm.workspace.ts');
+    fs.writeFileSync(path.join(root, 'GEMINI.md'), '# Author-owned\n');
+    const plugin = path.join(root, 'plugins', 'gem');
+    const manifest = path.join(root, '.aipm', 'generated-root.json');
+    fs.mkdirSync(path.dirname(manifest), { recursive: true });
+    fs.writeFileSync(manifest, '{"version":1,"paths":[]}\n');
+    const writeFileSync = fs.writeFileSync;
+    vi.spyOn(fs, 'writeFileSync').mockImplementation((file, data, options) => {
+      writeFileSync(file, data, options);
+      if (file === manifest) {
+        fs.rmSync(workspace);
+        fs.symlinkSync(path.basename(workspace), workspace);
+        writeFileSync(path.join(plugin, 'commands', 'broken.md'), '---\na: [\n---\n');
+      }
+    });
+    syncBuiltinESMExports();
+
+    const { validation } = await buildWithOutcome(root);
+    expect(validation.passed).toBe(false);
+    expect(validation.findings).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ code: 'root-artifact-collision', severity: 'hard' }),
+        expect.objectContaining({ code: 'frontmatter-invalid', severity: 'hard', plugin: 'gem' }),
+        expect.objectContaining({
+          code: 'freshness-io',
+          severity: 'hard',
+        }),
+      ]),
+    );
+    expect(validation.findings.find(({ code }) => code === 'freshness-io')?.message).toContain(
+      'ELOOP',
+    );
+    fs.rmSync(workspace);
+    writeFileSync(workspace, "export default { marketplace: { name: 'workspace' } };\n");
+    await expect(buildWithOutcome(root, { failFast: true })).rejects.toThrow(
+      /root-artifact-collision:[\s\S]+freshness-io:.*ELOOP/,
+    );
+  },
+);
+
+it.each([false, true])(
+  'detects root collisions introduced after generation (failFast: %s)',
+  async (failFast) => {
+    vi.stubEnv('CI', '');
+    repo = geminiRepo({ name: 'workspace' });
+    const root = repo.repoRoot;
+    const context = path.join(root, 'GEMINI.md');
+    fs.writeFileSync(context, '# Author-owned\n');
+    const source = path.join(root, 'plugins', 'gem', 'GEMINI.md');
+    fs.rmSync(source);
+    const mkdtempSync = fs.mkdtempSync;
+    let rootAttempts = 0;
+    vi.spyOn(fs, 'mkdtempSync').mockImplementation((prefix, options) => {
+      if (prefix.endsWith('aipm-root-gemini-') && ++rootAttempts === 2) {
+        fs.writeFileSync(source, '# New plugin source\n');
+      }
+      return mkdtempSync(prefix, options);
+    });
+    syncBuiltinESMExports();
+
+    const outcome = buildWithOutcome(root, { failFast });
+    if (failFast) {
+      await expect(outcome).rejects.toThrow(/root-artifact-collision:.*'GEMINI.md'/);
+    } else {
+      const { validation } = await outcome;
+      expect(validation.passed).toBe(false);
+      const finding = validation.findings.find(({ code }) => code === 'root-artifact-collision');
+      expect(finding?.severity).toBe('hard');
+      expect(finding?.message).toContain("'GEMINI.md' already exists");
+    }
+    expect(fs.readFileSync(context, 'utf-8')).toBe('# Author-owned\n');
+  },
+);
+
+it.each(['read', 'lookup', 'scan'])(
+  'reports incomplete frontmatter checks after a %s failure and keeps checking siblings',
+  async (operation) => {
+    repo = synthRegistryRepo([
+      {
+        name: 'skills',
+        targets: ['vercel'],
+        files: {
+          'skills/example/SKILL.md':
+            '---\nname: example\ndescription: Example skill\n---\n# Example\n',
+          'commands/test.md': '---\na: [\n---\n',
+        },
+      },
+    ]);
+    const plugin = path.join(repo.repoRoot, 'plugins', 'skills');
+    const dir = path.join(plugin, 'commands');
+    const command = path.join(dir, 'test.md');
+    const failure = Object.assign(new Error('Cannot check command frontmatter'), {
+      code: 'EACCES',
+    });
+    const readFileSync = fs.readFileSync;
+    const readdirSync = fs.readdirSync;
+    const statSync = fs.statSync;
+    vi.spyOn(fs, 'readFileSync').mockImplementation((file, options) => {
+      if (file === command && operation === 'read') throw failure;
+      return readFileSync(file, options);
+    });
+    vi.spyOn(fs, 'readdirSync').mockImplementation((file, options) => {
+      if (file === dir && operation === 'scan') throw failure;
+      return readdirSync(file, options) as fs.Dirent<Buffer>[];
+    });
+    vi.spyOn(fs, 'statSync').mockImplementation((file, options) => {
+      if (file === dir && operation === 'lookup') throw failure;
+      return statSync(file, options);
+    });
+    syncBuiltinESMExports();
+    if (operation !== 'lookup') {
+      const legacy = await validate(plugin);
+      expect(legacy.findings).toEqual([]);
+      await expect(build(plugin, { failFast: true })).resolves.toHaveLength(1);
+    }
+
+    const { validation } = await buildWithOutcome(plugin);
+    expect(validation).toEqual({
+      passed: false,
+      findings: [
+        { code: 'freshness-io', severity: 'hard', plugin: 'skills', message: failure.message },
+      ],
+    });
+    await expect(buildWithOutcome(plugin, { failFast: true })).rejects.toThrow(
+      /freshness-io: Cannot check command frontmatter/,
+    );
+
+    const agent = path.join(plugin, 'agents', 'broken.md');
+    fs.mkdirSync(path.dirname(agent));
+    fs.writeFileSync(agent, '---\na: [\n---\n');
+    const incomplete = await buildWithOutcome(plugin);
+    expect(incomplete.validation.findings).toEqual([
+      expect.objectContaining({
+        code: 'frontmatter-invalid',
+      }),
+      expect.objectContaining({ code: 'freshness-io', message: failure.message }),
+    ]);
+    expect(incomplete.validation.findings[0]?.message).toContain(path.join('agents', 'broken.md'));
+  },
+);
+
+it('keeps bundle drift outside an unreadable subtree without reporting missing files inside it', async () => {
+  vi.stubEnv('CI', '');
+  repo = geminiRepo();
+  const root = repo.repoRoot;
+  const bundle = path.join(root, 'dist', 'gemini', 'gem');
+  const commands = path.join(bundle, 'commands');
+  const failure = Object.assign(new Error('Cannot scan the generated commands'), {
+    code: 'EACCES',
+  });
+  const mkdtempSync = fs.mkdtempSync;
+  let checking = false;
+  vi.spyOn(fs, 'mkdtempSync').mockImplementation((prefix, options) => {
+    if (prefix.endsWith('aipm-freshness-')) {
+      checking = true;
+      fs.writeFileSync(path.join(bundle, 'GEMINI.md'), '# Stale\n');
+    }
+    return mkdtempSync(prefix, options);
+  });
+  const readdirSync = fs.readdirSync;
+  vi.spyOn(fs, 'readdirSync').mockImplementation((file, options) => {
+    if (checking && file === commands) throw failure;
+    return readdirSync(file, options) as fs.Dirent<Buffer>[];
+  });
+  syncBuiltinESMExports();
+
+  const { validation } = await buildWithOutcome(root);
+  expect(validation).toEqual({
+    passed: false,
+    findings: [
+      expect.objectContaining({
+        code: 'freshness',
+        severity: 'soft',
+      }),
+      { code: 'freshness-io', severity: 'hard', plugin: 'gem', message: failure.message },
+    ],
+  });
+  expect(validation.findings[0]?.message).toContain("GEMINI.md' is stale");
+});
+
+it('checks known plugins when post-build discovery cannot enumerate the plugins directory', async () => {
+  repo = geminiRepo();
+  const plugins = path.join(repo.repoRoot, 'plugins');
+  fs.writeFileSync(path.join(plugins, 'gem', 'commands', 'broken.md'), '---\na: [\n---\n');
+  const failure = Object.assign(new Error('Cannot enumerate the plugins directory'), {
+    code: 'EACCES',
+  });
+  const readdirSync = fs.readdirSync;
+  let scans = 0;
+  vi.spyOn(fs, 'readdirSync').mockImplementation((file, options) => {
+    if (file === plugins && ++scans === 2) throw failure;
+    return readdirSync(file, options) as fs.Dirent<Buffer>[];
+  });
+  syncBuiltinESMExports();
+
+  const { validation } = await buildWithOutcome(repo.repoRoot);
+  expect(validation.passed).toBe(false);
+  expect(validation.findings).toMatchObject([
+    { code: 'frontmatter-invalid', severity: 'hard', plugin: 'gem' },
+    { code: 'freshness-io', severity: 'hard', message: failure.message },
+  ]);
+});
+
+it('retains tracked root artifacts when their ownership sidecar cannot be read during generation', async () => {
+  vi.stubEnv('CI', '');
+  repo = geminiRepo({ name: 'workspace' });
+  const root = repo.repoRoot;
+  await build(root);
+  const manifest = path.join(root, '.aipm', 'generated-root.json');
+  const tracked = fs.readFileSync(manifest, 'utf-8');
+  fs.writeFileSync(path.join(root, 'plugins', 'gem', 'GEMINI.md'), '# Updated source\n');
+  const failure = Object.assign(new Error('Cannot read the ownership sidecar'), { code: 'EACCES' });
+  const readFileSync = fs.readFileSync;
+  let reads = 0;
+  vi.spyOn(fs, 'readFileSync').mockImplementation((file, options) => {
+    if (file === manifest && ++reads === 1) throw failure;
+    return readFileSync(file, options);
+  });
+  syncBuiltinESMExports();
+
+  const { validation } = await buildWithOutcome(root);
+  expect(validation.passed).toBe(false);
+  expect(validation.findings).toMatchObject([
+    { code: 'freshness', severity: 'soft' },
+    { code: 'freshness-io', severity: 'hard', message: failure.message },
+  ]);
+  expect(validation.findings[0]?.message).toContain("'GEMINI.md' is stale");
+  expect(fs.readFileSync(path.join(root, 'GEMINI.md'), 'utf-8')).toBe('# Gemini\n');
+  expect(readFileSync(manifest, 'utf-8')).toBe(tracked);
 });
 
 it('documents the outcome-only diagnostic in the architecture API example', () => {

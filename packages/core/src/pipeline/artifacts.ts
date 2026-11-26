@@ -510,10 +510,11 @@ export async function collectRegistryPlugins(
   repoRoot: string,
   pluginDirs: readonly string[],
   cache?: ConfigCache,
+  exists = fs.existsSync,
 ): Promise<RegistryPluginInfo[]> {
   const infos: RegistryPluginInfo[] = [];
   for (const pluginDir of pluginDirs) {
-    const config = await loadPluginConfig(pluginDir, cache);
+    const config = await loadPluginConfig(pluginDir, cache, exists);
     const source = `./${path.relative(repoRoot, pluginDir).split(path.sep).join('/')}`;
     infos.push({
       name: path.basename(pluginDir),
@@ -770,6 +771,7 @@ export function detectRootCollisions(
   repoRoot: string,
   artifacts: RootArtifacts,
   priorTracked: readonly string[],
+  exists: (file: string) => boolean = fs.existsSync,
 ): { findings: Finding[]; collidedOwners: Set<TargetId> } {
   const priorSet = new Set(priorTracked);
   const findings: Finding[] = [];
@@ -778,7 +780,7 @@ export function detectRootCollisions(
   for (const file of artifacts.files) {
     if (collidedOwners.has(file.owner)) continue; // already flagged this owner's first collision
     const abs = path.join(repoRoot, ...file.relPath.split('/'));
-    if (fs.existsSync(abs) && !priorSet.has(file.relPath)) {
+    if (exists(abs) && !priorSet.has(file.relPath)) {
       findings.push(rootCollisionFinding(file.owner, file.relPath));
       collidedOwners.add(file.owner);
     }
@@ -810,13 +812,18 @@ export function serializeRootManifest(trackedPaths: readonly string[]): string {
  * POSIX-separated paths are returned as-is.
  */
 export function readRootManifestPaths(repoRoot: string): string[] {
-  const manifestPath = rootManifestPath(repoRoot);
-  if (!fs.existsSync(manifestPath)) return [];
   try {
-    return parseRootManifestPaths(fs.readFileSync(manifestPath, 'utf-8'));
+    const content = readRootManifest(repoRoot);
+    return content === undefined ? [] : parseRootManifestPaths(content);
   } catch {
     return [];
   }
+}
+
+/** Read the sidecar if present. Strict callers distinguish an unreadable sidecar from absence. */
+export function readRootManifest(repoRoot: string, exists = fs.existsSync): string | undefined {
+  const manifest = rootManifestPath(repoRoot);
+  return exists(manifest) ? fs.readFileSync(manifest, 'utf-8') : undefined;
 }
 
 export function parseRootManifestPaths(content: string): string[] {
@@ -838,12 +845,28 @@ export function parseRootManifestPaths(content: string): string[] {
 }
 
 /** Collect every file path under `dir`, relative to `dir`. Returns `[]` if `dir` is absent. */
-export function collectFilesRelative(dir: string, exists = fs.existsSync): string[] {
-  if (!exists(dir)) return [];
+export function collectFilesRelative(
+  dir: string,
+  exists = fs.existsSync,
+  onDirectoryError?: (error: unknown, directory: string) => void,
+): string[] {
+  let entries: fs.Dirent[];
+  try {
+    if (!exists(dir)) return [];
+    entries = fs.readdirSync(dir, { withFileTypes: true });
+  } catch (err) {
+    if (onDirectoryError === undefined) throw err;
+    onDirectoryError(err, dir);
+    return [];
+  }
   const out: string[] = [];
-  for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
+  for (const entry of entries) {
     if (entry.isDirectory()) {
-      for (const sub of collectFilesRelative(path.join(dir, entry.name), exists)) {
+      for (const sub of collectFilesRelative(
+        path.join(dir, entry.name),
+        exists,
+        onDirectoryError,
+      )) {
         out.push(path.join(entry.name, sub));
       }
     } else {

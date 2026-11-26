@@ -4,7 +4,7 @@
 
 ## BuildFreshnessIoFinding interface
 
-A filesystem failure that prevented a freshness check in [BuildOutcome](./core.buildoutcome.md)<!-- -->.
+A filesystem failure that prevented a validation check in [BuildOutcome](./core.buildoutcome.md)<!-- -->.
 
 **Signature:**
 
@@ -50,7 +50,7 @@ Description
 
 </td><td>
 
-Identifies a failed freshness check.
+Identifies a filesystem failure during validation.
 
 
 </td></tr>
@@ -107,7 +107,7 @@ _(Optional)_ Owning plugin, when the check is plugin-scoped.
 
 </td><td>
 
-Freshness I/O failures are hard in every environment.
+Validation I/O failures are hard in every environment.
 
 
 </td></tr>

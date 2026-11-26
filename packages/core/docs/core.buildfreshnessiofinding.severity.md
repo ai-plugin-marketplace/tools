@@ -4,7 +4,7 @@
 
 ## BuildFreshnessIoFinding.severity property
 
-Freshness I/O failures are hard in every environment.
+Validation I/O failures are hard in every environment.
 
 **Signature:**
 

@@ -61,9 +61,9 @@ Build a single plugin or every plugin under a repo root. Returns an array with o
 
 </td><td>
 
-Build a single plugin or every plugin under a repo root. Returns one result per built plugin along with post-build validation findings. Artifact drift is hard in CI and soft locally. Filesystem failures that prevent freshness checks are hard findings in either environment. The published-surface boundary check runs only in standalone [validate()](./core.validate.md)<!-- -->.
+Build a single plugin or every plugin under a repo root. Returns one result per built plugin along with post-build validation findings. Artifact drift is hard in CI and soft locally. Filesystem failures that prevent validation checks are hard findings in either environment. The published-surface boundary check runs only in standalone [validate()](./core.validate.md)<!-- -->.
 
-Setting [BuildOptions.failFast](./core.buildoptions.failfast.md) rejects with a summary of hard findings outside freshness checks after generation and validation complete. Inspect the returned `validation.passed` for failures from freshness checks.
+Setting [BuildOptions.failFast](./core.buildoptions.failfast.md) rejects after generation and validation complete if there are hard structural findings or filesystem failures. Artifact drift stays in the returned validation result.
 
 
 </td></tr>
@@ -284,7 +284,7 @@ Raw input shape accepted by `defineWorkspace`<!-- -->. Authored as `aipm.workspa
 
 </td><td>
 
-A filesystem failure that prevented a freshness check in [BuildOutcome](./core.buildoutcome.md)<!-- -->.
+A filesystem failure that prevented a validation check in [BuildOutcome](./core.buildoutcome.md)<!-- -->.
 
 
 </td></tr>

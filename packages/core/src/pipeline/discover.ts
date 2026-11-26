@@ -52,13 +52,13 @@ export interface Discovery {
 }
 
 /** True iff `dir` contains an `aipm.config.ts`. */
-function hasConfig(dir: string): boolean {
-  return fs.existsSync(path.join(dir, AIPM_CONFIG_FILENAME));
+function hasConfig(dir: string, exists: typeof fs.existsSync): boolean {
+  return exists(path.join(dir, AIPM_CONFIG_FILENAME));
 }
 
 /** True iff `dir` exists and is a directory. */
-function isDirectory(dir: string): boolean {
-  return fs.existsSync(dir) && fs.statSync(dir).isDirectory();
+function isDirectory(dir: string, exists: typeof fs.existsSync): boolean {
+  return exists(dir) && fs.statSync(dir).isDirectory();
 }
 
 /**
@@ -84,11 +84,11 @@ const PLUGIN_SHAPE_MANIFESTS = [
  * general "this directory has authored plugin content" signal for targets that ship skills
  * alongside a manifest.
  */
-function hasSkills(dir: string): boolean {
+function hasSkills(dir: string, exists: typeof fs.existsSync): boolean {
   const skillsDir = path.join(dir, 'skills');
-  if (!isDirectory(skillsDir)) return false;
+  if (!isDirectory(skillsDir, exists)) return false;
   for (const entry of fs.readdirSync(skillsDir, { withFileTypes: true })) {
-    if (entry.isDirectory() && fs.existsSync(path.join(skillsDir, entry.name, 'SKILL.md'))) {
+    if (entry.isDirectory() && exists(path.join(skillsDir, entry.name, 'SKILL.md'))) {
       return true;
     }
   }
@@ -101,8 +101,10 @@ function hasSkills(dir: string): boolean {
  * discovery so validate/build can report it, #91) from "not a plugin at all" (silently excluded,
  * unchanged non-goal — an empty or unrelated directory under `plugins/` stays ignored).
  */
-function isPluginShaped(dir: string): boolean {
-  return PLUGIN_SHAPE_MANIFESTS.some((rel) => fs.existsSync(path.join(dir, rel))) || hasSkills(dir);
+function isPluginShaped(dir: string, exists: typeof fs.existsSync): boolean {
+  return (
+    PLUGIN_SHAPE_MANIFESTS.some((rel) => exists(path.join(dir, rel))) || hasSkills(dir, exists)
+  );
 }
 
 /**
@@ -113,10 +115,14 @@ function isPluginShaped(dir: string): boolean {
  * @throws {Error} If `targetPath` does not exist.
  * @throws {ConfigLoadError} If a present `aipm.repo.ts` cannot be imported or fails validation.
  */
-export async function discoverPlugins(targetPath: string): Promise<Discovery> {
+export async function discoverPlugins(
+  targetPath: string,
+  exists = fs.existsSync,
+  onCandidateError?: (error: unknown, directory: string) => void,
+): Promise<Discovery> {
   const resolved = path.resolve(targetPath);
 
-  if (!fs.existsSync(resolved)) {
+  if (!exists(resolved)) {
     throw new Error(`Path '${targetPath}' does not exist.`);
   }
 
@@ -125,22 +131,27 @@ export async function discoverPlugins(targetPath: string): Promise<Discovery> {
   // `aipm.repo.ts` or contains the configured plugins root. (A plugin directory that happens to
   // contain a `plugins/` subfolder is vanishingly unlikely and would be a layout error; carrying
   // its own `aipm.config.ts` disambiguates it as a plugin.)
-  if (!hasConfig(resolved)) {
-    const repoConfig = await loadRepoConfig(resolved);
+  if (!hasConfig(resolved, exists)) {
+    const repoConfig = await loadRepoConfig(resolved, exists);
     const pluginsDir = path.join(resolved, repoConfig.pluginsRoot);
     // An explicit `aipm.repo.ts` marks a repo root even before its plugins dir exists, so a
     // freshly-initialised embedded repo still resolves as a repo root rather than a single plugin.
-    if (hasRepoConfig(resolved) || isDirectory(pluginsDir)) {
+    if (hasRepoConfig(resolved, exists) || isDirectory(pluginsDir, exists)) {
       const pluginDirs: string[] = [];
-      if (isDirectory(pluginsDir)) {
+      if (isDirectory(pluginsDir, exists)) {
         for (const entry of fs.readdirSync(pluginsDir, { withFileTypes: true })) {
           if (!entry.isDirectory()) continue;
           const candidate = path.join(pluginsDir, entry.name);
           // A config-less candidate is still discovered when it is plugin-shaped (#91) — deferred
           // to the config loader downstream, which reports it as `envelope-invalid`/throws rather
           // than letting it drop silently out of the plugin list.
-          if (hasConfig(candidate) || isPluginShaped(candidate)) {
-            pluginDirs.push(candidate);
+          try {
+            if (hasConfig(candidate, exists) || isPluginShaped(candidate, exists)) {
+              pluginDirs.push(candidate);
+            }
+          } catch (err) {
+            if (onCandidateError === undefined) throw err;
+            onCandidateError(err, candidate);
           }
         }
         pluginDirs.sort();
@@ -158,7 +169,7 @@ export async function discoverPlugins(targetPath: string): Promise<Discovery> {
   // can emit `envelope-invalid` and build can throw a descriptive error (§10.1 step 1). The dist
   // root is resolved from the repo root's config so a relocated dist root is still honored.
   const grandparent = path.dirname(path.dirname(resolved));
-  const repoConfig = await loadRepoConfig(grandparent);
+  const repoConfig = await loadRepoConfig(grandparent, exists);
   return {
     repoRoot: grandparent,
     distDir: path.join(grandparent, repoConfig.distDir),

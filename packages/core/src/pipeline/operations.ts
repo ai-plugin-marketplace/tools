@@ -56,12 +56,12 @@ export function build(targetPath: string, opts?: BuildOptions): Promise<BuildRes
 /**
  * Build a single plugin or every plugin under a repo root. Returns one result per built plugin
  * along with post-build validation findings. Artifact drift is hard in CI and soft locally.
- * Filesystem failures that prevent freshness checks are hard findings in either environment.
+ * Filesystem failures that prevent validation checks are hard findings in either environment.
  * The published-surface boundary check runs only in standalone {@link validate}.
  *
- * Setting {@link BuildOptions.failFast} rejects with a summary of hard findings outside freshness
- * checks after generation and validation complete. Inspect the returned `validation.passed` for
- * failures from freshness checks.
+ * Setting {@link BuildOptions.failFast} rejects after generation and validation complete if there
+ * are hard structural findings or filesystem failures. Artifact drift stays in the returned
+ * validation result.
  *
  * @public
  */

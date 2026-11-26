@@ -87,7 +87,8 @@ export const DEFAULT_SCAFFOLD_TARGETS = TARGET_IDS.filter(
 export interface BuildOptions {
   /**
    * Throw an error summarizing hard structural findings after artifact generation and validation.
-   * With {@link buildWithOutcome}, freshness findings stay in the returned validation result.
+   * With {@link buildWithOutcome}, also reject when filesystem errors prevent validation.
+   * Artifact drift stays in the returned validation result.
    * Default: false.
    */
   failFast?: boolean;
@@ -116,14 +117,14 @@ export interface BuildOutcome {
 }
 
 /**
- * A filesystem failure that prevented a freshness check in {@link BuildOutcome}.
+ * A filesystem failure that prevented a validation check in {@link BuildOutcome}.
  *
  * @public
  */
 export interface BuildFreshnessIoFinding {
-  /** Freshness I/O failures are hard in every environment. */
+  /** Validation I/O failures are hard in every environment. */
   severity: 'hard';
-  /** Identifies a failed freshness check. */
+  /** Identifies a filesystem failure during validation. */
   code: 'freshness-io';
   /** Owning plugin, when the check is plugin-scoped. */
   plugin?: string;

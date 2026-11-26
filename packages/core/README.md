@@ -56,11 +56,11 @@ import {
 `build()` returns a `BuildResult[]` and skips freshness checks during post-build validation.
 Use `buildWithOutcome()` with the same arguments to get `{ results, validation }` from one build
 and validation pass, including freshness diagnostics. With `failFast: true`, both functions
-reject on hard structural findings after writing artifacts. Artifact drift and freshness I/O
-failures are reported in the outcome's `validation`. Its findings include the usual `Finding`
-values and hard `BuildFreshnessIoFinding` diagnostics with code `freshness-io`.
-Ownership and collision findings come from generation, so they remain available if freshness
-checks cannot regenerate or read the affected artifacts.
+reject on hard structural findings after writing artifacts. `buildWithOutcome()` also rejects
+with `failFast: true` if a filesystem failure prevents a validation check. Otherwise those
+failures appear as hard `BuildFreshnessIoFinding` diagnostics with code `freshness-io`.
+Artifact drift is reported in the outcome's `validation`. The outcome retains ownership
+and collision findings from generation and adds any new collisions found during validation.
 
 ### Key types
 

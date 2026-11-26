@@ -34,6 +34,8 @@ import {
   isRootRegistryTarget,
   managedVendorRegistryPaths,
   mergeRootArtifacts,
+  parseRootManifestPaths,
+  readRootManifest,
   readRootManifestPaths,
   rootManifestPath,
   rootRegistryArtifactFiles,
@@ -47,6 +49,7 @@ import {
   type StampedArtifact,
 } from './generator-version.js';
 import { createConfigCache, loadPluginConfig, loadWorkspaceConfig } from './load-config.js';
+import type { AipmWorkspace } from '../config.js';
 import type { ConfigCache } from './load-config.js';
 import { isToolkitSentinelFor, readSentinelVersion, sidecarPath } from './sentinel.js';
 import type {
@@ -57,8 +60,8 @@ import type {
   GeneratedFile,
   TargetId,
 } from './types.js';
-import type { RootOwnership } from './validate.js';
-import { runValidate } from './validate.js';
+import type { FreshnessIoHandler, RootOwnership } from './validate.js';
+import { captureValidationIo, checkValidationIo, runValidate, strictExists } from './validate.js';
 
 // ---------------------------------------------------------------------------
 // Build one plugin
@@ -336,7 +339,20 @@ async function buildAndValidate(
   opts: BuildOptions | undefined,
   mode: 'legacy' | 'outcome' | 'cli',
 ): Promise<BuildOutcome> {
-  const { repoRoot, pluginDirs, distDir } = await discoverPlugins(targetPath);
+  const ioFindings: BuildFreshnessIoFinding[] = [];
+  const onIoError: FreshnessIoHandler | undefined =
+    mode === 'outcome'
+      ? (error, plugin) => {
+          ioFindings.push({
+            code: 'freshness-io',
+            severity: 'hard',
+            ...(plugin === undefined ? {} : { plugin }),
+            message: error.message,
+          });
+        }
+      : undefined;
+  const discovery = await discoverPlugins(targetPath);
+  const { repoRoot, pluginDirs, distDir } = discovery;
 
   // One per-invocation config memo shared across the build loop and registry collection, so each
   // plugin's aipm.config.ts is transpiled once rather than reloaded per phase (see ConfigCache).
@@ -365,7 +381,15 @@ async function buildAndValidate(
   // plugin for single-plugin input) is what makes the registry repo-complete. When no
   // `aipm.workspace.ts` is present, generation does nothing and the registries stay hand-authored.
   let rootOwnership: RootOwnership | undefined;
-  const workspace = await loadWorkspaceConfig(repoRoot);
+  let workspace: AipmWorkspace | undefined;
+  try {
+    workspace = await loadWorkspaceConfig(
+      repoRoot,
+      onIoError === undefined ? fs.existsSync : strictExists,
+    );
+  } catch (err) {
+    if (!captureValidationIo(err, onIoError)) throw err;
+  }
   if (workspace !== undefined) {
     // For repo-root input, pluginDirs already covers the whole repo — reuse it (and the warm
     // config cache) instead of re-discovering and reloading. Only single-plugin input needs a
@@ -408,22 +432,34 @@ async function buildAndValidate(
     // refuses to overwrite non-generated root files (OP-D5), and orphan removal is bounded to the
     // prior tracked set recorded in the committed sidecar manifest. Merging the root registries into
     // the same tracked set (option (a)) unifies every repo-root file the toolkit owns.
-    const priorTracked = readRootManifestPaths(repoRoot);
+    const priorTracked =
+      onIoError === undefined
+        ? readRootManifestPaths(repoRoot)
+        : checkValidationIo(() => {
+            const content = readRootManifest(repoRoot, strictExists);
+            return content === undefined ? [] : parseRootManifestPaths(content);
+          }, onIoError);
     const root = mergeRootArtifacts(
       computeRootArtifacts(repoRoot, registryPlugins, workspace),
       rootRegistryArtifactFiles(repoRoot, rootRegistries),
     );
-    const collisions = detectRootCollisions(repoRoot, root, priorTracked);
-    const { collidedOwners } = collisions;
-    if (mode === 'outcome') {
-      rootOwnership = { findings: [...root.findings, ...collisions.findings], collidedOwners };
-    }
-
+    let ownershipLookupFailed = false;
+    const collisions =
+      priorTracked === undefined
+        ? undefined
+        : detectRootCollisions(repoRoot, root, priorTracked, (file) => {
+            if (onIoError === undefined) return fs.existsSync(file);
+            const present = checkValidationIo(() => strictExists(file), onIoError);
+            if (present === undefined) ownershipLookupFailed = true;
+            return present ?? false;
+          });
+    const canWriteRoot = priorTracked !== undefined && !ownershipLookupFailed;
+    const collidedOwners = collisions?.collidedOwners ?? new Set<TargetId>();
     // The tracked set is only the paths we actually WRITE — files of a collided (suppressed) owner
     // are neither written nor tracked, so orphan removal can never delete an author-owned collider.
     const writtenTracked = new Set<string>();
     const emittedOwners = new Set<TargetId>();
-    for (const file of root.files) {
+    for (const file of canWriteRoot ? root.files : []) {
       if (collidedOwners.has(file.owner)) continue;
       const abs = path.join(repoRoot, ...file.relPath.split('/'));
       fs.mkdirSync(path.dirname(abs), { recursive: true });
@@ -435,11 +471,19 @@ async function buildAndValidate(
       }
     }
 
+    if (mode === 'outcome') {
+      rootOwnership = {
+        findings: [...root.findings, ...(collisions?.findings ?? [])],
+        collidedOwners,
+        writtenPaths: canWriteRoot ? writtenTracked : undefined,
+      };
+    }
+
     // Orphan removal: any path in the PRIOR tracked set that is no longer generated this run is a
     // path the toolkit previously created and now owns the right to delete (e.g. the gemini plugin
     // was dropped, or a second gemini plugin disabled emission via the N=1 gate). Bounded strictly
     // to `priorTracked` — we never delete a file we did not previously record as generated.
-    for (const rel of priorTracked) {
+    for (const rel of canWriteRoot ? priorTracked : []) {
       if (writtenTracked.has(rel)) continue;
       const abs = path.join(repoRoot, ...rel.split('/'));
       if (fs.existsSync(abs)) fs.rmSync(abs);
@@ -450,7 +494,7 @@ async function buildAndValidate(
     // hosts stays free of an empty `.aipm/` dir; otherwise keep it in sync (including emptying it).
     const manifestAbs = rootManifestPath(repoRoot);
     const trackedSorted = [...writtenTracked].sort();
-    if (trackedSorted.length > 0 || fs.existsSync(manifestAbs)) {
+    if (canWriteRoot && (trackedSorted.length > 0 || fs.existsSync(manifestAbs))) {
       writeFileEnsuringDir(manifestAbs, serializeRootManifest(trackedSorted));
       // The sidecar spans every emitted owner (gemini/kiro/open-plugins), so it has no single
       // owning target — record it as `'shared'` rather than attributing it to one of the owners.
@@ -466,7 +510,6 @@ async function buildAndValidate(
 
   // The results-only build skips freshness. The outcome API checks it with the same severity
   // as standalone validation. The published-surface boundary belongs to standalone validation.
-  const ioFindings: BuildFreshnessIoFinding[] = [];
   const validation = await runValidate(
     targetPath,
     {
@@ -474,23 +517,16 @@ async function buildAndValidate(
       ...(mode === 'legacy' ? { skipFreshness: true } : { ci: Boolean(process.env['CI']) }),
       preserveCliReporting: mode === 'cli',
       rootOwnership,
+      generationDiscovery: mode === 'outcome' ? discovery : undefined,
     },
-    mode === 'outcome'
-      ? (error, plugin) => {
-          ioFindings.push({
-            code: 'freshness-io',
-            severity: 'hard',
-            ...(plugin === undefined ? {} : { plugin }),
-            message: error.message,
-          });
-        }
-      : undefined,
+    onIoError,
   );
   if (opts?.failFast) {
-    // Preserve the rejection criteria of post-build validation with freshness skipped.
-    const hardFindings = validation.findings.filter(
+    // Keep ordinary freshness drift in the outcome and reject incomplete checks.
+    const hardFindings: BuildOutcome['validation']['findings'] = validation.findings.filter(
       (f) => f.severity === 'hard' && f.code !== 'freshness',
     );
+    hardFindings.push(...ioFindings);
     if (hardFindings.length > 0) {
       const summary = hardFindings
         .map((f) => `  [${f.plugin ?? '?'}] ${f.code}: ${f.message}`)

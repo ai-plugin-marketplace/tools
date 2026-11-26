@@ -4,7 +4,7 @@
 
 ## build() function
 
-Build a single plugin or every plugin under a repo root. Pass a repo path, plugin directory path, or plugin name under the configured plugins root. Single-plugin input returns a length-1 array. See §5.2, §8.1.
+Build a single plugin or every plugin under a repo root. Pass a repo path, plugin directory path, or opt into CLI name lookup. Single-plugin input returns a length-1 array. See §5.2, §8.1.
 
 **Signature:**
 

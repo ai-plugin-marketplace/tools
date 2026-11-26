@@ -4,7 +4,7 @@
 
 ## scaffold() function
 
-Scaffold a plugin in the nearest repo layout and return its repo-relative path.
+Scaffold a plugin and return its repo-relative path.
 
 **Signature:**
 

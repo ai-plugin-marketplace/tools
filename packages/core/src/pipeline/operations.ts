@@ -10,9 +10,9 @@
  * @see docs/specs/architecture.md §8.1
  */
 
-import { runBuild } from './build.js';
+import { runBuild, runBuildAndValidate } from './build.js';
 import { runInit } from './init.js';
-import { findRepoLayout } from './resolve-plugin.js';
+import { findRepoLayout, readRepoLayout } from './resolve-plugin.js';
 import { runRefreshScaffold } from './scaffold-refresh.js';
 import { runScaffold, runAddTarget, runCheckSupport } from './scaffold.js';
 import { TARGET_IDS } from './types.js';
@@ -42,7 +42,7 @@ function isCi(): boolean {
 
 /**
  * Build a single plugin or every plugin under a repo root. Pass a repo path, plugin directory
- * path, or plugin name under the configured plugins root. Single-plugin input returns a
+ * path, or opt into CLI name lookup. Single-plugin input returns a
  * length-1 array. See §5.2, §8.1.
  *
  * @public
@@ -52,8 +52,21 @@ export function build(targetPath: string, opts?: BuildOptions): Promise<BuildRes
 }
 
 /**
+ * Build and validate the same discovered target, returning the build results and validation
+ * findings. The published-surface boundary check is reserved for standalone validation.
+ *
+ * @public
+ */
+export function buildAndValidate(
+  targetPath: string,
+  opts?: BuildOptions,
+): Promise<{ results: BuildResult[]; validation: ValidationResult }> {
+  return runBuildAndValidate(targetPath, opts, { ci: isCi() });
+}
+
+/**
  * Validate a single plugin or every plugin under a repo root, in the order defined by §10.1.
- * Accepts a repo path, plugin directory path, or plugin name under the configured plugins root.
+ * Accepts a repo path or plugin directory path. CLI name lookup is opt-in.
  * Freshness severity follows the CI environment (§10.2).
  *
  * @public
@@ -95,7 +108,7 @@ export function refreshScaffold(
 }
 
 /**
- * Scaffold a plugin in the nearest repo layout and return its repo-relative path.
+ * Scaffold a plugin and return its repo-relative path.
  *
  * @public
  */
@@ -104,8 +117,8 @@ export function scaffold(
   opts: ScaffoldOptions & { returnPath: true },
 ): Promise<string>;
 /**
- * Scaffold a plugin under the nearest configured or default plugins root. If no repo layout is
- * present, use the working directory.
+ * Scaffold a plugin under the working directory’s configured or default plugins root.
+ * Set `searchAncestors` to use the nearest repo layout within the checkout.
  *
  * @public
  */
@@ -115,7 +128,8 @@ export async function scaffold(
   name: string,
   opts: ScaffoldOptions & { returnPath?: true } = {},
 ): Promise<string | void> {
-  const layout = await findRepoLayout(process.cwd());
+  const cwd = process.cwd();
+  const layout = opts.searchAncestors ? await findRepoLayout(cwd) : await readRepoLayout(cwd);
   const pluginPath = await runScaffold(name, layout.pluginsDir, opts, layout);
   if (opts.returnPath) return pluginPath;
 }

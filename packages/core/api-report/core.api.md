@@ -66,7 +66,13 @@ export function applyRuleSeverityOverrides(diagnostics: readonly Diagnostic[], o
 export function build(targetPath: string, opts?: BuildOptions): Promise<BuildResult[]>;
 
 // @public
-export interface BuildOptions {
+export function buildAndValidate(targetPath: string, opts?: BuildOptions): Promise<{
+    results: BuildResult[];
+    validation: ValidationResult;
+}>;
+
+// @public
+export interface BuildOptions extends PluginArgumentOptions {
     failFast?: boolean;
     forceDowngrade?: boolean;
 }
@@ -190,7 +196,7 @@ export interface JsonDocument {
 export function lint(targetPath: string, options?: LintOptions): Promise<LintResult>;
 
 // @public
-export interface LintOptions {
+export interface LintOptions extends PluginArgumentOptions {
     ci?: boolean;
 }
 
@@ -297,6 +303,7 @@ export function scaffold(name: string, opts?: ScaffoldOptions): Promise<void>;
 // @public
 export interface ScaffoldOptions {
     description?: string;
+    searchAncestors?: boolean;
     targets?: readonly TargetId[];
 }
 
@@ -325,7 +332,7 @@ export function unknownRuleOverrideDiagnostics(overrides: ReadonlyMap<string, Ru
 export function validate(targetPath: string, opts?: ValidateOptions): Promise<ValidationResult>;
 
 // @public
-export interface ValidateOptions {
+export interface ValidateOptions extends PluginArgumentOptions {
     skipFreshness?: boolean;
     skipPublishedSurfaceBoundary?: boolean;
 }

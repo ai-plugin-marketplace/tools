@@ -4,7 +4,7 @@
 
 ## PluginArgumentOptions.lookupByName property
 
-Look up a bare name in the nearest repo layout when it does not name an existing directory.
+Enable CLI resolution within the current checkout. A single-component name can fall back to the nearest plugins root. Existing paths take precedence except inside the configured output directory when a plugin with the same name exists.
 
 **Signature:**
 

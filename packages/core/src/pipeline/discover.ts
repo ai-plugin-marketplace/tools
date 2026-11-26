@@ -39,23 +39,26 @@
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 
-import { AIPM_CONFIG_FILENAME, DEFAULT_REPO_CONFIG, hasRepoConfig } from './load-config.js';
+import {
+  AIPM_CONFIG_FILENAME,
+  ConfigLoadError,
+  DEFAULT_REPO_CONFIG,
+  hasRepoConfig,
+} from './load-config.js';
 import {
   findDeclaredPluginOwner,
   findPluginOwner,
   isDirectory,
   readRepoLayout,
+  type RepoLayout,
   resolvePluginPath,
 } from './resolve-plugin.js';
+import type { PluginArgumentOptions } from './types.js';
 
 /** Result of resolving a `targetPath` to concrete plugin directories and a dist root. */
-export interface Discovery {
+export interface Discovery extends RepoLayout {
   /** Whether the argument selected the whole repo. */
   isRepoRoot: boolean;
-  /** Absolute repo root (where the configured plugins/dist roots live). */
-  repoRoot: string;
-  /** Absolute dist output directory (the configured dist root under the repo root). */
-  distDir: string;
   /** Absolute plugin directories to operate on (length 1 for single-plugin input). */
   pluginDirs: string[];
 }
@@ -117,44 +120,75 @@ function isPluginShaped(dir: string): boolean {
  * @throws {Error} If `targetPath` does not exist.
  * @throws {ConfigLoadError} If a present `aipm.repo.ts` cannot be imported or fails validation.
  */
-export async function discoverPlugins(targetPath: string): Promise<Discovery> {
-  const pluginDir = await resolvePluginPath(targetPath, true);
+export async function discoverPlugins(
+  targetPath: string,
+  opts?: PluginArgumentOptions,
+): Promise<Discovery> {
+  const searchAncestors = opts?.lookupByName ?? false;
+  const { pluginDir, routedLayout } = await resolvePluginPath(targetPath, searchAncestors);
   if (!isDirectory(pluginDir)) {
     throw new Error(`Path '${targetPath}' does not exist.`);
   }
 
-  const hasPluginConfig = hasConfig(pluginDir);
-  const hasExplicitLayout = !hasPluginConfig && hasRepoConfig(pluginDir);
-  const hasDefaultLayout =
-    !hasPluginConfig &&
-    !hasExplicitLayout &&
-    isDirectory(path.join(pluginDir, DEFAULT_REPO_CONFIG.pluginsRoot));
-  const owner =
-    hasDefaultLayout && isPluginShaped(pluginDir)
-      ? await findDeclaredPluginOwner(pluginDir)
-      : undefined;
-
-  if (hasExplicitLayout || (hasDefaultLayout && owner === undefined)) {
-    const layout = await readRepoLayout(pluginDir);
-    const { repoRoot, pluginsDir, distDir } = layout;
-    const pluginDirs: string[] = [];
-    if (isDirectory(pluginsDir)) {
-      for (const entry of fs.readdirSync(pluginsDir, { withFileTypes: true })) {
-        if (!entry.isDirectory()) continue;
-        const candidate = path.join(pluginsDir, entry.name);
-        if (
-          (hasConfig(candidate) || isPluginShaped(candidate)) &&
-          (await findDeclaredPluginOwner(candidate, layout))?.repoRoot === repoRoot
-        ) {
-          pluginDirs.push(candidate);
-        }
-      }
-      pluginDirs.sort();
+  if (!hasConfig(pluginDir)) {
+    const explicitRepo = hasRepoConfig(pluginDir);
+    const defaultRepo = isDirectory(path.join(pluginDir, DEFAULT_REPO_CONFIG.pluginsRoot));
+    if (explicitRepo || defaultRepo) {
+      const owner = isPluginShaped(pluginDir)
+        ? await findDeclaredPluginOwner(pluginDir, searchAncestors, routedLayout)
+        : undefined;
+      if (owner === undefined) return discoverRepo(await readRepoLayout(pluginDir));
+      // A manifest or skill under a declared plugins root is still a plugin candidate
+      // when a stray repo config or an empty plugins directory is present.
+      await rejectAmbiguousPlugin(pluginDir);
+      return { ...owner, isRepoRoot: false, pluginDirs: [pluginDir] };
     }
-    return { isRepoRoot: true, repoRoot, distDir, pluginDirs };
   }
 
   // Missing plugin configs are deferred to build/validate so they can report an envelope error.
-  const { repoRoot, distDir } = owner ?? (await findPluginOwner(pluginDir));
-  return { isRepoRoot: false, repoRoot, distDir, pluginDirs: [pluginDir] };
+  const layout = await findPluginOwner(pluginDir, searchAncestors, routedLayout);
+  return { ...layout, isRepoRoot: false, pluginDirs: [pluginDir] };
+}
+
+function pluginCandidates(pluginsDir: string): string[] {
+  return isDirectory(pluginsDir)
+    ? fs
+        .readdirSync(pluginsDir, { withFileTypes: true })
+        .filter((entry) => entry.isDirectory())
+        .map((entry) => path.join(pluginsDir, entry.name))
+        .filter((candidate) => hasConfig(candidate) || isPluginShaped(candidate))
+        .sort()
+    : [];
+}
+
+async function rejectAmbiguousPlugin(pluginDir: string): Promise<void> {
+  if (
+    hasConfig(pluginDir) ||
+    (!hasRepoConfig(pluginDir) &&
+      !isDirectory(path.join(pluginDir, DEFAULT_REPO_CONFIG.pluginsRoot)))
+  )
+    return;
+  let layout;
+  try {
+    layout = await readRepoLayout(pluginDir);
+  } catch (error) {
+    if (!(error instanceof ConfigLoadError)) throw error;
+    return;
+  }
+  if (pluginCandidates(layout.pluginsDir).length > 0) {
+    throw new Error(
+      `Ambiguous path '${pluginDir}': it is plugin-shaped and contains a marketplace with plugins.`,
+    );
+  }
+}
+
+export async function discoverRepo(layout: RepoLayout): Promise<Discovery> {
+  const pluginDirs: string[] = [];
+  for (const candidate of pluginCandidates(layout.pluginsDir)) {
+    if ((await findDeclaredPluginOwner(candidate, true, layout))?.repoRoot === layout.repoRoot) {
+      await rejectAmbiguousPlugin(candidate);
+      pluginDirs.push(candidate);
+    }
+  }
+  return { ...layout, isRepoRoot: true, pluginDirs };
 }

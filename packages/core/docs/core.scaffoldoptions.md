@@ -56,6 +56,25 @@ _(Optional)_ Description field for the generated plugin.
 </td></tr>
 <tr><td>
 
+[searchAncestors?](./core.scaffoldoptions.searchancestors.md)
+
+
+</td><td>
+
+
+</td><td>
+
+boolean
+
+
+</td><td>
+
+_(Optional)_ Use the nearest repo layout within the checkout. Defaults to the working directory.
+
+
+</td></tr>
+<tr><td>
+
 [targets?](./core.scaffoldoptions.targets.md)
 
 

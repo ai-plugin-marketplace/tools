@@ -4,12 +4,12 @@
 
 ## PluginArgumentOptions interface
 
-Options for [checkSupport()](./core.checksupport.md) and [addTarget()](./core.addtarget.md)<!-- -->.
+Options for resolving plugin arguments.
 
 **Signature:**
 
 ```typescript
-export interface PluginArgumentOptions
+export interface PluginArgumentOptions 
 ```
 
 ## Properties
@@ -50,8 +50,9 @@ boolean
 
 </td><td>
 
-_(Optional)_ Look up a bare name in the nearest repo layout when it does not name an existing directory.
+_(Optional)_ Enable CLI resolution within the current checkout. A single-component name can fall back to the nearest plugins root. Existing paths take precedence except inside the configured output directory when a plugin with the same name exists.
 
 
 </td></tr>
 </tbody></table>
+

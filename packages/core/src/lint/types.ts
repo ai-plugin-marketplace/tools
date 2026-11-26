@@ -4,6 +4,7 @@
  * @see docs/specs/lint-engine.md L-D1 (Diagnostic), L-D4 (Rule)
  */
 
+import type { PluginArgumentOptions } from '../pipeline/types.js';
 import type { AipmWorkspace } from '../config.js';
 import type { ConfigCache } from '../pipeline/load-config.js';
 import type { FindingCode, TargetId } from '../pipeline/types.js';
@@ -181,7 +182,7 @@ export interface Rule {
  *
  * @public
  */
-export interface LintOptions {
+export interface LintOptions extends PluginArgumentOptions {
   /** True when running in a CI context (affects freshness severity). Default: false. */
   ci?: boolean;
 }

@@ -23,7 +23,7 @@ import { fileURLToPath } from 'node:url';
 import {
   addTarget,
   applyRuleSeverityOverrides,
-  build,
+  buildAndValidate,
   checkSupport,
   init,
   lint,
@@ -294,15 +294,15 @@ export async function run(argv: readonly string[], opts: RunOptions = {}): Promi
         // Resolve the target from the first non-flag positional so `aipm build --force-downgrade`
         // does not mistake the flag for a path.
         const target = rest.find((a) => !a.startsWith('-')) ?? process.cwd();
-        const results = await build(target, { forceDowngrade });
+        const { results, validation: result } = await buildAndValidate(target, {
+          forceDowngrade,
+          lookupByName: true,
+        });
         const artifactCount = results.reduce((n, r) => n + r.artifacts.length, 0);
         // §5.4: build runs validate before reporting success. The success summary is written
         // only when validate passes — printing it unconditionally would put a "Built N
         // plugin(s)" line ABOVE a hard finding that fails the run, misleading the user into
         // thinking the run succeeded (issue #97).
-        // The published-surface boundary check is left to `aipm validate`: an unmarked contributor
-        // skill elsewhere in the repo is not a reason for a build to fail.
-        const result = await validate(target, { skipPublishedSurfaceBoundary: true });
         if (result.passed) {
           out.write(
             `Built ${String(results.length)} plugin(s), ${String(artifactCount)} artifact(s).\n`,
@@ -314,7 +314,7 @@ export async function run(argv: readonly string[], opts: RunOptions = {}): Promi
 
       case 'validate': {
         const target = rest[0] ?? process.cwd();
-        const result = await validate(target);
+        const result = await validate(target, { lookupByName: true });
         const passed = reportValidation(result, out);
         return passed ? 0 : 1;
       }
@@ -390,7 +390,7 @@ export async function run(argv: readonly string[], opts: RunOptions = {}): Promi
         const target =
           rest.find((arg, i) => !arg.startsWith('-') && !consumed.has(i)) ?? process.cwd();
 
-        const result = await lint(target);
+        const result = await lint(target, { lookupByName: true });
         // L-D6: an unrecognized --rule ruleId (typo) is itself a warn diagnostic, checked against
         // both this run's diagnostics and the full registry — see the function's doc comment for
         // why it must run against result.diagnostics BEFORE applyRuleSeverityOverrides.
@@ -423,7 +423,7 @@ export async function run(argv: readonly string[], opts: RunOptions = {}): Promi
           err.write("aipm: 'scaffold' requires a <name> argument.\n");
           return 2;
         }
-        const pluginPath = await scaffold(name, { returnPath: true });
+        const pluginPath = await scaffold(name, { returnPath: true, searchAncestors: true });
         out.write(`Created ${pluginPath}.\n`);
         return 0;
       }

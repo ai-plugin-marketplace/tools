@@ -9,8 +9,9 @@ Options for [lint()](./core.lint.md)<!-- -->.
 **Signature:**
 
 ```typescript
-export interface LintOptions 
+export interface LintOptions extends PluginArgumentOptions 
 ```
+**Extends:** [PluginArgumentOptions](./core.pluginargumentoptions.md)
 
 ## Properties
 

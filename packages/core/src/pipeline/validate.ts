@@ -40,7 +40,9 @@ import {
   serializeRootManifest,
 } from './build.js';
 import type { RegistryArtifact } from './build.js';
-import { discoverPlugins } from './discover.js';
+import { discoverPlugins, discoverRepo } from './discover.js';
+import type { Discovery } from './discover.js';
+import { isWithin } from './resolve-plugin.js';
 import {
   ConfigLoadError,
   createConfigCache,
@@ -1024,6 +1026,18 @@ function extractCodexSource(raw: unknown, pluginName: string): SourceExtraction 
   return { status: 'found', source: entry.source.path };
 }
 
+function sameRegistryPlugin(repoRoot: string, source: string, pluginDir: string): boolean {
+  if (path.isAbsolute(source)) return false;
+  const candidate = path.resolve(repoRoot, source);
+  if (!isWithin(repoRoot, candidate)) return false;
+  try {
+    const physical = fs.realpathSync(candidate);
+    return isWithin(fs.realpathSync(repoRoot), physical) && physical === fs.realpathSync(pluginDir);
+  } catch {
+    return false;
+  }
+}
+
 /**
  * Verify the plugin is listed in the appropriate template-level marketplace.json files.
  *
@@ -1111,7 +1125,10 @@ export function validateMarketplaceRegistration(
         // Entry exists — verify source (normalise a leading `./`).
         const { source } = extraction;
         const normalizedActual = source.startsWith('./') ? source.slice(2) : source;
-        if (normalizedActual !== normalizedExpected) {
+        if (
+          normalizedActual !== normalizedExpected &&
+          !sameRegistryPlugin(repoRoot, source, pluginDir)
+        ) {
           findings.push(
             hard(
               'marketplace-registration',
@@ -1633,7 +1650,7 @@ function compareTrees(actualDir: string, expectedDir: string): string[] {
  * @returns The combined validation result.
  */
 export async function runValidate(
-  targetPath: string,
+  targetPath: string | Discovery,
   opts?: ValidateOptions & { ci?: boolean },
 ): Promise<ValidationResult> {
   const ci = opts?.ci ?? false;
@@ -1645,7 +1662,8 @@ export async function runValidate(
   // the thrown error escape the validator.
   let discovery;
   try {
-    discovery = await discoverPlugins(targetPath);
+    discovery =
+      typeof targetPath === 'string' ? await discoverPlugins(targetPath, opts) : targetPath;
   } catch (err) {
     if (err instanceof ConfigLoadError) {
       return {
@@ -1800,7 +1818,7 @@ export async function runValidate(
     // For repo-root input, pluginDirs already covers the whole repo — reuse it (and the warm
     // config cache) rather than re-discovering and reloading. Single-plugin input needs a
     // repo-wide re-scan so the oracle stays repo-complete.
-    const allPluginDirs = isRepoRoot ? pluginDirs : (await discoverPlugins(repoRoot)).pluginDirs;
+    const allPluginDirs = isRepoRoot ? pluginDirs : (await discoverRepo(discovery)).pluginDirs;
     const repoScopedCtx = createRuleContext({
       pluginDir: repoRoot,
       repoRoot,

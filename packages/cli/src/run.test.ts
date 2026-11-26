@@ -421,6 +421,82 @@ describe('aipm plugin paths', () => {
     },
   );
 
+  it('builds and validates the same bare-name plugin when distDir has that name', async () => {
+    vi.spyOn(process, 'cwd').mockReturnValue(root);
+    fs.writeFileSync(path.join(root, 'aipm.repo.ts'), "export default { distDir: 'demo' };");
+    expect((await invoke(['scaffold', 'demo'])).code).toBe(0);
+
+    for (let run = 0; run < 2; run++) {
+      const result = await invoke(['build', 'demo']);
+      expect(result.err).toBe('');
+      expect(result.out).toContain('Built 1 plugin(s)');
+      expect(result.code).toBe(0);
+      expect(fs.existsSync(path.join(root, 'demo'))).toBe(true);
+    }
+  });
+
+  it.each(['directory', 'file'])(
+    'keeps scaffold inside a nested checkout with a .git %s',
+    async (kind) => {
+      const checkout = path.join(root, 'vendor/inner');
+      fs.mkdirSync(path.join(checkout, 'docs'), { recursive: true });
+      fs.writeFileSync(
+        path.join(root, 'aipm.repo.ts'),
+        "export default { pluginsRoot: 'agent-plugins' };",
+      );
+      const git = path.join(checkout, '.git');
+      if (kind === 'directory') fs.mkdirSync(git);
+      else fs.writeFileSync(git, 'gitdir: ../worktrees/inner\n');
+      vi.spyOn(process, 'cwd').mockReturnValue(path.join(checkout, 'docs'));
+
+      expect(await invoke(['scaffold', 'demo'])).toStrictEqual({
+        code: 0,
+        out: 'Created plugins/demo.\n',
+        err: '',
+      });
+      expect(fs.existsSync(path.join(checkout, 'plugins/demo/aipm.config.ts'))).toBe(true);
+      expect(fs.existsSync(path.join(root, 'agent-plugins'))).toBe(false);
+      expect(fs.existsSync(path.join(root, '.claude-plugin'))).toBe(false);
+    },
+  );
+
+  it('rejects add-target through an escaping configured plugins root before writing either repo', async () => {
+    const repo = path.join(root, 'marketplace');
+    const other = path.join(root, 'other');
+    const plugin = path.join(other, 'plugins/demo');
+    fs.mkdirSync(repo);
+    fs.mkdirSync(plugin, { recursive: true });
+    const repoConfig = "export default { pluginsRoot: 'linked' };";
+    const pluginConfig = "export default { targets: ['claude'] };";
+    fs.writeFileSync(path.join(repo, 'aipm.repo.ts'), repoConfig);
+    fs.writeFileSync(path.join(plugin, 'aipm.config.ts'), pluginConfig);
+    fs.symlinkSync(path.dirname(plugin), path.join(repo, 'linked'), 'junction');
+    vi.spyOn(process, 'cwd').mockReturnValue(repo);
+
+    for (const argument of ['demo', path.join('linked', 'demo')]) {
+      const { code, err } = await invoke(['add-target', argument, 'cursor']);
+      expect(code).toBe(1);
+      expect(err).toMatch(/pluginsRoot.*outside/);
+      expect(fs.readdirSync(repo).sort()).toStrictEqual(['aipm.repo.ts', 'linked']);
+      expect(fs.readdirSync(other)).toStrictEqual(['plugins']);
+      expect(fs.readdirSync(plugin)).toStrictEqual(['aipm.config.ts']);
+      expect(fs.readFileSync(path.join(plugin, 'aipm.config.ts'), 'utf-8')).toBe(pluginConfig);
+    }
+  });
+
+  it('accepts single-component relative spellings and keeps existing paths ahead of name lookup', async () => {
+    vi.spyOn(process, 'cwd').mockReturnValue(root);
+    expect((await invoke(['scaffold', 'demo'])).code).toBe(0);
+    for (const argument of [`.${path.sep}demo`, `demo${path.sep}`]) {
+      expect((await invoke(['check-support', argument])).code).toBe(0);
+      expect((await invoke(['add-target', argument, 'cursor'])).code).toBe(0);
+    }
+    fs.mkdirSync(path.join(root, 'demo'));
+    expect((await invoke(['check-support', `.${path.sep}demo`])).err).toContain(
+      'No aipm.config.ts',
+    );
+  });
+
   it('adds targets by name and path to the same owning repo with overlapping roots', async () => {
     const inner = path.join(root, 'extensions/ai');
     const pluginDir = path.join(inner, 'plugins/demo');
@@ -457,6 +533,29 @@ describe('aipm plugin paths', () => {
     expect(byName.code).toBe(1);
     expect(byName.out).toContain('envelope-invalid');
     expect(await invoke(['validate', 'plugins/demo'])).toStrictEqual(byName);
+  });
+
+  it('reports a config-less plugin carrying a repo config in both direct validation and a scan', async () => {
+    const pluginDir = path.join(root, 'plugins/demo');
+    fs.mkdirSync(path.join(pluginDir, '.claude-plugin'), { recursive: true });
+    fs.writeFileSync(path.join(pluginDir, '.claude-plugin/plugin.json'), '{}');
+    fs.writeFileSync(path.join(pluginDir, 'aipm.repo.ts'), 'export default {};');
+    vi.spyOn(process, 'cwd').mockReturnValue(root);
+
+    for (const argument of ['.', 'demo', 'plugins/demo']) {
+      const result = await invoke(['validate', argument]);
+      expect(result.code).toBe(1);
+      expect(result.out).toContain('envelope-invalid');
+    }
+
+    const nested = path.join(pluginDir, 'plugins/nested');
+    fs.mkdirSync(nested, { recursive: true });
+    fs.writeFileSync(path.join(nested, 'aipm.config.ts'), 'export default {};');
+    for (const argument of ['.', 'demo', 'plugins/demo']) {
+      const result = await invoke(['validate', argument]);
+      expect(result.code).toBe(1);
+      expect(result.err).toContain('Ambiguous path');
+    }
   });
 });
 

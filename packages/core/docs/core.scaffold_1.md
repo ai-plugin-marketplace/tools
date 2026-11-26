@@ -4,7 +4,7 @@
 
 ## scaffold() function
 
-Scaffold a plugin under the nearest configured or default plugins root. If no repo layout is present, use the working directory.
+Scaffold a plugin under the working directory’s configured or default plugins root. Set `searchAncestors` to use the nearest repo layout within the checkout.
 
 **Signature:**
 
@@ -65,3 +65,4 @@ _(Optional)_
 **Returns:**
 
 Promise&lt;void&gt;
+

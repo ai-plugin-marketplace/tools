@@ -9,8 +9,9 @@ Options for [build()](./core.build.md)<!-- -->.
 **Signature:**
 
 ```typescript
-export interface BuildOptions 
+export interface BuildOptions extends PluginArgumentOptions 
 ```
+**Extends:** [PluginArgumentOptions](./core.pluginargumentoptions.md)
 
 ## Properties
 

@@ -9,8 +9,9 @@ Options for [validate()](./core.validate.md)<!-- -->.
 **Signature:**
 
 ```typescript
-export interface ValidateOptions 
+export interface ValidateOptions extends PluginArgumentOptions 
 ```
+**Extends:** [PluginArgumentOptions](./core.pluginargumentoptions.md)
 
 ## Properties
 

@@ -37,7 +37,12 @@ import { scaffoldOpenPluginsFiles } from '../targets/open-plugins/scaffold.js';
 import { scaffoldVercelFiles } from '../targets/vercel/scaffold.js';
 import type { ScaffoldedFile, TargetScaffoldOptions } from '../targets/scaffold-kit.js';
 import { INITIAL_PLUGIN_VERSION } from '../targets/scaffold-kit.js';
-import { findPluginOwner, isDirectory, resolvePluginPath } from './resolve-plugin.js';
+import {
+  findPluginOwner,
+  isDirectory,
+  registryPluginPath,
+  resolvePluginPath,
+} from './resolve-plugin.js';
 import type { RepoLayout } from './resolve-plugin.js';
 import { DEFAULT_SCAFFOLD_TARGETS, TARGET_IDS } from './types.js';
 import type { AddTargetOutcome, ScaffoldOptions, SupportReport, TargetId } from './types.js';
@@ -383,7 +388,12 @@ export async function runScaffold(
     throw new Error(`Plugin directory already exists: ${pluginDir}`);
   }
 
-  const { repoRoot } = await findPluginOwner(pluginDir, layout);
+  const owner = await findPluginOwner(
+    pluginDir,
+    layout === undefined || (opts.searchAncestors ?? false),
+    layout,
+  );
+  const { repoRoot } = owner;
   if (layout !== undefined && repoRoot !== layout.repoRoot) {
     throw new Error(
       `The plugins root '${pluginsDir}' is owned by '${repoRoot}'. Scaffold from that repo instead.`,
@@ -409,9 +419,10 @@ export async function runScaffold(
   }
 
   // Registry sources are relative to the owning repo, including for nested plugins roots.
-  registerPluginInMarketplaces(repoRoot, pluginDir, targets);
+  const registryPath = registryPluginPath(owner, pluginDir);
+  registerPluginInMarketplaces(repoRoot, registryPath, targets);
 
-  return path.relative(repoRoot, pluginDir).split(path.sep).join('/');
+  return path.relative(repoRoot, registryPath).split(path.sep).join('/');
 }
 
 // ---------------------------------------------------------------------------
@@ -447,11 +458,11 @@ export async function runAddTarget(
   target: TargetId,
   lookupByName = false,
 ): Promise<AddTargetOutcome> {
-  const pluginDir = await resolvePluginPath(argument, lookupByName);
+  const { pluginDir, routedLayout } = await resolvePluginPath(argument, lookupByName);
   if (!isDirectory(pluginDir)) {
     throw new Error(`Plugin directory does not exist: ${pluginDir}`);
   }
-  const { repoRoot } = await findPluginOwner(pluginDir);
+  const owner = await findPluginOwner(pluginDir, lookupByName, routedLayout);
 
   const pluginName = path.basename(pluginDir);
   const files = TARGET_SCAFFOLDERS[target](pluginName, { placeholder: true });
@@ -475,7 +486,7 @@ export async function runAddTarget(
     writeFileEnsuringDir(path.join(pluginDir, file.path), file.content);
   }
 
-  registerPluginInMarketplaces(repoRoot, pluginDir, [target]);
+  registerPluginInMarketplaces(owner.repoRoot, registryPluginPath(owner, pluginDir), [target]);
 
   const written = toWrite.map((f) => f.path);
   const status: AddTargetOutcome['status'] =
@@ -537,7 +548,7 @@ export async function runCheckSupport(
   argument: string,
   lookupByName = false,
 ): Promise<SupportReport> {
-  const pluginDir = await resolvePluginPath(argument, lookupByName);
+  const { pluginDir } = await resolvePluginPath(argument, lookupByName);
   if (!isDirectory(pluginDir)) {
     throw new Error(`Plugin directory does not exist: ${pluginDir}`);
   }

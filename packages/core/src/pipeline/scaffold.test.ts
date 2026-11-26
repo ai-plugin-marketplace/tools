@@ -18,7 +18,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { DEFAULT_SCAFFOLD_TARGETS, TARGET_IDS } from './types.js';
 import { runBuild } from './build.js';
-import { addTarget, checkSupport } from './operations.js';
+import { addTarget, build, checkSupport, scaffold, validate } from '../index.js';
 import {
   parseDeclaredTargets,
   renderAipmConfig,
@@ -595,7 +595,7 @@ describe('runAddTarget — marketplace registration', () => {
       path.join(pluginDir, 'aipm.config.ts'),
       "export default { targets: ['claude'] };\n",
     );
-    await runAddTarget(pluginDir, 'cursor');
+    await runAddTarget(pluginDir, 'cursor', true);
 
     expect(readRegistry(tmpDir, '.cursor-plugin').plugins).toStrictEqual([
       { name: 'my-plugin', source: './extensions/ai/plugins/my-plugin' },
@@ -742,6 +742,81 @@ describe('public compatibility operations', () => {
       expect(read(pluginDir, '.cursor-plugin/plugin.json')).toBe('');
       expect(parseDeclaredTargets(read(pluginDir, 'aipm.config.ts'))).toStrictEqual(['claude']);
       expect(registryExists(tmpDir, '.cursor-plugin')).toBe(false);
+    } finally {
+      cwd.mockRestore();
+    }
+  });
+
+  it('still adds a target to an explicit path outside a relocated plugins root', async () => {
+    fs.writeFileSync(
+      path.join(tmpDir, 'aipm.repo.ts'),
+      "export default { pluginsRoot: 'agent-plugins' };",
+    );
+    const cwd = vi.spyOn(process, 'cwd').mockReturnValue(tmpDir);
+    try {
+      fs.mkdirSync(path.join(tmpDir, 'plugins/demo'), { recursive: true });
+      fs.writeFileSync(
+        path.join(tmpDir, 'plugins/demo/aipm.config.ts'),
+        "export default { targets: ['claude'] };",
+      );
+      await expect(addTarget(path.join('plugins', 'demo'), 'cursor')).resolves.toMatchObject({
+        status: 'added',
+      });
+      expect(readRegistry(tmpDir, '.cursor-plugin').plugins).toStrictEqual([
+        { name: 'demo', source: './plugins/demo' },
+      ]);
+    } finally {
+      cwd.mockRestore();
+    }
+  });
+
+  it('keeps core scaffold relative to cwd even inside an existing marketplace', async () => {
+    const cwd = path.join(tmpDir, 'docs');
+    fs.mkdirSync(cwd);
+    fs.writeFileSync(
+      path.join(tmpDir, 'aipm.repo.ts'),
+      "export default { pluginsRoot: 'agent-plugins' };",
+    );
+    const spy = vi.spyOn(process, 'cwd').mockReturnValue(cwd);
+    try {
+      await expect(scaffold('demo', { targets: ['claude'] })).resolves.toBeUndefined();
+      expect(fs.existsSync(path.join(cwd, 'plugins/demo/aipm.config.ts'))).toBe(true);
+      expect(fs.existsSync(path.join(tmpDir, 'agent-plugins'))).toBe(false);
+    } finally {
+      spy.mockRestore();
+    }
+  });
+
+  it('serializes the configured symlink route and accepts equivalent in-repo registry paths', async () => {
+    const sources = path.join(tmpDir, 'nested/sources');
+    fs.mkdirSync(sources, { recursive: true });
+    fs.symlinkSync(sources, path.join(tmpDir, 'plugins'), 'junction');
+    const cwd = vi.spyOn(process, 'cwd').mockReturnValue(fs.realpathSync(tmpDir));
+    try {
+      await scaffold('demo', { targets: ['claude'] });
+      await addTarget('plugins/demo', 'cursor');
+      expect(readRegistry(tmpDir, '.cursor-plugin').plugins).toStrictEqual([
+        { name: 'demo', source: './plugins/demo' },
+      ]);
+      expect(readRegistry(tmpDir, '.claude-plugin').plugins).toStrictEqual([
+        { name: 'demo', source: './plugins/demo' },
+      ]);
+      await build('plugins/demo');
+      await expect(validate('.')).resolves.toMatchObject({ passed: true });
+      await expect(validate('plugins/demo')).resolves.toMatchObject({ passed: true });
+      const registry = path.join(tmpDir, '.cursor-plugin/marketplace.json');
+      const contents = fs.readFileSync(registry, 'utf-8');
+      fs.writeFileSync(registry, contents.replace('./plugins/demo', './nested/sources/demo'));
+      await expect(validate('plugins/demo')).resolves.toMatchObject({ passed: true });
+
+      fs.writeFileSync(
+        path.join(tmpDir, 'aipm.workspace.ts'),
+        "export default { marketplace: { name: 'test-marketplace' } };",
+      );
+      await build('.');
+      expect(readRegistry(tmpDir, '.cursor-plugin').plugins).toMatchObject([
+        { name: 'demo', source: './plugins/demo' },
+      ]);
     } finally {
       cwd.mockRestore();
     }

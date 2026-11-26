@@ -50,7 +50,18 @@ Apply `--rule` overrides to a diagnostic list: a diagnostic whose `ruleId` has a
 
 </td><td>
 
-Build a single plugin or every plugin under a repo root. Pass a repo path, plugin directory path, or plugin name under the configured plugins root. Single-plugin input returns a length-1 array. See §5.2, §8.1.
+Build a single plugin or every plugin under a repo root. Pass a repo path, plugin directory path, or opt into CLI name lookup. Single-plugin input returns a length-1 array. See §5.2, §8.1.
+
+
+</td></tr>
+<tr><td>
+
+[buildAndValidate(targetPath, opts)](./core.buildandvalidate.md)
+
+
+</td><td>
+
+Build and validate the same discovered target, returning the build results and validation findings. The published-surface boundary check is reserved for standalone validation.
 
 
 </td></tr>
@@ -171,7 +182,7 @@ Every rule id the engine knows about (spec L-D4's `Rule.meta.id`<!-- -->), regar
 
 </td><td>
 
-Scaffold a plugin in the nearest repo layout and return its repo-relative path.
+Scaffold a plugin and return its repo-relative path.
 
 
 </td></tr>
@@ -182,7 +193,7 @@ Scaffold a plugin in the nearest repo layout and return its repo-relative path.
 
 </td><td>
 
-Scaffold a plugin under the nearest configured or default plugins root. If no repo layout is present, use the working directory.
+Scaffold a plugin under the working directory’s configured or default plugins root. Set `searchAncestors` to use the nearest repo layout within the checkout.
 
 
 </td></tr>
@@ -206,7 +217,7 @@ Must be called with the diagnostics `lint()` produced BEFORE [applyRuleSeverityO
 
 </td><td>
 
-Validate a single plugin or every plugin under a repo root, in the order defined by §10.1. Accepts a repo path, plugin directory path, or plugin name under the configured plugins root. Freshness severity follows the CI environment (§10.2).
+Validate a single plugin or every plugin under a repo root, in the order defined by §10.1. Accepts a repo path or plugin directory path. CLI name lookup is opt-in. Freshness severity follows the CI environment (§10.2).
 
 
 </td></tr>
@@ -436,7 +447,7 @@ Result of running [migrate()](./core.migrate.md)<!-- -->.
 
 </td><td>
 
-Options for [checkSupport()](./core.checksupport.md) and [addTarget()](./core.addtarget.md)<!-- -->.
+Options for resolving plugin arguments.
 
 
 </td></tr>

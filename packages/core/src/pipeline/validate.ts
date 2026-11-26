@@ -185,8 +185,8 @@ const objectSourceMarketplaceSchema = z
  */
 type SourceExtraction =
   | { status: 'parse-error'; details?: string }
-  | { status: 'not-listed' }
-  | { status: 'found'; source: string };
+  | { status: 'not-listed'; pluginRoot?: string }
+  | { status: 'found'; source: string; pluginRoot?: string };
 
 interface MarketplaceRegistryDescriptor {
   target: TargetId;
@@ -1021,9 +1021,10 @@ function extractStringSource(raw: unknown, pluginName: string): SourceExtraction
 function extractOpenPluginsSource(raw: unknown, pluginName: string): SourceExtraction {
   const parsed = openPluginsMarketplaceSchema.safeParse(raw);
   if (!parsed.success) return { status: 'parse-error', details: z.prettifyError(parsed.error) };
+  const pluginRoot = parsed.data.metadata?.pluginRoot ?? '.';
   const entry = parsed.data.plugins.find((p) => p.name === pluginName);
-  if (!entry) return { status: 'not-listed' };
-  return { status: 'found', source: entry.source };
+  if (!entry) return { status: 'not-listed', pluginRoot };
+  return { status: 'found', source: entry.source, pluginRoot };
 }
 
 /** Extract the matching entry's `source.path` from the Codex object-source marketplace file. */
@@ -1047,8 +1048,10 @@ function extractCodexSource(raw: unknown, pluginName: string): SourceExtraction 
  *   `<repoRoot>/.agents/plugins/marketplace.json` with an object `source` whose `path` is
  *   `./plugins/<name>`.
  * - If `open-plugins` is in the envelope, the root `marketplace.json` MUST satisfy the Open
- *   Plugins marketplace schema and list the plugin with its `./`-prefixed repo-relative source.
- * - If a target is NOT in the envelope, the plugin MUST NOT be listed in that marketplace.
+ *   Plugins marketplace schema and list the plugin with its `./`-prefixed source relative to
+ *   `metadata.pluginRoot` (default `.`). The plugin directory must resolve inside the repo.
+ * - If a target is NOT in a multi-target envelope, the plugin MUST NOT be listed in that marketplace.
+ * - For an Open Plugins-only envelope, only the Open Plugins registry is checked.
  *
  * The per-registry path and source extraction are data-driven (see
  * {@link MARKETPLACE_REGISTRY_CHECKS}); the loop body is identical across registries so the same
@@ -1066,16 +1069,10 @@ export function validateMarketplaceRegistration(
   const pluginName = path.basename(pluginDir);
   const envelopeSet = new Set(envelope);
 
-  // The expected source is the plugin directory's path relative to the repo root (the location
-  // hosts resolve `source` against). Default topology → `plugins/<name>`; an embedded marketplace
-  // with a relocated `pluginsRoot` → e.g. `agent-plugins/<name>`. POSIX separators are forced so
-  // the comparison is stable on Windows. The comparison accepts either spelling (§4.4). The
-  // Open Plugins schema requires the canonical `./` prefix before the comparison runs.
-  const relFromRepo = path.relative(repoRoot, pluginDir).split(path.sep).join('/');
-  const expectedSource = `./${relFromRepo}`;
-  const normalizedExpected = relFromRepo;
-
   for (const { target, marketplaceRel, extractSource } of MARKETPLACE_REGISTRY_CHECKS) {
+    if (envelope.length === 1 && envelopeSet.has('open-plugins') && target !== 'open-plugins') {
+      continue;
+    }
     const marketplacePath = path.join(repoRoot, ...marketplaceRel);
     const inEnvelope = envelopeSet.has(target);
 
@@ -1095,7 +1092,11 @@ export function validateMarketplaceRegistration(
     }
 
     const raw = tryReadJson(marketplacePath);
-    const extraction = extractSource(raw, pluginName);
+    let extraction = extractSource(raw, pluginName);
+    if (extraction.status === 'parse-error' && target === 'open-plugins' && !inEnvelope) {
+      // Preserve the membership check when an invalid Open Plugins registry has readable entries.
+      extraction = extractStringSource(raw, pluginName);
+    }
 
     if (extraction.status === 'parse-error') {
       if (inEnvelope) {
@@ -1112,6 +1113,31 @@ export function validateMarketplaceRegistration(
     }
 
     if (inEnvelope) {
+      const { pluginRoot } = extraction;
+      if (pluginRoot !== undefined) {
+        const realRelative = path.relative(fs.realpathSync(repoRoot), fs.realpathSync(pluginDir));
+        if (
+          realRelative === '..' ||
+          realRelative.startsWith(`..${path.sep}`) ||
+          path.isAbsolute(realRelative)
+        ) {
+          findings.push(
+            hard(
+              'marketplace-registration',
+              pluginName,
+              `Plugin directory '${pluginDir}' resolves outside the repository '${repoRoot}'.`,
+              'Keep the plugin directory inside the repository.',
+            ),
+          );
+          continue;
+        }
+      }
+
+      // Keep the authored path spelling when constructing registry sources, even if an in-repo
+      // directory is reached through a symlink. Registry paths use POSIX separators on every host.
+      const sourceBase = path.resolve(repoRoot, pluginRoot ?? '.');
+      const normalizedExpected = path.relative(sourceBase, pluginDir).split(path.sep).join('/');
+      const expectedSource = `./${normalizedExpected}`;
       if (extraction.status === 'not-listed') {
         findings.push(
           hard(
@@ -1122,10 +1148,12 @@ export function validateMarketplaceRegistration(
           ),
         );
       } else {
-        // Entry exists — verify source (normalise a leading `./`).
         const { source } = extraction;
-        const normalizedActual = source.startsWith('./') ? source.slice(2) : source;
-        if (normalizedActual !== normalizedExpected) {
+        const matches =
+          pluginRoot === undefined
+            ? source.replace(/^\.\//, '') === normalizedExpected
+            : path.resolve(sourceBase, source) === path.resolve(pluginDir);
+        if (!matches) {
           findings.push(
             hard(
               'marketplace-registration',
@@ -1761,13 +1789,18 @@ export async function runValidate(
         ...(await versionConsistencyRule.check(ctx)).map((d) => diagnosticToFinding(d, ci)),
       );
       findings.push(...(await mcpKeySyncRule.check(ctx)).map((d) => diagnosticToFinding(d, ci)));
-      // When registries are generated, their correctness is enforced by freshness below — skip the
-      // hand-authored-registry check to avoid double findings (design spec, locked decision 2).
-      if (!generatesRegistries) {
-        findings.push(
-          ...(await marketplaceRegistrationRule.check(ctx)).map((d) => diagnosticToFinding(d, ci)),
-        );
-      }
+    }
+
+    // Generated registries are checked by freshness. Hand-authored Open Plugins registries also
+    // need registration checks for single-target envelopes.
+    if (
+      !generatesRegistries &&
+      !hasBlockingSchemaError &&
+      (envelope.length > 1 || envelope.includes('open-plugins'))
+    ) {
+      findings.push(
+        ...(await marketplaceRegistrationRule.check(ctx)).map((d) => diagnosticToFinding(d, ci)),
+      );
     }
 
     // ── 5. Freshness ─────────────────────────────────────────────────────────

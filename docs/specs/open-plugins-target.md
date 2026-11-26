@@ -318,11 +318,16 @@ the cross-target validators (`validate.ts:913`). This honors the api-semantics r
 thing across the codebase; we do not overload `marketplace-registration` to also mean "metadata dir
 dirty."
 
-For hand-authored registries, validation and lint use the Open Plugins marketplace schema before
-checking membership and source paths. Schema violations produce a hard `marketplace-registration`
-finding for plugins that declare Open Plugins. The validation pipeline runs registration under
-the multi-target consistency check (`architecture.md` §10.1). For generated registries, validation
-uses freshness.
+For a plugin that declares Open Plugins, `aipm validate` and `aipm lint` require the hand-authored
+root registry to pass the Open Plugins marketplace schema, including unique plugin names. This
+check also runs for an Open Plugins-only envelope once the plugin manifest passes schema validation.
+Schema violations produce a hard `marketplace-registration` finding. The plugin's `./`-prefixed
+source resolves from `metadata.pluginRoot` (default `.`, the repo root), and its directory must
+resolve inside the repo even when reached through a symlink.
+
+For a multi-target plugin outside the Open Plugins envelope, registration still checks for a
+forbidden entry using the loose string-source parser if the Open Plugins schema fails. Generated
+registries use freshness.
 
 ---
 

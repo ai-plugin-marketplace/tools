@@ -171,6 +171,22 @@ describe('init', () => {
     );
   });
 
+  it('rejects an incompatible cliVersion getter result after one read', async () => {
+    const repoDir = path.join(tmpDir, 'wrong-version-getter');
+    const incompatible = `${String(semver.major(CLI_VERSION) + 1)}.0.0`;
+    let reads = 0;
+
+    await expect(
+      init(repoDir, {
+        get cliVersion() {
+          return reads++ === 0 ? incompatible : CLI_VERSION;
+        },
+      }),
+    ).rejects.toThrow(`excludes @ai-plugin-marketplace/cli@${CLI_VERSION}`);
+    expect(reads).toBe(1);
+    expect(fs.existsSync(repoDir)).toBe(false);
+  });
+
   it('accepts a range that starts before the release in an explicitly selected CLI manifest', async () => {
     const repoDir = path.join(tmpDir, 'selected-cli');
     const manifest = path.join(tmpDir, 'package.json');
@@ -181,6 +197,22 @@ describe('init', () => {
     const cliPackageJson = pathToFileURL(manifest);
     await init(repoDir, { cliPackageJson, cliVersion: '9.9.0' });
     expect(readPackageJson(repoDir).devDependencies?.['@ai-plugin-marketplace/cli']).toBe('^9.9.0');
+  });
+
+  it('defaults to the explicitly selected CLI release when cliVersion is omitted', async () => {
+    const repoDir = path.join(tmpDir, 'selected-cli-default');
+    const manifest = path.join(tmpDir, 'package.json');
+    const selectedRelease = '9.9.1';
+    fs.writeFileSync(
+      manifest,
+      JSON.stringify({ name: '@ai-plugin-marketplace/cli', version: selectedRelease }),
+    );
+
+    await init(repoDir, { cliPackageJson: pathToFileURL(manifest) });
+
+    expect(readPackageJson(repoDir).devDependencies?.['@ai-plugin-marketplace/cli']).toBe(
+      `^${selectedRelease}`,
+    );
   });
 
   it('rejects a core manifest supplied as CLI metadata without writing', async () => {

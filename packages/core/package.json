@@ -19,9 +19,9 @@
     "LICENSE"
   ],
   "scripts": {
-    "build": "tsc --build && node scripts/bundle-cli-release.mjs && api-extractor run --local",
+    "build": "pnpm run check:typecheck && api-extractor run --local",
     "check": "nx run-many --targets=check:typecheck,check:lint-ts,check:api-report,test --projects=@ai-plugin-marketplace/core",
-    "check:typecheck": "tsc --build",
+    "check:typecheck": "tsc --build && node scripts/bundle-cli-release.mjs",
     "check:lint-ts": "eslint src",
     "check:api-report": "api-extractor run",
     "fix:api-report": "api-extractor run --local",
@@ -32,11 +32,10 @@
   },
   "nx": {
     "targets": {
-      "build": {
-        "inputs": [
-          "production",
-          "^production",
-          "{workspaceRoot}/packages/cli/package.json"
+      "test": {
+        "dependsOn": [
+          "check:typecheck",
+          "^build"
         ]
       }
     }

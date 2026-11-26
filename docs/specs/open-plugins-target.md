@@ -404,9 +404,9 @@ Adding a `TargetId` and adding `FindingCode`s are both **additive** changes. Per
 
 > **OP-D11 (normative).** Registering `open-plugins` and adding the `metadata-dir-isolation` and
 > `open-plugins-conformance` codes is a **MINOR** release of `@ai-plugin-marketplace/core` and
-> `@ai-plugin-marketplace/cli` (released in lockstep, `architecture.md` §9.1). No existing plugin
-> manifest changes; no `FindingCode` is removed or renamed (which would be MAJOR). A changeset for
-> both packages accompanies the implementation (per the umbrella/changeset rules).
+> `@ai-plugin-marketplace/cli`. No existing plugin manifest changes; no `FindingCode` is removed or
+> renamed (which would be MAJOR). A changeset for both packages accompanies the implementation
+> (per the umbrella/changeset rules).
 
 ### 9.2 Default scaffold envelope
 

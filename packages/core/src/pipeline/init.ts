@@ -161,10 +161,7 @@ function findAncestorPnpmWorkspace(dir: string): string | undefined {
  *   {@link findAncestorPnpmWorkspace}), is `undefined` otherwise.
  * @throws {Error} When the target cannot be scaffolded into or the CLI range cannot be verified.
  */
-export async function runInit(
-  targetDir: string,
-  opts: InitOptions | undefined,
-): Promise<InitOutcome> {
+export async function runInit(targetDir: string, opts?: InitOptions): Promise<InitOutcome> {
   const resolved = path.resolve(targetDir);
 
   if (!isFreshTarget(resolved)) {

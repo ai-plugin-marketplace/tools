@@ -12,7 +12,9 @@
     "sharedGlobals": [
       "{workspaceRoot}/tsconfig.base.json",
       "{workspaceRoot}/eslint.config.mjs",
-      "{workspaceRoot}/.prettierrc.json"
+      "{workspaceRoot}/.prettierrc.json",
+      // Core embeds the CLI version without taking a runtime dependency on the CLI.
+      "{workspaceRoot}/packages/cli/package.json"
     ]
   },
   "targetDefaults": {
@@ -55,6 +57,7 @@
         "^production",
         "{workspaceRoot}/vitest.config.ts",
         "{workspaceRoot}/docs/specs/architecture.md",
+        "{workspaceRoot}/docs/specs/open-plugins-target.md",
         "{workspaceRoot}/RELEASING.md",
         "{workspaceRoot}/.github/template-repo.rev",
         { "env": "AIPM_TEMPLATE_REPO" },

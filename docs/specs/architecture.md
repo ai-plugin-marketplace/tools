@@ -698,7 +698,8 @@ When additional packages are extracted (§12.4), the template will depend on a s
 
 ### 11.3 Upgrade flow
 
-For releases within both existing dependency ranges:
+Use this command when both versions fit their existing dependency ranges and the selected core
+version satisfies the selected CLI release's core dependency range:
 
 ```sh
 pnpm up @ai-plugin-marketplace/cli @ai-plugin-marketplace/core
@@ -706,11 +707,11 @@ aipm build
 ```
 
 To cross a caret boundary, including a pre-1.0 minor line, select versions for both packages.
-Choose a core version within the selected CLI release's core dependency range. For example, to
-move from CLI `^0.8.0` and core `^0.11.0` to CLI `0.8.1` and core `0.12.0`:
+For example, CLI `0.8.0` depends on core `^0.11.0`. With an existing core range `^0.10.0`,
+select a compatible pair explicitly:
 
 ```sh
-pnpm add -D @ai-plugin-marketplace/cli@0.8.1 @ai-plugin-marketplace/core@0.12.0
+pnpm add -D @ai-plugin-marketplace/cli@0.8.0 @ai-plugin-marketplace/core@0.11.0
 aipm build
 ```
 

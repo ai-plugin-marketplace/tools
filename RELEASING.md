@@ -28,7 +28,8 @@ manifests (architecture spec §9.3). Major releases may require `aipm migrate` (
 A plugin repo (see `aipm init`, or the
 [`template`](https://github.com/ai-plugin-marketplace/template)) depends on
 `@ai-plugin-marketplace/cli` + `@ai-plugin-marketplace/core` via `^semver` and runs everything
-through the `aipm` binary. Update both packages within their existing ranges with:
+through the `aipm` binary. Use this command when both versions fit their existing dependency
+ranges and the selected core version satisfies the selected CLI release's core dependency range:
 
 ```sh
 pnpm up @ai-plugin-marketplace/cli @ai-plugin-marketplace/core
@@ -36,10 +37,10 @@ aipm build
 ```
 
 To cross a caret boundary, including a pre-1.0 minor line, select versions for both packages.
-Choose a core version within the selected CLI release's core dependency range. For example, CLI
-`0.8.1` depends on core `^0.12.0`, outside a consumer's existing `^0.11.0` range:
+For example, CLI `0.8.0` depends on core `^0.11.0`. With an existing core range `^0.10.0`,
+select a compatible pair explicitly:
 
 ```sh
-pnpm add -D @ai-plugin-marketplace/cli@0.8.1 @ai-plugin-marketplace/core@0.12.0
+pnpm add -D @ai-plugin-marketplace/cli@0.8.0 @ai-plugin-marketplace/core@0.11.0
 aipm build
 ```

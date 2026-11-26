@@ -51,6 +51,10 @@ import {
 | `addTarget`    | Scaffold skeleton files for a new target in an existing plugin     |
 | `listTargets`  | Return the `TargetId` values this toolkit version recognises       |
 
+For programmatic scaffolding, call `init(dir, { cliVersion })` with the version of
+`@ai-plugin-marketplace/cli` you intend to install. The generated manifest uses a caret range
+based on that version and a separate range for the installed core version.
+
 ### Key types
 
 `TargetId`, `BuildOptions`, `BuildResult`, `GeneratedFile`, `ValidateOptions`,

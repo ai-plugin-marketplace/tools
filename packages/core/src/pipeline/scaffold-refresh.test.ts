@@ -113,7 +113,7 @@ describe('runRefreshScaffold', () => {
   beforeEach(async () => {
     tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'pipeline-refresh-test-'));
     repoDir = path.join(tmpDir, 'repo');
-    await runInit(repoDir);
+    await runInit(repoDir, { cliVersion: '0.0.0' });
   });
 
   afterEach(() => {

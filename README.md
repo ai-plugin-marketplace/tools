@@ -89,14 +89,8 @@ pnpm run build    # tsc + API Extractor rollup
 
 ## Releasing
 
-Versioned and published with Changesets. The packages are ready for the `0.1.0` release; the only
-missing piece is npm credentials. See [`RELEASING.md`](./RELEASING.md).
-
-## Status
-
-`0.1.0` ready to publish (pending npm credentials). See
-[`docs/specs/architecture.md`](./docs/specs/architecture.md) for the architecture and §13 for the
-phased plan.
+Core and CLI are versioned independently with Changesets. GitHub Actions publishes the packages
+to npm using OIDC trusted publishing. See [the release process](./RELEASING.md).
 
 ## License
 

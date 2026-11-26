@@ -160,11 +160,11 @@ export interface GeneratedFile {
 export type GeneratedFileTarget = TargetId | 'shared';
 
 // @public
-export function init(targetDir: string, opts?: InitOptions): Promise<InitOutcome>;
+export function init(targetDir: string, opts: InitOptions): Promise<InitOutcome>;
 
 // @public
 export interface InitOptions {
-    cliVersion?: string;
+    cliVersion: string;
     marketplaceName?: string;
     name?: string;
 }

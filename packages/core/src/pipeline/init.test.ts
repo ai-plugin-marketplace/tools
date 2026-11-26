@@ -7,7 +7,7 @@
  *
  * `cli` and `core` ship independently and may differ, so `runInit` pins each to a caret of its own
  * version: `core` from core's own `package.json` (read here the same way), `cli` from
- * `opts.cliVersion` (falling back to core's version when omitted).
+ * the caller's `opts.cliVersion`.
  *
  * @see docs/specs/architecture.md §3.2 (template repo contents)
  * @see docs/specs/architecture.md §11 (template→toolkit dependency contract)
@@ -20,11 +20,12 @@ import * as path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import semver from 'semver';
 
 import { runInit } from './init.js';
 import { runValidate } from './validate.js';
 
-/** core's own version — the value `runInit` pins the cli dev dependency to (`^<version>`). */
+/** The base version for the generated core dependency. */
 const CORE_VERSION = (
   JSON.parse(
     fs.readFileSync(
@@ -33,6 +34,14 @@ const CORE_VERSION = (
     ),
   ) as { version: string }
 ).version;
+
+const CLI_VERSION = (
+  JSON.parse(fs.readFileSync(new URL('../../../cli/package.json', import.meta.url), 'utf-8')) as {
+    version: string;
+  }
+).version;
+
+const INIT_OPTIONS = { cliVersion: CLI_VERSION };
 
 interface GeneratedPackageJson {
   name?: string;
@@ -80,7 +89,7 @@ function readMarketplace(repoDir: string, rel: string): MarketplaceShape {
 describe('runInit', () => {
   it('writes the full §3.2 seed file set', async () => {
     const repoDir = path.join(tmpDir, 'my-repo');
-    await runInit(repoDir);
+    await runInit(repoDir, INIT_OPTIONS);
 
     // §3.2: every seed file is present, plus the refresh sidecar.
     for (const rel of [
@@ -104,7 +113,7 @@ describe('runInit', () => {
   // foreign root file (root-artifact-collision) and suppress the open-plugins registry.
   it('seeds .aipm/generated-root.json tracking the root marketplace.json seed', async () => {
     const repoDir = path.join(tmpDir, 'root-sidecar');
-    await runInit(repoDir);
+    await runInit(repoDir, INIT_OPTIONS);
     const sidecar = JSON.parse(read(repoDir, '.aipm/generated-root.json')) as {
       version?: number;
       paths?: string[];
@@ -115,23 +124,30 @@ describe('runInit', () => {
 
   it('derives the repo name from the target directory basename', async () => {
     const repoDir = path.join(tmpDir, 'derived-name');
-    await runInit(repoDir);
+    await runInit(repoDir, INIT_OPTIONS);
     const pkg = readPackageJson(repoDir);
     expect(pkg.name).toBe('derived-name');
   });
 
   it('honors an explicit name override', async () => {
     const repoDir = path.join(tmpDir, 'on-disk-dir');
-    await runInit(repoDir, { name: 'explicit-name' });
+    await runInit(repoDir, { ...INIT_OPTIONS, name: 'explicit-name' });
     const pkg = readPackageJson(repoDir);
     expect(pkg.name).toBe('explicit-name');
   });
 
-  it('defaults the cli pin to core’s version when no cliVersion is given (§11)', async () => {
+  it('requires the CLI version and scaffolds a range that admits that release', async () => {
     const repoDir = path.join(tmpDir, 'pinned');
-    await runInit(repoDir);
+
+    // @ts-expect-error — exercise a JavaScript caller omitting the required options.
+    await expect(runInit(repoDir)).rejects.toThrow("Invalid 'cliVersion'");
+    expect(fs.existsSync(repoDir)).toBe(false);
+
+    await runInit(repoDir, { cliVersion: CLI_VERSION });
     const pkg = readPackageJson(repoDir);
-    expect(pkg.devDependencies?.['@ai-plugin-marketplace/cli']).toBe(`^${CORE_VERSION}`);
+    const cliRange = pkg.devDependencies?.['@ai-plugin-marketplace/cli'] ?? '';
+    expect(cliRange).toBe(`^${CLI_VERSION}`);
+    expect(semver.satisfies(CLI_VERSION, cliRange)).toBe(true);
     expect(pkg.devDependencies?.['@ai-plugin-marketplace/core']).toBe(`^${CORE_VERSION}`);
   });
 
@@ -148,14 +164,14 @@ describe('runInit', () => {
 
   it('pins pnpm via packageManager so CI resolves a pnpm version (§3.2)', async () => {
     const repoDir = path.join(tmpDir, 'pkg-mgr');
-    await runInit(repoDir);
+    await runInit(repoDir, INIT_OPTIONS);
     const pkg = readPackageJson(repoDir);
     expect(pkg.packageManager).toMatch(/^pnpm@\d+\.\d+\.\d+$/);
   });
 
   it('seeds .aipm/scaffold.json recording the managed scaffold files', async () => {
     const repoDir = path.join(tmpDir, 'sidecar');
-    await runInit(repoDir);
+    await runInit(repoDir, INIT_OPTIONS);
     const sidecar = JSON.parse(read(repoDir, '.aipm/scaffold.json')) as {
       version?: number;
       files?: { path: string; hash: string }[];
@@ -173,7 +189,7 @@ describe('runInit', () => {
     // Safety acceptance: a fresh scaffold must ignore `.env*` so secrets can't be committed, plus
     // logs/coverage/scratch — while retaining the originally-required `*.local.*` and `.DS_Store`.
     const repoDir = path.join(tmpDir, 'gitignore-seed');
-    await runInit(repoDir);
+    await runInit(repoDir, INIT_OPTIONS);
     const gitignore = read(repoDir, '.gitignore');
     for (const pattern of [
       '.env',
@@ -194,7 +210,7 @@ describe('runInit', () => {
 
   it('emits a private, ESM package.json with the aipm scripts (§3.2)', async () => {
     const repoDir = path.join(tmpDir, 'pkg-shape');
-    await runInit(repoDir);
+    await runInit(repoDir, INIT_OPTIONS);
     const pkg = readPackageJson(repoDir);
     expect(pkg.private).toBe(true);
     expect(pkg.type).toBe('module');
@@ -207,7 +223,7 @@ describe('runInit', () => {
 
   it('writes both repo-root marketplace registries named, with an empty plugins array (§4.4)', async () => {
     const repoDir = path.join(tmpDir, 'registries');
-    await runInit(repoDir, { marketplaceName: 'acme-ai-plugins' });
+    await runInit(repoDir, { ...INIT_OPTIONS, marketplaceName: 'acme-ai-plugins' });
     for (const rel of ['.claude-plugin/marketplace.json', '.cursor-plugin/marketplace.json']) {
       const registry = readMarketplace(repoDir, rel);
       // Named registry: a distinct marketplace name prevents the install-time collision where two
@@ -227,7 +243,7 @@ describe('runInit', () => {
     const prevUser = process.env['USER'];
     process.env['USER'] = 'testuser';
     try {
-      await runInit(repoDir);
+      await runInit(repoDir, INIT_OPTIONS);
     } finally {
       if (prevUser === undefined) delete process.env['USER'];
       else process.env['USER'] = prevUser;
@@ -245,7 +261,7 @@ describe('runInit', () => {
     delete process.env['USER'];
     process.env['USERNAME'] = 'winuser';
     try {
-      await runInit(repoDir);
+      await runInit(repoDir, INIT_OPTIONS);
     } finally {
       if (prevUser === undefined) delete process.env['USER'];
       else process.env['USER'] = prevUser;
@@ -263,7 +279,7 @@ describe('runInit', () => {
     delete process.env['USER'];
     delete process.env['USERNAME'];
     try {
-      await runInit(repoDir);
+      await runInit(repoDir, INIT_OPTIONS);
     } finally {
       if (prevUser !== undefined) process.env['USER'] = prevUser;
       if (prevUsername !== undefined) process.env['USERNAME'] = prevUsername;
@@ -274,7 +290,11 @@ describe('runInit', () => {
 
   it('honors an explicit marketplaceName override independent of the package name', async () => {
     const repoDir = path.join(tmpDir, 'explicit-mkt');
-    await runInit(repoDir, { name: 'pkg-name', marketplaceName: 'acme-ai-plugins' });
+    await runInit(repoDir, {
+      ...INIT_OPTIONS,
+      name: 'pkg-name',
+      marketplaceName: 'acme-ai-plugins',
+    });
     const pkg = readPackageJson(repoDir);
     expect(pkg.name).toBe('pkg-name');
     const registry = readMarketplace(repoDir, '.claude-plugin/marketplace.json');
@@ -283,7 +303,11 @@ describe('runInit', () => {
 
   it('trims a provided name/marketplaceName before writing it', async () => {
     const repoDir = path.join(tmpDir, 'trimmed');
-    await runInit(repoDir, { name: '  pkg-name  ', marketplaceName: '  acme-ai-plugins  ' });
+    await runInit(repoDir, {
+      ...INIT_OPTIONS,
+      name: '  pkg-name  ',
+      marketplaceName: '  acme-ai-plugins  ',
+    });
     expect(readPackageJson(repoDir).name).toBe('pkg-name');
     expect(readMarketplace(repoDir, '.claude-plugin/marketplace.json').name).toBe(
       'acme-ai-plugins',
@@ -293,7 +317,7 @@ describe('runInit', () => {
   it('rejects a blank/whitespace marketplaceName and writes nothing', async () => {
     // A blank `--name`/marketplaceName would otherwise yield an empty marketplace identity.
     const repoDir = path.join(tmpDir, 'blank-mkt');
-    await expect(runInit(repoDir, { marketplaceName: '   ' })).rejects.toThrow(
+    await expect(runInit(repoDir, { ...INIT_OPTIONS, marketplaceName: '   ' })).rejects.toThrow(
       /Invalid 'marketplaceName'/,
     );
     expect(fs.existsSync(path.join(repoDir, 'package.json'))).toBe(false);
@@ -301,13 +325,13 @@ describe('runInit', () => {
 
   it('rejects a blank/whitespace name and writes nothing', async () => {
     const repoDir = path.join(tmpDir, 'blank-name');
-    await expect(runInit(repoDir, { name: '' })).rejects.toThrow(/Invalid 'name'/);
+    await expect(runInit(repoDir, { ...INIT_OPTIONS, name: '' })).rejects.toThrow(/Invalid 'name'/);
     expect(fs.existsSync(path.join(repoDir, 'package.json'))).toBe(false);
   });
 
   it('writes a CI workflow that runs `aipm build` then `aipm validate` (§10.5)', async () => {
     const repoDir = path.join(tmpDir, 'ci');
-    await runInit(repoDir);
+    await runInit(repoDir, INIT_OPTIONS);
     const ci = read(repoDir, '.github/workflows/ci.yml');
     expect(ci).toContain('aipm build');
     expect(ci).toContain('aipm validate');
@@ -315,7 +339,7 @@ describe('runInit', () => {
 
   it('produces 2-space JSON with trailing newlines', async () => {
     const repoDir = path.join(tmpDir, 'formatting');
-    await runInit(repoDir);
+    await runInit(repoDir, INIT_OPTIONS);
     const pkgRaw = read(repoDir, 'package.json');
     expect(pkgRaw.endsWith('\n')).toBe(true);
     expect(pkgRaw).toContain('\n  "private": true');
@@ -326,7 +350,7 @@ describe('runInit', () => {
   it('scaffolds into an existing empty directory', async () => {
     const repoDir = path.join(tmpDir, 'pre-created-empty');
     fs.mkdirSync(repoDir);
-    await runInit(repoDir);
+    await runInit(repoDir, INIT_OPTIONS);
     expect(fs.existsSync(path.join(repoDir, 'package.json'))).toBe(true);
   });
 
@@ -334,7 +358,7 @@ describe('runInit', () => {
     // A non-placeholder marketplace name keeps this independent of $USER and of the
     // default-marketplace-name guard, so the clean repo has zero findings.
     const repoDir = path.join(tmpDir, 'valid-repo');
-    await runInit(repoDir, { marketplaceName: 'acme-ai-plugins' });
+    await runInit(repoDir, { ...INIT_OPTIONS, marketplaceName: 'acme-ai-plugins' });
     const result = await runValidate(repoDir);
     expect(result.passed).toBe(true);
     expect(result.findings).toEqual([]);
@@ -344,7 +368,7 @@ describe('runInit', () => {
     // The my-ai-plugins fallback (and the upstream ai-plugin-marketplace name) collide on install;
     // validate warns but must not fail (soft finding, passed stays true).
     const repoDir = path.join(tmpDir, 'placeholder-name');
-    await runInit(repoDir, { marketplaceName: 'my-ai-plugins' });
+    await runInit(repoDir, { ...INIT_OPTIONS, marketplaceName: 'my-ai-plugins' });
     const result = await runValidate(repoDir);
     const nameFindings = result.findings.filter((f) => f.code === 'default-marketplace-name');
     expect(nameFindings).toHaveLength(1);
@@ -356,8 +380,8 @@ describe('runInit', () => {
     const a = path.join(tmpDir, 'det-a');
     const b = path.join(tmpDir, 'det-b');
     // Same name so the only potential difference would be non-determinism (e.g. a timestamp).
-    await runInit(a, { name: 'same-name' });
-    await runInit(b, { name: 'same-name' });
+    await runInit(a, { ...INIT_OPTIONS, name: 'same-name' });
+    await runInit(b, { ...INIT_OPTIONS, name: 'same-name' });
     for (const rel of ['package.json', 'README.md', '.github/workflows/ci.yml']) {
       expect(read(a, rel)).toBe(read(b, rel));
     }
@@ -367,7 +391,7 @@ describe('runInit', () => {
     const repoDir = path.join(tmpDir, 'non-empty');
     fs.mkdirSync(repoDir);
     fs.writeFileSync(path.join(repoDir, 'existing.txt'), 'keep me', 'utf-8');
-    await expect(runInit(repoDir)).rejects.toThrow(/already exists and is not empty/);
+    await expect(runInit(repoDir, INIT_OPTIONS)).rejects.toThrow(/already exists and is not empty/);
     // The pre-existing file is untouched and no package.json was written.
     expect(read(repoDir, 'existing.txt')).toBe('keep me');
     expect(fs.existsSync(path.join(repoDir, 'package.json'))).toBe(false);
@@ -376,7 +400,9 @@ describe('runInit', () => {
   it('refuses when the target path exists as a non-directory', async () => {
     const filePath = path.join(tmpDir, 'a-file');
     fs.writeFileSync(filePath, 'not a dir', 'utf-8');
-    await expect(runInit(filePath)).rejects.toThrow(/not empty|not a directory|already exists/);
+    await expect(runInit(filePath, INIT_OPTIONS)).rejects.toThrow(
+      /not empty|not a directory|already exists/,
+    );
   });
 
   // Issue #96: a directory with no local package.json under an ancestor pnpm-workspace.yaml lets
@@ -390,7 +416,7 @@ describe('runInit', () => {
       fs.writeFileSync(path.join(wsRoot, 'pnpm-workspace.yaml'), 'packages:\n  - "pkgs/*"\n');
       const repoDir = path.join(wsRoot, 'sub', 'my-repo');
 
-      const outcome = await runInit(repoDir);
+      const outcome = await runInit(repoDir, INIT_OPTIONS);
 
       expect(outcome.ancestorWorkspace).toBe(path.join(wsRoot, 'pnpm-workspace.yaml'));
       // The boundary is still written regardless of the ancestor.
@@ -403,7 +429,7 @@ describe('runInit', () => {
       fs.writeFileSync(path.join(wsRoot, 'pnpm-workspace.yaml'), 'packages:\n  - "pkgs/*"\n');
       const repoDir = path.join(wsRoot, 'a', 'b', 'c', 'my-repo');
 
-      const outcome = await runInit(repoDir);
+      const outcome = await runInit(repoDir, INIT_OPTIONS);
 
       expect(outcome.ancestorWorkspace).toBe(path.join(wsRoot, 'pnpm-workspace.yaml'));
     });
@@ -411,7 +437,7 @@ describe('runInit', () => {
     it('leaves ancestorWorkspace undefined when no ancestor pnpm-workspace.yaml exists', async () => {
       const repoDir = path.join(tmpDir, 'no-ancestor-ws', 'my-repo');
 
-      const outcome = await runInit(repoDir);
+      const outcome = await runInit(repoDir, INIT_OPTIONS);
 
       expect(outcome.ancestorWorkspace).toBeUndefined();
     });

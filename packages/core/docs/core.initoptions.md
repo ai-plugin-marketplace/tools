@@ -37,7 +37,7 @@ Description
 </th></tr></thead>
 <tbody><tr><td>
 
-[cliVersion?](./core.initoptions.cliversion.md)
+[cliVersion](./core.initoptions.cliversion.md)
 
 
 </td><td>
@@ -50,7 +50,7 @@ string
 
 </td><td>
 
-_(Optional)_ Version of `@ai-plugin-marketplace/cli` to pin the generated `package.json`<!-- -->'s `cli` dev dependency to (as `^<cliVersion>`<!-- -->). The cli entrypoint supplies its own version here; cli and core ship independently and may differ (e.g. `cli 0.1.1` ships with `core 0.2.0`<!-- -->). When omitted, falls back to core's own version (the historical lockstep assumption).
+The CLI package's semver version. The scaffold uses it as the base of the generated `@ai-plugin-marketplace/cli` caret dependency. The CLI command supplies its installed version automatically. Programmatic callers supply the version they intend to install.
 
 
 </td></tr>

@@ -63,15 +63,16 @@ export function validate(targetPath: string, opts?: ValidateOptions): Promise<Va
 }
 
 /**
- * Scaffold a thin consumer repo (the "template") at `targetDir` that depends on
- * `@ai-plugin-marketplace/cli` and holds plugin sources only (§3.2, §11). The generated
- * `package.json` pins the cli dev dependency to a caret of the current toolkit version (§9.1
- * lockstep). Refuses to write into a non-empty directory. Returns an {@link InitOutcome} flagging
- * an ancestor `pnpm-workspace.yaml`, if one exists (issue #96 ancestor-contamination guard).
+ * Scaffold a thin consumer repo that depends on `@ai-plugin-marketplace/cli` and holds plugin
+ * sources only (§3.2, §11). The generated `package.json` uses caret ranges based on
+ * {@link InitOptions.cliVersion} and the installed core version. Returns an {@link InitOutcome}
+ * flagging an ancestor `pnpm-workspace.yaml`, if present.
+ *
+ * @throws If the CLI version is missing or invalid, or the target path is occupied.
  *
  * @public
  */
-export function init(targetDir: string, opts?: InitOptions): Promise<InitOutcome> {
+export function init(targetDir: string, opts: InitOptions): Promise<InitOutcome> {
   return runInit(targetDir, opts);
 }
 

@@ -12,7 +12,7 @@
  * `core`'s version is read at runtime from this package's `package.json` (resolved relative to
  * {@link import.meta.url}, exactly as `load-config.ts` resolves the package entrypoint); `cli`'s
  * version is supplied by the cli entrypoint via {@link InitOptions.cliVersion} (it reads its own
- * `package.json`). When `cliVersion` is omitted, it falls back to core's version.
+ * `package.json`). Programmatic callers supply the CLI version explicitly.
  *
  * @see docs/specs/architecture.md §3.2 (template repo contents)
  * @see docs/specs/architecture.md §11 (template→toolkit dependency contract)
@@ -21,6 +21,7 @@
 
 import * as fs from 'node:fs';
 import * as path from 'node:path';
+import semver from 'semver';
 
 import { getGeneratorVersion } from './generator-version.js';
 import { buildInitFiles } from './init-template.js';
@@ -117,20 +118,28 @@ function findAncestorPnpmWorkspace(dir: string): string | undefined {
  *
  * @param targetDir - Absolute or relative path to the directory to scaffold into.
  * @param opts - Init options; `name` overrides the derived repo name, `marketplaceName` the
- *   default `${USER}-ai-plugins` marketplace name, `cliVersion` the pinned cli dependency version
- *   (defaults to core's version).
+ *   default `${USER}-ai-plugins` marketplace name. `cliVersion` is the required CLI package version.
  * @returns An {@link InitOutcome}: `ancestorWorkspace`, set when an ancestor directory has a
  *   `pnpm-workspace.yaml` (issue #96 ancestor-contamination guard — see
  *   {@link findAncestorPnpmWorkspace}), is `undefined` otherwise.
- * @throws {Error} When `targetDir` exists and is non-empty (or is not a directory).
+ * @throws {Error} When the target cannot be scaffolded into or `cliVersion` is missing or invalid.
  */
-export async function runInit(targetDir: string, opts: InitOptions = {}): Promise<InitOutcome> {
+export async function runInit(
+  targetDir: string,
+  opts: InitOptions | undefined,
+): Promise<InitOutcome> {
   const resolved = path.resolve(targetDir);
 
   if (!isFreshTarget(resolved)) {
     throw new Error(
       `Refusing to scaffold into '${resolved}': the directory already exists and is not empty. ` +
         'Choose a new path or an empty directory.',
+    );
+  }
+
+  if (!opts || semver.valid(opts.cliVersion) === null) {
+    throw new Error(
+      "Invalid 'cliVersion': supply the version of @ai-plugin-marketplace/cli to scaffold.",
     );
   }
 
@@ -151,8 +160,7 @@ export async function runInit(targetDir: string, opts: InitOptions = {}): Promis
   const marketplaceName =
     resolveProvidedName(opts.marketplaceName, 'marketplaceName') ?? defaultMarketplaceName();
   const core = getGeneratorVersion();
-  const cli = opts.cliVersion ?? core;
-  const files = buildInitFiles(name, marketplaceName, cli, core);
+  const files = buildInitFiles(name, marketplaceName, opts.cliVersion, core);
 
   fs.mkdirSync(resolved, { recursive: true });
   for (const file of files) {

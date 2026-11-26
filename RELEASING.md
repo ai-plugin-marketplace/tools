@@ -1,41 +1,24 @@
 # Releasing `@ai-plugin-marketplace/*`
 
-Versioning and publishing are driven by [Changesets](https://github.com/changesets/changesets).
-`@ai-plugin-marketplace/core` and `@ai-plugin-marketplace/cli` are versioned in lockstep; the cli
-pins core to the matching version, so downstream consumers always get a consistent pair.
+[Changesets](https://github.com/changesets/changesets) versions
+`@ai-plugin-marketplace/core` and `@ai-plugin-marketplace/cli` independently. The CLI depends on
+core via `workspace:^`, which pnpm rewrites to a caret range based on core's workspace version
+when packaging the CLI.
 
-## Publishing (the only step that needs credentials)
+## Publishing
 
-Everything is in place for the first release (`0.1.0`). The **only** missing piece is an npm
-credential:
+The [Release workflow](.github/workflows/release.yml) publishes to npm using OIDC trusted
+publishing. Configure the npm trusted publisher for each package to use the
+`ai-plugin-marketplace/tools` repository, the `release.yml` workflow, and the `npm-publish` GitHub
+environment. The workflow requests `id-token: write` to authenticate with npm.
 
-1. Create an **npm automation token** with publish rights to the `@ai-plugin-marketplace` scope
-   (npmjs.com → Access Tokens → Generate → _Automation_).
-2. Add it as the repository secret **`NPM_TOKEN`** (GitHub → Settings → Secrets and variables →
-   Actions → New repository secret).
-
-Then publish via either path:
-
-- **CI (recommended).** On push to `main`, the [Release workflow](.github/workflows/release.yml)
-  uses the Changesets action. When changesets are pending it opens a **"Version Packages"** PR
-  (bumping to `0.1.0` and writing `CHANGELOG.md`s); **merge that PR** and the next run publishes to
-  npm. You can also trigger the workflow manually (Actions → Release → _Run workflow_).
-- **Local.** With npm auth available and a `GITHUB_TOKEN` exported (the changelog generator needs
-  it to resolve PR/commit links):
-
-  ```sh
-  GITHUB_TOKEN=$(gh auth token) pnpm changeset version   # bumps to 0.1.0, writes changelogs
-  pnpm install                                            # refresh the lockfile
-  pnpm changeset publish                                  # publishes to npm
-  ```
-
-The publish rewrites the cli's `workspace:^` dependency on core to `^0.1.0` automatically.
-
-## Cutting subsequent releases
-
-1. Make changes; run `pnpm changeset` to record a `patch`/`minor`/`major` bump per package.
-2. Commit the changeset and push. CI opens/refreshes the Version PR.
-3. Merge the Version PR → CI publishes.
+1. Run `pnpm changeset` to record the bump for each affected package. Commit the changeset with the
+   change.
+2. On push to `main`, the Changesets action opens or updates the **Version Packages** pull request
+   with the version and changelog updates.
+3. Merge the Version Packages pull request. The next run builds and publishes the unpublished
+   package versions. Maintainers can also run the workflow manually from the **Release** workflow
+   page in GitHub Actions.
 
 A **minor or patch** toolkit release never requires downstream plugin authors to change their
 manifests (architecture spec §9.3). Major releases may require `aipm migrate` (a no-op today).

@@ -9,6 +9,7 @@ concurrency: ${{ github.workflow }}-${{ github.ref }}
 
 env:
   HUSKY: 0 # changesets may commit during versioning; skip hooks in CI
+  npm_config_ignore_scripts: 'false'
 
 permissions:
   contents: write
@@ -44,9 +45,15 @@ jobs:
       - name: Build
         run: pnpm run build
 
+      - name: Pack CLI reference for release verification
+        run: pnpm --filter @ai-plugin-marketplace/cli pack --out "$RUNNER_TEMP/aipm-cli.tgz"
+
       - name: Create Release Pull Request or Publish
         uses: changesets/action@v1
         with:
           publish: pnpm release
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          # Verify pnpm's actual tarball before handing it to npm for trusted publishing.
+          npm_config_npm_path: ${{ github.workspace }}/.github/scripts/verify-npm-publish.mjs
+          AIPM_RELEASE_CLI_TARBALL: ${{ runner.temp }}/aipm-cli.tgz

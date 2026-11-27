@@ -21,8 +21,11 @@ environment. The workflow requests `id-token: write` to authenticate with npm.
    page in GitHub Actions.
 
 Release artifacts must go through `pnpm build` and `pnpm pack`. The release workflow runs the
-workspace build, and Changesets publishes through pnpm, which runs the same pack checks as
-`pnpm pack`. A raw TypeScript build cannot prepare a release. To check the tarballs locally:
+workspace build and packs a CLI reference tarball. Changesets publishes through pnpm with
+lifecycle scripts enabled. The release workflow also verifies the tarballs pnpm hands to npm.
+It checks core's bundled CLI name and version against the CLI reference, requires core's runtime
+and types files, and checks the CLI tarball's identity against the same reference. A raw TypeScript
+build cannot prepare a release. To check the tarballs locally:
 
 ```sh
 pnpm build

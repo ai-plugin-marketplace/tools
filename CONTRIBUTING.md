@@ -22,7 +22,7 @@ pnpm run fix:lint-ts  # auto-fix lint across packages
 ```
 
 Use `pnpm build` and `pnpm pack` to prepare release artifacts. The Nx build targets bundle
-the CLI manifest with core, and core's pack step verifies the bundled release metadata and
+the CLI's release name and version with core, and core's pack step verifies the bundled release metadata and
 the runtime and type entry points. A raw TypeScript build only compiles the sources.
 
 A **pre-commit hook** (husky + lint-staged) auto-formats staged files and runs ESLint `--fix`

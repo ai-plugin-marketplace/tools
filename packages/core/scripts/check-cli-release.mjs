@@ -1,6 +1,5 @@
 import { execSync } from 'node:child_process';
 import { lstatSync, readFileSync } from 'node:fs';
-import { isDeepStrictEqual } from 'node:util';
 
 const root = new URL('../', import.meta.url);
 const bundledManifest = 'dist/cli-release/package.json';
@@ -30,7 +29,7 @@ requireFile(releaseReader, 'Core release reader is missing');
 const { readCliRelease } = await import(new URL(releaseReader, root).href);
 const bundled = readCliRelease(new URL(bundledManifest, root));
 const source = readCliRelease(new URL('../cli/package.json', root));
-if (!isDeepStrictEqual(bundled.manifest, source.manifest)) {
+if (bundled.version !== source.version) {
   throw new Error(`Bundled CLI release metadata is stale. ${rebuild}`);
 }
 

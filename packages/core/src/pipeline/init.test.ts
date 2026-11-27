@@ -19,6 +19,7 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import semver from 'semver';
 
 import { init } from '../index.js';
+import { CLI_PACKAGE_NAME, validateCliRelease } from './cli-release.js';
 import { runValidate } from './validate.js';
 
 /** The base version for the generated core dependency. */
@@ -155,6 +156,37 @@ describe('init', () => {
     expect(semver.valid(cliVersion)).toBe(cliVersion);
     await expect(init(repoDir, { cliVersion })).rejects.toThrow('used as a caret range');
     expect(fs.existsSync(repoDir)).toBe(false);
+  });
+
+  it.each(['0.8.0+build', '0.8.0-rc.tgz', 'v0.8.0'])(
+    'rejects invalid bundled release version %s',
+    (version) => {
+      expect(() => validateCliRelease({ name: CLI_PACKAGE_NAME, version }, 'test fixture')).toThrow(
+        'Invalid CLI release metadata',
+      );
+    },
+  );
+
+  it.each([
+    `${CLI_VERSION}+build`,
+    `${CLI_VERSION}+foo.tgz`,
+    `${CLI_VERSION}-rc.tgz`,
+    `${CLI_VERSION}-rc.TAR.GZ`,
+    'file:./cli.tgz',
+    'https://example.com/cli.tgz',
+  ])('rejects a non-registry cliVersion %s before writing', async (cliVersion) => {
+    const repoDir = path.join(tmpDir, 'non-registry');
+    await expect(init(repoDir, { cliVersion })).rejects.toThrow('caret range for the npm registry');
+    expect(fs.existsSync(repoDir)).toBe(false);
+  });
+
+  it('preserves compatible compound registry ranges', async () => {
+    const repoDir = path.join(tmpDir, 'compound-range');
+    const cliVersion = `0.0.1 || ${CLI_VERSION}`;
+    await init(repoDir, { cliVersion });
+    expect(readPackageJson(repoDir).devDependencies?.['@ai-plugin-marketplace/cli']).toBe(
+      `^${cliVersion}`,
+    );
   });
 
   it('writes the verified range when cliVersion is read through a getter', async () => {

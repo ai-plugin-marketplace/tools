@@ -53,8 +53,8 @@ import {
 
 For programmatic scaffolding, `init(dir)` uses the CLI release metadata shipped with core.
 An optional `cliVersion` sets the caret base explicitly (for example, `0.8` yields `^0.8`).
-The range must include the bundled CLI release. The core range comes from the installed
-core version.
+The resulting registry range must include the bundled CLI release. Build metadata and
+archive specifiers are rejected. The core range comes from the installed core version.
 
 ### Key types
 

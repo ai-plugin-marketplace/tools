@@ -20,6 +20,16 @@ environment. The workflow requests `id-token: write` to authenticate with npm.
    package versions. Maintainers can also run the workflow manually from the **Release** workflow
    page in GitHub Actions.
 
+Release artifacts must go through `pnpm build` and `pnpm pack`. The release workflow runs the
+workspace build, and Changesets publishes through pnpm, which runs the same pack checks as
+`pnpm pack`. A raw TypeScript build cannot prepare a release. To check the tarballs locally:
+
+```sh
+pnpm build
+pnpm --filter @ai-plugin-marketplace/core pack
+pnpm --filter @ai-plugin-marketplace/cli pack
+```
+
 A **minor or patch** toolkit release never requires downstream plugin authors to change their
 manifests (architecture spec §9.3). Major releases may require running
 `pnpm exec aipm migrate` before `pnpm exec aipm build` (migration is a no-op today).

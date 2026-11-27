@@ -21,9 +21,9 @@ pnpm run fix:format   # auto-format everything
 pnpm run fix:lint-ts  # auto-fix lint across packages
 ```
 
-The workspace `tsc` command copies the CLI manifest into core's build output by content.
-`pnpm run build`, `pnpm exec tsc --build`, and the CLI package build all use this command.
-Core's pack step checks the bundled manifest against the CLI manifest.
+Use `pnpm build` and `pnpm pack` to prepare release artifacts. The Nx build targets bundle
+the CLI manifest with core, and core's pack step verifies the bundled release metadata and
+the runtime and type entry points. A raw TypeScript build only compiles the sources.
 
 A **pre-commit hook** (husky + lint-staged) auto-formats staged files and runs ESLint `--fix`
 before each commit. If the hook fails, fix the reported issues then re-stage and retry.

@@ -1,20 +1,47 @@
-import { existsSync, readFileSync } from 'node:fs';
+import { execSync } from 'node:child_process';
+import { lstatSync, readFileSync } from 'node:fs';
 import { isDeepStrictEqual } from 'node:util';
 
-const source = new URL('../../cli/package.json', import.meta.url);
-const bundled = new URL('../dist/cli-release/package.json', import.meta.url);
+const root = new URL('../', import.meta.url);
+const bundledManifest = 'dist/cli-release/package.json';
+const releaseReader = 'dist/pipeline/cli-release.js';
+const rebuild = 'Run pnpm build before packing core.';
+const core = JSON.parse(readFileSync(new URL('package.json', root), 'utf8'));
+const entryPoints = new Set([
+  core.main,
+  core.types,
+  ...Object.values(core.exports).flatMap((target) =>
+    typeof target === 'string' ? [target] : Object.values(target),
+  ),
+]);
 
-function readManifest(file) {
-  return JSON.parse(readFileSync(file, 'utf8'));
+function requireFile(file, message) {
+  if (!lstatSync(new URL(file, root), { throwIfNoEntry: false })?.isFile()) {
+    throw new Error(`${message} (${file}). ${rebuild}`);
+  }
 }
 
-if (!existsSync(bundled)) {
-  throw new Error(
-    'Bundled CLI release metadata is missing. Run pnpm clean and pnpm build before packing core.',
-  );
+requireFile(bundledManifest, 'Bundled CLI release metadata is missing');
+for (const file of entryPoints) {
+  requireFile(file, 'Core entry point is missing');
 }
-if (!isDeepStrictEqual(readManifest(bundled), readManifest(source))) {
-  throw new Error(
-    'Bundled CLI release metadata is stale. Run pnpm clean and pnpm build before packing core.',
-  );
+requireFile(releaseReader, 'Core release reader is missing');
+
+const { readCliRelease } = await import(new URL(releaseReader, root).href);
+const bundled = readCliRelease(new URL(bundledManifest, root));
+const source = readCliRelease(new URL('../cli/package.json', root));
+if (!isDeepStrictEqual(bundled.manifest, source.manifest)) {
+  throw new Error(`Bundled CLI release metadata is stale. ${rebuild}`);
+}
+
+// Ask pnpm for the actual file list so packaging exclusions also fail the prepack check.
+const dryRun = execSync('pnpm pack --dry-run --config.ignore-scripts=true --json', {
+  cwd: root,
+  encoding: 'utf8',
+});
+const packedFiles = new Set(JSON.parse(dryRun).files.map(({ path }) => path));
+for (const file of [...entryPoints, bundledManifest, releaseReader]) {
+  if (!packedFiles.has(file.replace(/^\.\//, ''))) {
+    throw new Error(`Core package would omit '${file}'. Check the package file inclusion rules.`);
+  }
 }

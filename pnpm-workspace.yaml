@@ -1,6 +1,5 @@
 packages:
   - 'packages/*'
-  - scripts/tsc
 
 # Allow Nx (and its esbuild dependency) to run their postinstall scripts so the
 # native task-runner / daemon binaries are available. Nx is a build/cache tool;

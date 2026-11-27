@@ -8,9 +8,6 @@ importers:
 
   .:
     devDependencies:
-      '@ai-plugin-marketplace/tsc':
-        specifier: workspace:^
-        version: link:scripts/tsc
       '@api-extractor-tools/eslint-plugin':
         specifier: ^0.1.1
         version: 0.1.1(eslint@9.39.4(jiti@2.7.0))(typescript@5.9.3)
@@ -62,6 +59,9 @@ importers:
       syncpack:
         specifier: ^15.3.1
         version: 15.3.1
+      typescript:
+        specifier: ^5.7.3
+        version: 5.9.3
       typescript-eslint:
         specifier: ^8.20.0
         version: 8.58.2(eslint@9.39.4(jiti@2.7.0))(typescript@5.9.3)
@@ -109,12 +109,6 @@ importers:
       '@types/semver':
         specifier: ^7.7.1
         version: 7.7.1
-
-  scripts/tsc:
-    dependencies:
-      typescript:
-        specifier: ^5.7.3
-        version: 5.9.3
 
 packages:
 

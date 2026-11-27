@@ -21,30 +21,11 @@ import * as fs from 'node:fs';
 import * as path from 'node:path';
 import semver from 'semver';
 
+import { CLI_PACKAGE_NAME, readCliRelease } from './cli-release.js';
 import { getGeneratorVersion } from './generator-version.js';
 import { buildInitFiles } from './init-template.js';
 import { writeScaffoldSidecar } from './scaffold-refresh.js';
 import type { InitOptions, InitOutcome } from './types.js';
-
-const CLI_PACKAGE_NAME = '@ai-plugin-marketplace/cli';
-
-function readCliRelease(releaseFile: URL): string {
-  const release = JSON.parse(fs.readFileSync(releaseFile, 'utf8')) as {
-    name?: unknown;
-    version?: unknown;
-  } | null;
-  const cliRelease =
-    release?.name === CLI_PACKAGE_NAME && typeof release.version === 'string'
-      ? semver.valid(release.version)
-      : null;
-  if (cliRelease === null) {
-    throw new Error(
-      `Invalid CLI release metadata in '${releaseFile.href}': expected ${CLI_PACKAGE_NAME}.`,
-    );
-  }
-
-  return cliRelease;
-}
 
 function resolveCliRange(cliRelease: string, override?: string): string {
   const range = `^${override ?? cliRelease}`;
@@ -163,7 +144,7 @@ export async function runInit(targetDir: string, opts?: InitOptions): Promise<In
   }
 
   // Source tests read the workspace manifest. Published core reads the build's bundled copy.
-  const bundledRelease = readCliRelease(
+  const { version: bundledRelease } = readCliRelease(
     new URL(
       import.meta.url.endsWith('.ts') ? '../../../cli/package.json' : '../cli-release/package.json',
       import.meta.url,

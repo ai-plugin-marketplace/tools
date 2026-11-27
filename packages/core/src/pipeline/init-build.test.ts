@@ -12,6 +12,7 @@ import {
   utimesSync,
   writeFileSync,
 } from 'node:fs';
+import { createRequire } from 'node:module';
 import { tmpdir } from 'node:os';
 import { basename, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -20,6 +21,7 @@ import semver from 'semver';
 import { afterEach, beforeEach, expect, it } from 'vitest';
 
 const workspace = fileURLToPath(new URL('../../../../', import.meta.url));
+const tsc = createRequire(import.meta.url).resolve('typescript/bin/tsc');
 const corePackageName = '@ai-plugin-marketplace/core';
 const cliPackageName = '@ai-plugin-marketplace/cli';
 const bundledManifest = 'packages/core/dist/cli-release/package.json';
@@ -38,8 +40,6 @@ beforeEach(() => {
     'tsconfig.base.json',
     'api-extractor-base.json',
     '.gitignore',
-    'scripts/tsc/package.json',
-    'scripts/tsc/tsc.mjs',
   ]) {
     cpSync(join(workspace, file), join(checkout, file), { recursive: true });
   }
@@ -80,16 +80,24 @@ function pnpmCommand(platform: NodeJS.Platform, args: string[]): [string, ...str
 }
 
 function runPnpm(...args: string[]) {
-  return runCommand(...pnpmCommand(process.platform, args));
+  return runPnpmAt(checkout, ...args);
 }
 
-function runCommand(command: string, ...commandArgs: string[]) {
+function runPnpmAt(cwd: string, ...args: string[]) {
+  return runCommandAt(cwd, ...pnpmCommand(process.platform, args));
+}
+
+function runCommand(command: string, ...args: string[]) {
+  return runCommandAt(checkout, command, ...args);
+}
+
+function runCommandAt(cwd: string, command: string, ...commandArgs: string[]) {
   return new Promise<{ status: number; stdout: string; stderr: string }>((resolve, reject) => {
     execFile(
       command,
       commandArgs,
       {
-        cwd: checkout,
+        cwd,
         encoding: 'utf8',
         timeout: 60_000,
         env: { ...process.env, NX_DAEMON: 'false' },
@@ -110,8 +118,11 @@ async function assertPnpm(...args: string[]): Promise<void> {
   expect(status, stdout + stderr).toBe(0);
 }
 
-function readManifest(file: string): { version: string; devDependencies?: Record<string, string> } {
-  return JSON.parse(readFileSync(join(checkout, file), 'utf8')) as {
+function readManifest(
+  file: string,
+  directory = checkout,
+): { version: string; devDependencies?: Record<string, string> } {
+  return JSON.parse(readFileSync(join(directory, file), 'utf8')) as {
     version: string;
     devDependencies?: Record<string, string>;
   };
@@ -158,8 +169,10 @@ it('lets Windows resolve pnpm through PATHEXT', () => {
 
 it.each([
   { path: 'workspace build', args: ['build'] },
-  { path: 'TypeScript project references', args: ['exec', 'tsc', '--build'] },
-  { path: 'CLI package build', args: ['--filter', cliPackageName, 'run', 'build'] },
+  {
+    path: 'Nx CLI build and its core dependency',
+    args: ['exec', 'nx', 'run', `${cliPackageName}:build`],
+  },
 ])(
   'bundles the CLI manifest on clean and incremental $path',
   async ({ args }) => {
@@ -202,14 +215,22 @@ it.each([
     await assertPnpm(...args);
     expect(readManifest(bundledManifest)).toEqual(updated);
     await assertPublicInit('updated', version);
+
+    rmSync(join(checkout, 'packages/core/dist'), { recursive: true });
+    const cached = await runPnpm(...args);
+    expect(cached.status, cached.stdout + cached.stderr).toBe(0);
+    expect(cached.stdout).toMatch(/read the output from the cache/i);
+    expect(readManifest(bundledManifest)).toEqual(updated);
+    expect(existsSync(join(checkout, 'packages/core/dist/core.d.ts'))).toBe(true);
+    await assertPublicInit('cached', version);
   },
-  190_000,
+  250_000,
 );
 
 it('accepts stable shorthand and rejects it for the corresponding prerelease', async () => {
   const manifest = readManifest(cliManifest);
   writeFileSync(join(checkout, cliManifest), JSON.stringify({ ...manifest, version: '0.8.0' }));
-  await assertPnpm('exec', 'tsc', '--build', 'packages/core');
+  await assertPnpm('--filter', corePackageName, 'build');
 
   const stable = await publicInit('stable', '0.8');
   expect(stable.status, stable.stderr).toBe(0);
@@ -219,7 +240,7 @@ it('accepts stable shorthand and rejects it for the corresponding prerelease', a
     join(checkout, cliManifest),
     JSON.stringify({ ...manifest, version: '0.8.0-next.0' }),
   );
-  await assertPnpm('exec', 'tsc', '--build', 'packages/core');
+  await assertPnpm('--filter', corePackageName, 'build');
   await assertPublicInit('default-prerelease', '0.8.0-next.0');
 
   const prerelease = await publicInit('excluded-prerelease', '0.8');
@@ -229,7 +250,7 @@ it('accepts stable shorthand and rejects it for the corresponding prerelease', a
 }, 120_000);
 
 it('rejects an invalid installed CLI manifest before writing the scaffold', async () => {
-  await assertPnpm('exec', 'tsc', '--build');
+  await assertPnpm('build');
   const manifest = { ...readManifest(cliManifest), name: '@example/invalid-cli' };
   writeFileSync(join(checkout, cliManifest), JSON.stringify(manifest));
   const result = await runCommand(
@@ -244,25 +265,138 @@ it('rejects an invalid installed CLI manifest before writing the scaffold', asyn
   expect(existsSync(join(checkout, 'invalid-cli'))).toBe(false);
 }, 60_000);
 
-it('refuses to pack core with missing or stale metadata', async () => {
-  const pack = ['--filter', corePackageName, 'pack', '--json'];
-  const missing = await runPnpm(...pack);
-  expect(missing.status).not.toBe(0);
-  expect(missing.stderr).toContain('Bundled CLI release metadata is missing');
+it('fails closed after a clean direct TypeScript build', async () => {
+  const result = await runCommand(process.execPath, tsc, '--build');
+  expect(result.status, result.stdout + result.stderr).toBe(0);
+  expect(existsSync(join(checkout, 'packages/core/dist/index.js'))).toBe(true);
+  expect(existsSync(join(checkout, bundledManifest))).toBe(false);
 
-  await assertPnpm('exec', 'tsc', '--build', 'packages/core');
+  const init = await publicInit('compiler-only');
+  expect(init.status).not.toBe(0);
+  expect(init.stderr).toContain('CLI release metadata is missing');
+  expect(existsSync(join(checkout, 'compiler-only'))).toBe(false);
+}, 60_000);
+
+it('refuses to pack core with missing, invalid, or stale metadata or missing entry points', async () => {
+  const pack = ['--filter', corePackageName, 'pack', '--out', 'core.tgz'];
+
+  async function assertPackRefused(message: string) {
+    const result = await runPnpm(...pack);
+    expect(result.status).not.toBe(0);
+    expect(result.stderr).toContain(message);
+    expect(existsSync(join(checkout, 'core.tgz'))).toBe(false);
+  }
+
+  await assertPackRefused('Bundled CLI release metadata is missing');
+  await assertPnpm('--filter', corePackageName, 'build');
+  const bundledPath = join(checkout, bundledManifest);
+  const sourcePath = join(checkout, cliManifest);
+  const original = readFileSync(sourcePath);
   const bundled = readManifest(bundledManifest);
-  writeFileSync(join(checkout, bundledManifest), JSON.stringify({ ...bundled, version: '0.0.0' }));
-  const stale = await runPnpm(...pack);
-  expect(stale.status).not.toBe(0);
-  expect(stale.stderr).toContain('Bundled CLI release metadata is stale');
 
-  writeFileSync(join(checkout, bundledManifest), JSON.stringify(bundled));
-  const packed = await runPnpm(...pack);
-  expect(packed.status, packed.stdout + packed.stderr).toBe(0);
-  expect(packed.stdout).toContain('dist/cli-release/package.json');
-});
+  for (const invalid of [
+    { ...bundled, version: 'invalid' },
+    { ...bundled, name: '@example/invalid-cli' },
+    { ...bundled, version: '9007199254740991.0.0' },
+  ]) {
+    const json = JSON.stringify(invalid);
+    writeFileSync(sourcePath, json);
+    writeFileSync(bundledPath, json);
+    await assertPackRefused('Invalid CLI release metadata');
 
-it('runs the core built-package smoke test directly from a clean checkout', async () => {
-  await assertPnpm('--filter', corePackageName, 'run', 'test', 'src/pipeline/init-dist.test.ts');
-});
+    const init = await publicInit('invalid');
+    expect(init.status).not.toBe(0);
+    expect(init.stderr).toContain('Invalid CLI release metadata');
+    expect(existsSync(join(checkout, 'invalid'))).toBe(false);
+  }
+
+  writeFileSync(sourcePath, original);
+  writeFileSync(bundledPath, '{');
+  await assertPackRefused('Invalid CLI release metadata');
+  const malformed = await publicInit('malformed');
+  expect(malformed.status).not.toBe(0);
+  expect(malformed.stderr).toContain('Invalid CLI release metadata');
+  expect(existsSync(join(checkout, 'malformed'))).toBe(false);
+
+  const version = semver.inc(bundled.version, 'major');
+  if (version === null) throw new Error('Expected a valid CLI release.');
+  writeFileSync(bundledPath, JSON.stringify({ ...bundled, version }));
+  await assertPackRefused('Bundled CLI release metadata is stale');
+  writeFileSync(bundledPath, original);
+
+  for (const entry of ['dist/index.js', 'dist/core.d.ts']) {
+    const path = join(checkout, 'packages/core', entry);
+    const contents = readFileSync(path);
+    rmSync(path);
+    await assertPackRefused(`Core entry point is missing (./${entry})`);
+    writeFileSync(path, contents);
+  }
+
+  writeFileSync(join(checkout, 'packages/core/dist/.npmignore'), 'core.d.ts\n');
+  await assertPackRefused("Core package would omit './dist/core.d.ts'");
+}, 120_000);
+
+it('installs the packed core tarball and uses its runtime and type exports', async () => {
+  await assertPnpm('build');
+  await assertPnpm('--filter', corePackageName, 'pack', '--out', 'core.tgz');
+
+  const consumer = mkdtempSync(join(tmpdir(), 'aipm-packed-core-'));
+  try {
+    cpSync(join(checkout, 'core.tgz'), join(consumer, 'core.tgz'));
+    writeFileSync(
+      join(consumer, 'package.json'),
+      JSON.stringify({ private: true, dependencies: { [corePackageName]: 'file:./core.tgz' } }),
+    );
+    const install = await runPnpmAt(consumer, 'install', '--prefer-offline', '--ignore-scripts');
+    expect(install.status, install.stdout + install.stderr).toBe(0);
+
+    expect(
+      readManifest(`node_modules/${corePackageName}/dist/cli-release/package.json`, consumer),
+    ).toEqual(readManifest(cliManifest));
+
+    const runtime = await runCommandAt(
+      consumer,
+      process.execPath,
+      '--input-type=module',
+      '--eval',
+      `import assert from 'node:assert/strict';
+       import { createRequire } from 'node:module';
+       import { init } from '${corePackageName}';
+       await assert.rejects(import('${cliPackageName}'), { code: 'ERR_MODULE_NOT_FOUND' });
+       const manifest = createRequire(import.meta.url)('${corePackageName}/package.json');
+       assert.deepEqual(manifest.exports, {
+         '.': { types: './dist/core.d.ts', import: './dist/index.js' },
+         './package.json': './package.json',
+       });
+       await assert.rejects(import('${corePackageName}/init-cli'), { code: 'ERR_PACKAGE_PATH_NOT_EXPORTED' });
+       await init('scaffold');`,
+    );
+    expect(runtime.status, runtime.stdout + runtime.stderr).toBe(0);
+    expect(readManifest('scaffold/package.json', consumer).devDependencies).toMatchObject({
+      [cliPackageName]: `^${readManifest(cliManifest).version}`,
+      [corePackageName]: `^${readManifest('packages/core/package.json').version}`,
+    });
+
+    writeFileSync(
+      join(consumer, 'consumer.mts'),
+      `import { init, type InitOptions, type InitOutcome } from '${corePackageName}';
+       const options: InitOptions = { name: 'consumer' };
+       const outcome: InitOutcome = await init('scaffold', options);
+       // @ts-expect-error cliVersion must be a string.
+       await init('scaffold', { cliVersion: 123 });`,
+    );
+    const types = await runCommandAt(
+      consumer,
+      process.execPath,
+      tsc,
+      '--module',
+      'nodenext',
+      '--strict',
+      '--noEmit',
+      'consumer.mts',
+    );
+    expect(types.status, types.stdout + types.stderr).toBe(0);
+  } finally {
+    rmSync(consumer, { recursive: true, force: true });
+  }
+}, 150_000);

@@ -14,7 +14,7 @@
  * @see docs/specs/architecture.md §4.3.1 (generator-version stamp + downgrade guard)
  */
 
-import * as fs from 'node:fs';
+import { repositoryFs as fs } from './repository-fs.js';
 import * as path from 'node:path';
 import { fileURLToPath } from 'node:url';
 

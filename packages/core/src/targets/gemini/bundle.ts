@@ -6,7 +6,7 @@
  * @see docs/specs/architecture.md §12.4 (transform step + per-target folder layout)
  */
 
-import * as fs from 'node:fs';
+import { repositoryFs as fs } from '../../pipeline/repository-fs.js';
 import * as path from 'node:path';
 
 import { convertClaudeHooksYamlToGeminiJson, rewriteAgentFrontmatterTools } from './transform.js';

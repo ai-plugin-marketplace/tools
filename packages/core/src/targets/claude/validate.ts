@@ -13,7 +13,12 @@
  * @see docs/specs/architecture.md §12.5 (internal module shape)
  */
 
-import * as fs from 'node:fs';
+import {
+  collectReadableChecks,
+  isFileEntry,
+  referenceExists,
+  repositoryFs as fs,
+} from '../../pipeline/repository-fs.js';
 import * as path from 'node:path';
 
 import { parse as parseYaml } from 'yaml';
@@ -195,7 +200,12 @@ function checkRef(
   const normalized = ref.slice(2); // strip leading "./"
   const resolved = path.join(pluginDir, normalized);
 
-  if (!fs.existsSync(resolved)) {
+  if (
+    !referenceExists(
+      resolved,
+      kind === 'directory' ? 'directory' : kind === 'any' ? undefined : 'file',
+    )
+  ) {
     const hint = buildMissingHint(pluginName, field, ref);
     return hardFinding(
       pluginName,
@@ -281,7 +291,7 @@ function validateAgentFrontmatter(pluginDir: string, pluginName: string): Findin
   const findings: Finding[] = [];
 
   for (const entry of entries) {
-    if (!entry.isFile() || !entry.name.endsWith('.md')) continue;
+    if (!isFileEntry(agentsDir, entry, '.md')) continue;
 
     const agentPath = path.join(agentsDir, entry.name);
     const relPath = `agents/${entry.name}`;
@@ -578,15 +588,15 @@ function validateManifestHooksField(pluginDir: string, pluginName: string): Find
 export function validateClaudePlugin(pluginDir: string): Finding[] {
   const pluginName = path.basename(pluginDir);
 
-  return [
-    ...validateManifestFileRefs(pluginDir, pluginName),
-    ...validateAgentFrontmatter(pluginDir, pluginName),
-    ...validateHooksFile(pluginDir, pluginName),
-    ...validateRetiredHooksFile(pluginDir, pluginName),
-    ...validateOrphanedHooksFile(pluginDir, pluginName),
-    ...validateManifestHooksField(pluginDir, pluginName),
-    ...validateOpenPluginsConformance(pluginDir, pluginName),
-  ];
+  return collectReadableChecks([
+    () => validateManifestFileRefs(pluginDir, pluginName),
+    () => validateAgentFrontmatter(pluginDir, pluginName),
+    () => validateHooksFile(pluginDir, pluginName),
+    () => validateRetiredHooksFile(pluginDir, pluginName),
+    () => validateOrphanedHooksFile(pluginDir, pluginName),
+    () => validateManifestHooksField(pluginDir, pluginName),
+    () => validateOpenPluginsConformance(pluginDir, pluginName),
+  ]);
 }
 
 /**

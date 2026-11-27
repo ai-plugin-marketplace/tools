@@ -8,12 +8,13 @@
  * @see docs/specs/architecture.md §8.2
  */
 
-import * as fs from 'node:fs';
+import fs from 'node:fs';
+import { syncBuiltinESMExports } from 'node:module';
 import * as os from 'node:os';
 import * as path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { run } from './run.js';
 
@@ -341,9 +342,137 @@ describe('aipm build success-line ordering (issue #97)', () => {
 
     expect(code).toBe(1);
     expect(out).toContain('version-consistency');
-    // The success summary must never appear on a failing run (issue #97) — not merely reordered
-    // below the failure.
     expect(out).not.toMatch(/Built \d+ plugin/);
+  });
+
+  function writeGeminiPlugin(): void {
+    const pluginDir = path.join(tmpDir, 'plugins', 'gem');
+    fs.mkdirSync(pluginDir, { recursive: true });
+    fs.writeFileSync(
+      path.join(pluginDir, 'aipm.config.ts'),
+      "export default { version: '0.1.0', targets: ['gemini'] };\n",
+    );
+    fs.writeFileSync(
+      path.join(pluginDir, 'gemini-extension.json'),
+      '{"name":"gem","version":"0.1.0"}',
+    );
+    fs.writeFileSync(path.join(pluginDir, 'GEMINI.md'), '# Gemini\n');
+  }
+
+  it.each(['build', 'validate'])(
+    'reports the first fatal freshness error during %s',
+    async (command) => {
+      writeGeminiPlugin();
+      const laterPlugin = path.join(tmpDir, 'plugins', 'z-claude');
+      const hooksPath = path.join(laterPlugin, 'hooks', 'hooks.json');
+      fs.mkdirSync(path.dirname(hooksPath), { recursive: true });
+      fs.writeFileSync(
+        path.join(laterPlugin, 'aipm.config.ts'),
+        "export default { version: '0.1.0', targets: ['claude'] };\n",
+      );
+      fs.writeFileSync(hooksPath, '{"hooks":{}}');
+
+      const failure = Object.assign(new Error('Cannot create a freshness directory'), {
+        code: 'EACCES',
+        errno: -13,
+        syscall: 'mkdtemp',
+      });
+      const mkdtempSync = fs.mkdtempSync;
+      let freshnessStarted = false;
+      vi.spyOn(fs, 'mkdtempSync').mockImplementation((prefix, options) => {
+        if (prefix.endsWith('aipm-freshness-')) {
+          freshnessStarted = true;
+          throw failure;
+        }
+        return mkdtempSync(prefix, options);
+      });
+      const readFileSync = fs.readFileSync;
+      vi.spyOn(fs, 'readFileSync').mockImplementation((file, options) => {
+        if (file === hooksPath) {
+          if (freshnessStarted) throw new Error('Cannot read the later plugin’s hooks');
+        }
+        return readFileSync(file, options);
+      });
+      syncBuiltinESMExports();
+      try {
+        await expect(invoke([command, tmpDir])).resolves.toEqual({
+          code: 1,
+          out: '',
+          err: `aipm: ${command} failed: ${failure.message}\n`,
+        });
+      } finally {
+        vi.restoreAllMocks();
+        syncBuiltinESMExports();
+      }
+    },
+  );
+
+  it.each([false, true])(
+    'computes the repo-root oracle at reporting time (transient preflight failure: %s)',
+    async (transientFailure) => {
+      writeGeminiPlugin();
+      fs.writeFileSync(
+        path.join(tmpDir, 'aipm.workspace.ts'),
+        "export default { marketplace: { name: 'example-market' } };\n",
+      );
+      vi.stubEnv('CI', 'true');
+      const failure = Object.assign(new Error('Cannot create the preflight Gemini directory'), {
+        code: 'EACCES',
+        errno: -13,
+        syscall: 'mkdtemp',
+      });
+      const mkdtempSync = fs.mkdtempSync;
+      let rootAttempts = 0;
+      vi.spyOn(fs, 'mkdtempSync').mockImplementation((prefix, options) => {
+        if (prefix.endsWith('aipm-root-gemini-') && ++rootAttempts === 2 && transientFailure)
+          throw failure;
+        return mkdtempSync(prefix, options);
+      });
+      syncBuiltinESMExports();
+      try {
+        await expect(invoke(['build', tmpDir])).resolves.toEqual({
+          code: 0,
+          out: 'Built 1 plugin(s), 5 artifact(s).\nOK — no findings.\n',
+          err: '',
+        });
+      } finally {
+        vi.restoreAllMocks();
+        syncBuiltinESMExports();
+        vi.unstubAllEnvs();
+      }
+    },
+  );
+
+  it('reports root drift when the source and dist bundle change after preflight', async () => {
+    writeGeminiPlugin();
+    fs.writeFileSync(
+      path.join(tmpDir, 'aipm.workspace.ts'),
+      "export default { marketplace: { name: 'example-market' } };\n",
+    );
+    vi.stubEnv('CI', 'true');
+    const mkdtempSync = fs.mkdtempSync;
+    vi.spyOn(fs, 'mkdtempSync').mockImplementation((prefix, options) => {
+      if (prefix.endsWith('aipm-freshness-')) {
+        for (const dir of ['plugins/gem', 'dist/gemini/gem']) {
+          fs.writeFileSync(path.join(tmpDir, dir, 'GEMINI.md'), '# Changed after preflight\n');
+        }
+      }
+      return mkdtempSync(prefix, options);
+    });
+    syncBuiltinESMExports();
+    try {
+      await expect(invoke(['build', tmpDir])).resolves.toEqual({
+        code: 1,
+        out:
+          "freshness (hard): Generated repo-root artifact 'GEMINI.md' is stale — it differs from what `aipm build` would produce (hand-edited or out of date).\n" +
+          "    hint: run `aipm build` to regenerate it; edit the owning plugin's source, not the generated repo-root file.\n",
+        err: '',
+      });
+    } finally {
+      vi.restoreAllMocks();
+      syncBuiltinESMExports();
+      vi.unstubAllEnvs();
+    }
   });
 
   it('still prints "Built N plugin(s)" before validation output on a clean run', async () => {

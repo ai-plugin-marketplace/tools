@@ -20,7 +20,7 @@
  * @see https://open-plugins.com/plugin-builders/specification.md
  */
 
-import * as fs from 'node:fs';
+import { repositoryFs as fs } from '../pipeline/repository-fs.js';
 import * as path from 'node:path';
 
 import { z } from 'zod';

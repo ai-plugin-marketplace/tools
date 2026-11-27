@@ -8,7 +8,7 @@
  * @see docs/specs/architecture.md §12.4, §12.5
  */
 
-import * as fs from 'node:fs';
+import { repositoryFs as fs } from '../../pipeline/repository-fs.js';
 import * as path from 'node:path';
 import { buildKiroAgentConfig } from './transform.js';
 

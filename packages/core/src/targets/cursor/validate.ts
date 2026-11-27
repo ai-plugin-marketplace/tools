@@ -20,7 +20,7 @@
  * @see packages/core/docs/specs/architecture.md §8.1 (Finding, FindingCode)
  */
 
-import * as fs from 'node:fs';
+import { isFileEntry, referenceExists, repositoryFs as fs } from '../../pipeline/repository-fs.js';
 import * as path from 'node:path';
 
 import { parse as parseYaml } from 'yaml';
@@ -135,7 +135,12 @@ function validateManifestFileRefs(pluginDir: string, pluginName: string): Findin
 
       const resolved = path.join(pluginDir, refPath.slice(2));
 
-      if (!fs.existsSync(resolved)) {
+      if (
+        !referenceExists(
+          resolved,
+          mustBeDir === undefined ? undefined : mustBeDir ? 'directory' : 'file',
+        )
+      ) {
         findings.push(
           makeInvalid(
             pluginName,
@@ -315,8 +320,7 @@ function validateCursorRules(pluginDir: string, pluginName: string): Finding[] {
 
   const entries = fs.readdirSync(rulesDir, { withFileTypes: true });
   for (const entry of entries) {
-    if (!entry.isFile() || !entry.name.endsWith('.mdc')) continue;
-
+    if (!isFileEntry(rulesDir, entry, '.mdc')) continue;
     const filePath = path.join(rulesDir, entry.name);
     const content = fs.readFileSync(filePath, 'utf-8');
 

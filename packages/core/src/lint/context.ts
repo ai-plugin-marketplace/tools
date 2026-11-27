@@ -3,7 +3,7 @@
  * handed to every rule's `check()`.
  */
 
-import * as fs from 'node:fs';
+import { repositoryFs as fs } from '../pipeline/repository-fs.js';
 import type { AipmWorkspace } from '../config.js';
 import type { ConfigCache } from '../pipeline/load-config.js';
 import type { TargetId } from '../pipeline/types.js';

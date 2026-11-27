@@ -18,7 +18,7 @@
  */
 
 import { createHash } from 'node:crypto';
-import * as fs from 'node:fs';
+import { repositoryFs as fs } from './repository-fs.js';
 import * as path from 'node:path';
 
 import { buildManagedScaffoldFiles } from './init-template.js';

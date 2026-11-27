@@ -19,7 +19,7 @@
  * @see docs/specs/scaffold-refresh-and-upgrade.md (`aipm init --refresh`)
  */
 
-import * as fs from 'node:fs';
+import { repositoryFs as fs } from './repository-fs.js';
 import * as path from 'node:path';
 
 import { getGeneratorVersion } from './generator-version.js';

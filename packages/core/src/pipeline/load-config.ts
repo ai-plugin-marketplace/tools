@@ -19,11 +19,13 @@
  * @see docs/specs/architecture.md §5.2, §5.3 (build/validate consume the loaded envelope)
  */
 
-import * as fs from 'node:fs';
 import * as path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-import { createJiti } from 'jiti';
+import type { JitiOptions } from 'jiti';
+
+import { importConfigModule } from './config-jiti.js';
+import { repositoryFs as fs } from './repository-fs.js';
 
 import { defineConfig, defineRepoConfig, defineWorkspace } from '../config.js';
 import type {
@@ -106,7 +108,7 @@ function configPathFor(pluginDir: string): string {
  * @throws {ConfigLoadError} If the module fails to import or has no usable default export.
  */
 async function importDefaultExport(configPath: string, filename: string): Promise<unknown> {
-  const jiti = createJiti(import.meta.url, {
+  const options: JitiOptions = {
     alias: { [CORE_PACKAGE_SPECIFIER]: coreConfigEntrypoint() },
     // Disable the default↔namespace interop so a config with no `default` export reads as a
     // genuinely-absent default rather than jiti synthesizing one from the namespace.
@@ -120,11 +122,11 @@ async function importDefaultExport(configPath: string, filename: string): Promis
     // This is the dominant per-load cost; caching it keeps the (jiti-heavy) test suite from
     // pegging a worker long enough to trip vitest's birpc heartbeat ("Timeout calling onTaskUpdate").
     fsCache: true,
-  });
+  };
 
   let mod: Record<string, unknown>;
   try {
-    mod = await jiti.import<Record<string, unknown>>(configPath);
+    mod = await importConfigModule(import.meta.url, configPath, options);
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
     throw new ConfigLoadError(`Failed to import ${filename}: ${message}`, { cause: err });

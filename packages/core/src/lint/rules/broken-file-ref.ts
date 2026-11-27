@@ -17,7 +17,7 @@
  * `skills` are.
  */
 
-import * as fs from 'node:fs';
+import { repositoryFs as fs } from '../../pipeline/repository-fs.js';
 import * as path from 'node:path';
 import type { Diagnostic, Rule, RuleContext } from '../types.js';
 import { rangeForPath } from '../document.js';

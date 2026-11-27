@@ -1,3 +1,4 @@
+import type { Dirent } from 'node:fs';
 /**
  * Cross-target validator for the pipeline layer.
  *
@@ -8,7 +9,13 @@
  * @see docs/specs/architecture.md §6, §8.1, §10.1, §10.2
  */
 
-import * as fs from 'node:fs';
+import {
+  inputExists,
+  isFileEntry,
+  isObservedIoError,
+  repositoryFs as fs,
+  withRepositoryPlugin,
+} from './repository-fs.js';
 import * as path from 'node:path';
 import { parse as parseYaml } from 'yaml';
 import { z } from 'zod';
@@ -54,6 +61,7 @@ import { isToolkitSentinelFor, withoutGeneratorVersion } from './sentinel.js';
 import { CLAUDE_HOOKS_SOURCES } from '../targets/claude/transform.js';
 import { createRuleContext } from '../lint/context.js';
 import { diagnosticToFinding } from '../lint/diagnostic.js';
+import type { Diagnostic, InternalRuleContext, Rule } from '../lint/types.js';
 import {
   defaultMarketplaceNameRule,
   envelopeAdherenceRule,
@@ -280,7 +288,7 @@ export function validateFrontmatterParses(pluginDir: string, pluginName: string)
   // skills/<name>/SKILL.md — one directory level deep, mirroring discovery elsewhere.
   const skillsDir = path.join(pluginDir, 'skills');
   if (fs.existsSync(skillsDir)) {
-    let entries: fs.Dirent[] = [];
+    let entries: Dirent[] = [];
     try {
       entries = fs.readdirSync(skillsDir, { withFileTypes: true });
     } catch {
@@ -295,14 +303,14 @@ export function validateFrontmatterParses(pluginDir: string, pluginName: string)
   for (const sub of ['agents', 'commands'] as const) {
     const dir = path.join(pluginDir, sub);
     if (!fs.existsSync(dir)) continue;
-    let entries: fs.Dirent[] = [];
+    let entries: Dirent[] = [];
     try {
       entries = fs.readdirSync(dir, { withFileTypes: true });
     } catch {
       entries = [];
     }
     for (const entry of entries) {
-      if (entry.isFile() && entry.name.endsWith('.md')) files.push(path.join(dir, entry.name));
+      if (isFileEntry(dir, entry, '.md')) files.push(path.join(dir, entry.name));
     }
   }
 
@@ -550,6 +558,7 @@ export function validateEnvelopeAdherence(
   // Claude Code, Codex and Open Plugins all load by default. Gemini now reads the copy in its dist
   // bundle, and a Claude build replaces this file, so a copy still marked this way is stale.
   const hooksJson = path.join(pluginDir, 'hooks', 'hooks.json');
+  inputExists(hooksJson, 'file');
   const hooksJsonStat = fs.statSync(hooksJson, { throwIfNoEntry: false });
   if (hooksJsonStat !== undefined && !hooksJsonStat.isFile()) {
     findings.push(
@@ -580,7 +589,7 @@ export function validateEnvelopeAdherence(
     const required = TARGET_MIN_REQUIRED[target];
     for (const artifact of required) {
       const full = path.join(pluginDir, artifact);
-      if (!fs.existsSync(full)) {
+      if (!inputExists(full, 'file')) {
         findings.push(
           hard(
             'envelope-adherence',
@@ -602,7 +611,7 @@ export function validateEnvelopeAdherence(
           for (const dirent of subdirs) {
             if (dirent.isDirectory()) {
               const skillMd = path.join(skillsDir, dirent.name, 'SKILL.md');
-              if (fs.existsSync(skillMd)) {
+              if (inputExists(skillMd, 'file')) {
                 hasSkill = true;
                 break;
               }
@@ -1612,6 +1621,16 @@ function compareTrees(actualDir: string, expectedDir: string): string[] {
 // runValidate — the validate orchestrator (§5.3, §10.1, §10.3)
 // ---------------------------------------------------------------------------
 
+/** Let independent rules run when an observed read prevented one rule from completing. */
+async function checkRule(rule: Rule, ctx: InternalRuleContext): Promise<Diagnostic[]> {
+  try {
+    return await withRepositoryPlugin(ctx.pluginDir, () => rule.check(ctx));
+  } catch (error) {
+    if (!isObservedIoError(error)) throw error;
+    return [];
+  }
+}
+
 /**
  * Validate one plugin or every plugin under a repo root (§5.3). Runs the validators in the order
  * mandated by §10.1 / §10.3:
@@ -1720,7 +1739,7 @@ export async function runValidate(
     });
 
     // ── 2. Per-target schema validation ─────────────────────────────────────
-    const schemaFindings = (await targetSchemaRule.check(ctx)).map((d) =>
+    const schemaFindings = (await checkRule(targetSchemaRule, ctx)).map((d) =>
       diagnosticToFinding(d, ci),
     );
     findings.push(...schemaFindings);
@@ -1728,36 +1747,42 @@ export async function runValidate(
 
     // ── 3. Envelope adherence ───────────────────────────────────────────────
     findings.push(
-      ...(await envelopeAdherenceRule.check(ctx)).map((d) => diagnosticToFinding(d, ci)),
+      ...(await checkRule(envelopeAdherenceRule, ctx)).map((d) => diagnosticToFinding(d, ci)),
     );
 
     // ── 3b. Frontmatter validity ────────────────────────────────────────────
     // Host-agnostic: invalid YAML frontmatter loads on lenient hosts (Claude) but fails on
     // strict ones (Codex). Runs for every plugin regardless of target envelope.
     findings.push(
-      ...(await frontmatterParsesRule.check(ctx)).map((d) => diagnosticToFinding(d, ci)),
+      ...(await checkRule(frontmatterParsesRule, ctx)).map((d) => diagnosticToFinding(d, ci)),
     );
 
     // ── 4. Cross-target consistency (§10.1 step 4: multi-target only; §10.3: schema blocks) ──
     if (envelope.length > 1 && !hasBlockingSchemaError) {
       findings.push(
-        ...(await nameConsistencyRule.check(ctx)).map((d) => diagnosticToFinding(d, ci)),
+        ...(await checkRule(nameConsistencyRule, ctx)).map((d) => diagnosticToFinding(d, ci)),
       );
       findings.push(
-        ...(await versionConsistencyRule.check(ctx)).map((d) => diagnosticToFinding(d, ci)),
+        ...(await checkRule(versionConsistencyRule, ctx)).map((d) => diagnosticToFinding(d, ci)),
       );
-      findings.push(...(await mcpKeySyncRule.check(ctx)).map((d) => diagnosticToFinding(d, ci)));
+      findings.push(
+        ...(await checkRule(mcpKeySyncRule, ctx)).map((d) => diagnosticToFinding(d, ci)),
+      );
       // When registries are generated, their correctness is enforced by freshness below — skip the
       // hand-authored-registry check to avoid double findings (design spec, locked decision 2).
       if (!generatesRegistries) {
         findings.push(
-          ...(await marketplaceRegistrationRule.check(ctx)).map((d) => diagnosticToFinding(d, ci)),
+          ...(await checkRule(marketplaceRegistrationRule, ctx)).map((d) =>
+            diagnosticToFinding(d, ci),
+          ),
         );
       }
     }
 
     // ── 5. Freshness ─────────────────────────────────────────────────────────
-    findings.push(...(await pluginFreshnessRule.check(ctx)).map((d) => diagnosticToFinding(d, ci)));
+    findings.push(
+      ...(await checkRule(pluginFreshnessRule, ctx)).map((d) => diagnosticToFinding(d, ci)),
+    );
   }
 
   // ── 6. Repo-level default/placeholder marketplace-name check (always SOFT) ──
@@ -1780,7 +1805,7 @@ export async function runValidate(
       configCache,
     });
     findings.push(
-      ...(await defaultMarketplaceNameRule.check(repoLevelCtx)).map((d) =>
+      ...(await checkRule(defaultMarketplaceNameRule, repoLevelCtx)).map((d) =>
         diagnosticToFinding(d, ci),
       ),
     );
@@ -1815,13 +1840,13 @@ export async function runValidate(
     });
     if (!skipFreshness) {
       findings.push(
-        ...(await registryFreshnessRule.check(repoScopedCtx)).map((d) =>
+        ...(await checkRule(registryFreshnessRule, repoScopedCtx)).map((d) =>
           diagnosticToFinding(d, ci),
         ),
       );
     }
     findings.push(
-      ...(await rootArtifactFreshnessRule.check(repoScopedCtx)).map((d) =>
+      ...(await checkRule(rootArtifactFreshnessRule, repoScopedCtx)).map((d) =>
         diagnosticToFinding(d, ci),
       ),
     );
@@ -1847,7 +1872,7 @@ export async function runValidate(
       skipFreshness,
       configCache,
     });
-    for (const diagnostic of await unpublishedSkillInstallableRule.check(boundaryCtx)) {
+    for (const diagnostic of await checkRule(unpublishedSkillInstallableRule, boundaryCtx)) {
       // `Finding.plugin` means "the plugin this finding is about". An unpublished skill belongs to
       // no plugin, so the field is left unset rather than carrying the diagnostic's file path; the
       // message already names the file.

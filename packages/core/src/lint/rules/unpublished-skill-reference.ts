@@ -16,7 +16,7 @@
  * @see docs/specs/lint-engine.md §3.2, L-D7, L-D13
  */
 
-import * as fs from 'node:fs';
+import { repositoryFs as fs } from '../../pipeline/repository-fs.js';
 import * as path from 'node:path';
 import { offsetToPosition } from '../document.js';
 import { classifyRepoSkills } from '../skill-classification.js';

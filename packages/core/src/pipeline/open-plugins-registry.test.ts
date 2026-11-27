@@ -28,7 +28,8 @@ import * as path from 'node:path';
 
 import { afterEach, describe, expect, it } from 'vitest';
 
-import { runBuild, serializeRootManifest } from './build.js';
+import { serializeRootManifest } from './build.js';
+import { runBuild } from './build.js';
 import { runValidate } from './validate.js';
 import { synthRegistryRepo } from '../test-support/synth-plugin.js';
 import type { SynthRegistryPlugin, SynthRegistryRepo } from '../test-support/synth-plugin.js';

@@ -21,6 +21,7 @@ export type {
 
 export {
   build,
+  buildWithOutcome,
   validate,
   scaffold,
   init,
@@ -58,6 +59,8 @@ export type {
   TargetId,
   AddTargetOutcome,
   BuildOptions,
+  BuildOutcome,
+  BuildFreshnessIoFinding,
   BuildResult,
   GeneratedFile,
   GeneratedFileTarget,

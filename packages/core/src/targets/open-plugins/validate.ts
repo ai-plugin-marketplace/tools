@@ -19,7 +19,7 @@
  * @see docs/specs/architecture.md §8.1 (Finding, FindingCode)
  */
 
-import * as fs from 'node:fs';
+import { referenceExists, repositoryFs as fs } from '../../pipeline/repository-fs.js';
 import * as path from 'node:path';
 
 import type { Finding } from '../../pipeline/types.js';
@@ -133,7 +133,7 @@ function validateManifest(pluginDir: string, pluginName: string): Finding[] {
         );
         continue;
       }
-      if (!fs.existsSync(resolved)) {
+      if (!referenceExists(resolved)) {
         findings.push(
           makeInvalid(
             pluginName,

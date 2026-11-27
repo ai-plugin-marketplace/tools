@@ -17,7 +17,7 @@
  * @see https://agentskills.io (agentskills.io spec — source of name/description constraints)
  */
 
-import * as fs from 'node:fs';
+import { repositoryFs as fs } from '../../pipeline/repository-fs.js';
 import * as path from 'node:path';
 
 import { parse as parseYaml } from 'yaml';

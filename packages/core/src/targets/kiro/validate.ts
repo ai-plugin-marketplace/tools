@@ -23,7 +23,7 @@
  * @see docs/specs/architecture.md §12.5 (internal module shape), §3.4 (target isolation)
  */
 
-import * as fs from 'node:fs';
+import { isFileEntry, repositoryFs as fs } from '../../pipeline/repository-fs.js';
 import * as path from 'node:path';
 
 import { parse as parseYaml } from 'yaml';
@@ -243,7 +243,7 @@ function validateAgentToolNames(pluginDir: string, pluginName: string): Finding[
   const findings: Finding[] = [];
 
   for (const entry of entries) {
-    if (!entry.isFile() || !entry.name.endsWith('.md')) continue;
+    if (!isFileEntry(agentsDir, entry, '.md')) continue;
 
     const agentName = entry.name.replace(/\.md$/, '');
     const agentPath = path.join(agentsDir, entry.name);

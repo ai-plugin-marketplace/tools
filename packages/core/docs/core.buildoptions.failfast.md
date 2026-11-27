@@ -4,7 +4,7 @@
 
 ## BuildOptions.failFast property
 
-Abort after the first hard validation finding. Default: false.
+Throw an error summarizing hard structural findings after artifact generation and validation. [buildWithOutcome()](./core.buildwithoutcome.md) uses the same post-build checks as [build()](./core.build.md)<!-- -->. Findings from standalone validation and observed filesystem failures are included in the outcome. Default: false.
 
 **Signature:**
 

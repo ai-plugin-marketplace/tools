@@ -36,7 +36,12 @@
  * @see docs/specs/architecture.md §8.1, §3.2 (repository topology), §10.1 (validation order)
  */
 
-import * as fs from 'node:fs';
+import {
+  directoryExists,
+  probeDiscoveryAlias,
+  repositoryFs as fs,
+  setRepositoryPaths,
+} from './repository-fs.js';
 import * as path from 'node:path';
 
 import { AIPM_CONFIG_FILENAME, hasRepoConfig, loadRepoConfig } from './load-config.js';
@@ -54,11 +59,6 @@ export interface Discovery {
 /** True iff `dir` contains an `aipm.config.ts`. */
 function hasConfig(dir: string): boolean {
   return fs.existsSync(path.join(dir, AIPM_CONFIG_FILENAME));
-}
-
-/** True iff `dir` exists and is a directory. */
-function isDirectory(dir: string): boolean {
-  return fs.existsSync(dir) && fs.statSync(dir).isDirectory();
 }
 
 /**
@@ -86,7 +86,7 @@ const PLUGIN_SHAPE_MANIFESTS = [
  */
 function hasSkills(dir: string): boolean {
   const skillsDir = path.join(dir, 'skills');
-  if (!isDirectory(skillsDir)) return false;
+  if (!directoryExists(skillsDir)) return false;
   for (const entry of fs.readdirSync(skillsDir, { withFileTypes: true })) {
     if (entry.isDirectory() && fs.existsSync(path.join(skillsDir, entry.name, 'SKILL.md'))) {
       return true;
@@ -130,10 +130,12 @@ export async function discoverPlugins(targetPath: string): Promise<Discovery> {
     const pluginsDir = path.join(resolved, repoConfig.pluginsRoot);
     // An explicit `aipm.repo.ts` marks a repo root even before its plugins dir exists, so a
     // freshly-initialised embedded repo still resolves as a repo root rather than a single plugin.
-    if (hasRepoConfig(resolved) || isDirectory(pluginsDir)) {
+    if (hasRepoConfig(resolved) || directoryExists(pluginsDir)) {
+      setRepositoryPaths(resolved, []);
       const pluginDirs: string[] = [];
-      if (isDirectory(pluginsDir)) {
+      if (directoryExists(pluginsDir)) {
         for (const entry of fs.readdirSync(pluginsDir, { withFileTypes: true })) {
+          probeDiscoveryAlias(pluginsDir, entry);
           if (!entry.isDirectory()) continue;
           const candidate = path.join(pluginsDir, entry.name);
           // A config-less candidate is still discovered when it is plugin-shaped (#91) — deferred
@@ -145,6 +147,7 @@ export async function discoverPlugins(targetPath: string): Promise<Discovery> {
         }
         pluginDirs.sort();
       }
+      setRepositoryPaths(resolved, pluginDirs);
       return {
         repoRoot: resolved,
         distDir: path.join(resolved, repoConfig.distDir),
@@ -158,6 +161,7 @@ export async function discoverPlugins(targetPath: string): Promise<Discovery> {
   // can emit `envelope-invalid` and build can throw a descriptive error (§10.1 step 1). The dist
   // root is resolved from the repo root's config so a relocated dist root is still honored.
   const grandparent = path.dirname(path.dirname(resolved));
+  setRepositoryPaths(grandparent, [resolved]);
   const repoConfig = await loadRepoConfig(grandparent);
   return {
     repoRoot: grandparent,

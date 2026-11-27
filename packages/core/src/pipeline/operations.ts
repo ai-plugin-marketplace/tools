@@ -13,6 +13,7 @@
 import * as path from 'node:path';
 
 import { runBuild } from './build.js';
+import { runBuildWithOutcome } from './build-outcome.js';
 import { runInit } from './init.js';
 import { loadRepoConfig } from './load-config.js';
 import { runRefreshScaffold } from './scaffold-refresh.js';
@@ -22,6 +23,7 @@ import { runValidate } from './validate.js';
 import type {
   AddTargetOutcome,
   BuildOptions,
+  BuildOutcome,
   BuildResult,
   InitOptions,
   InitOutcome,
@@ -42,14 +44,32 @@ function isCi(): boolean {
 }
 
 /**
- * Build a single plugin or every plugin under a repo root. `path` may be a plugin directory
- * (contains `aipm.config.ts`) or a repo root (contains `plugins/`); the orchestrator detects
- * which and returns a length-1 array for single-plugin input. See §5.2, §8.1.
+ * Build a single plugin or every plugin under a repo root. Returns an array with one result per
+ * built plugin. Post-build validation skips freshness checks and the published-surface boundary.
+ * Use {@link buildWithOutcome} to receive validation findings alongside the results.
  *
  * @public
  */
 export function build(targetPath: string, opts?: BuildOptions): Promise<BuildResult[]> {
   return runBuild(targetPath, opts);
+}
+
+/**
+ * Build a single plugin or every plugin under a repo root. Returns one result per built plugin
+ * and the findings from standalone validation after the build. Artifact drift is hard in CI and soft locally.
+ * Filesystem failures on repository inputs are hard findings in either environment.
+ * Includes the published-surface boundary check from {@link validate}.
+ * Validation assumes source inputs stay unchanged by other processes during the call.
+ *
+ * Setting {@link BuildOptions.failFast} rejects for the same post-build findings as {@link build}.
+ * Standalone-validation findings, including artifact drift, and observed filesystem findings
+ * appear in the returned validation result when the build succeeds. Fatal generation errors
+ * reject with any findings already established.
+ *
+ * @public
+ */
+export function buildWithOutcome(targetPath: string, opts?: BuildOptions): Promise<BuildOutcome> {
+  return runBuildWithOutcome(targetPath, opts);
 }
 
 /**

@@ -25,7 +25,7 @@
  * @see docs/specs/architecture.md §12.5 (per-target scaffold.ts)
  */
 
-import * as fs from 'node:fs';
+import { repositoryFs as fs } from './repository-fs.js';
 import * as path from 'node:path';
 
 import { scaffoldClaudeFiles } from '../targets/claude/scaffold.js';

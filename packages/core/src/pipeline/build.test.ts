@@ -25,7 +25,9 @@ import { PAYLOAD_ADAPTER_FILENAME, PAYLOAD_ADAPTER_SOURCE } from '../hooks/paylo
 import { convertClaudeHooksYamlToJson } from '../targets/claude/transform.js';
 import { convertClaudeHooksYamlToCursorJson } from '../targets/cursor/transform.js';
 import { CURSOR_SHIM_FILENAME, CURSOR_SHIM_RUNNER_SOURCE } from '../targets/cursor/shim-runner.js';
-import { computePluginHookArtifacts, runBuild } from './build.js';
+import { build, buildWithOutcome } from '../index.js';
+import { computePluginHookArtifacts } from './build.js';
+import { runBuild } from './build.js';
 import { GeneratorDowngradeError, getGeneratorVersion } from './generator-version.js';
 import {
   applyJsonSentinel,
@@ -274,25 +276,54 @@ describeMaybe('runBuild — post-build validation (§5.4)', () => {
     repo.cleanup();
   });
 
-  it('throws under failFast when an artifact exists for a target outside the envelope', async () => {
+  it('public build rejects under failFast when an artifact exists outside the envelope', async () => {
     // Declare only claude, but the plugin still carries gemini-extension.json etc. → adherence.
     repo = synthPluginRepo(['claude']);
-    await expect(runBuild(repo.pluginDir, { failFast: true })).rejects.toThrow(
-      /envelope-adherence/,
+    await expect(build(repo.pluginDir, { failFast: true })).rejects.toThrow(
+      `[${SYNTH_PLUGIN_NAME}] envelope-adherence:`,
     );
+    expect(fs.existsSync(path.join(repo.pluginDir, 'hooks', 'hooks.json'))).toBe(true);
   });
 
-  it('without failFast, returns results even though post-build validation has hard findings', async () => {
+  it('public build returns the results array by default even with hard findings', async () => {
     repo = synthPluginRepo(['claude']);
-    // Should NOT throw — the CLI decides the exit code from a separate validate call.
-    const results = await runBuild(repo.pluginDir);
+    const results = await build(repo.pluginDir);
+
+    expect(Array.isArray(results)).toBe(true);
     expect(results).toHaveLength(1);
+    expect(results[0]).toMatchObject({ plugin: SYNTH_PLUGIN_NAME, pluginDir: repo.pluginDir });
+    expect(results[0]?.artifacts).toContainEqual({
+      path: path.join(repo.pluginDir, 'hooks', 'hooks.json'),
+      source: `${SYNTH_PLUGIN_NAME}/hooks/claude.yaml`,
+      target: 'claude',
+    });
+  });
+
+  it('buildWithOutcome returns generated artifacts and hard post-build findings together', async () => {
+    repo = synthPluginRepo(['claude']);
+    const { results, validation } = await buildWithOutcome(repo.pluginDir);
+
+    expect(results).toHaveLength(1);
+    expect(results[0]?.artifacts).toContainEqual({
+      path: path.join(repo.pluginDir, 'hooks', 'hooks.json'),
+      source: `${SYNTH_PLUGIN_NAME}/hooks/claude.yaml`,
+      target: 'claude',
+    });
+    expect(validation.passed).toBe(false);
+    expect(validation.findings).toContainEqual({
+      severity: 'hard',
+      code: 'envelope-adherence',
+      plugin: SYNTH_PLUGIN_NAME,
+      message:
+        "Artifact 'gemini-extension.json' exists but target 'gemini' is not in the support envelope.",
+      hint: "Remove 'gemini-extension.json' or add 'gemini' to the targets array in aipm.config.ts.",
+    });
   });
 
   it('a clean all-targets build passes post-build validation under failFast', async () => {
     repo = synthPluginRepo(ALL_SYNTH_TARGETS);
     // No throw means post-build validate found no hard findings.
-    const results = await runBuild(repo.repoRoot, { failFast: true });
+    const results = await build(repo.repoRoot, { failFast: true });
     expect(results).toHaveLength(1);
   });
 });

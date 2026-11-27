@@ -66,9 +66,26 @@ export function applyRuleSeverityOverrides(diagnostics: readonly Diagnostic[], o
 export function build(targetPath: string, opts?: BuildOptions): Promise<BuildResult[]>;
 
 // @public
+export interface BuildFreshnessIoFinding {
+    code: 'freshness-io';
+    message: string;
+    plugin?: string;
+    severity: 'hard';
+}
+
+// @public
 export interface BuildOptions {
     failFast?: boolean;
     forceDowngrade?: boolean;
+}
+
+// @public
+export interface BuildOutcome {
+    results: BuildResult[];
+    validation: {
+        findings: (Finding | BuildFreshnessIoFinding)[];
+        passed: boolean;
+    };
 }
 
 // @public
@@ -78,6 +95,9 @@ export interface BuildResult {
     plugin: string;
     pluginDir: string;
 }
+
+// @public
+export function buildWithOutcome(targetPath: string, opts?: BuildOptions): Promise<BuildOutcome>;
 
 // @public
 export function checkSupport(pluginDir: string): Promise<SupportReport>;

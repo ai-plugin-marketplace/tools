@@ -16,7 +16,7 @@
  * @see docs/specs/architecture.md §8.1 (Finding types)
  */
 
-import * as fs from 'node:fs';
+import { isFileEntry, repositoryFs as fs } from '../../pipeline/repository-fs.js';
 import * as path from 'node:path';
 
 import { parse as parseYaml } from 'yaml';
@@ -62,7 +62,7 @@ function checkAgentToolTranslations(pluginDir: string, pluginName: string): Find
   const entries = fs.readdirSync(agentsDir, { withFileTypes: true });
 
   for (const entry of entries) {
-    if (!entry.isFile() || !entry.name.endsWith('.md')) continue;
+    if (!isFileEntry(agentsDir, entry, '.md')) continue;
 
     const agentPath = path.join(agentsDir, entry.name);
     const content = fs.readFileSync(agentPath, 'utf-8');

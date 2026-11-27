@@ -50,7 +50,20 @@ Apply `--rule` overrides to a diagnostic list: a diagnostic whose `ruleId` has a
 
 </td><td>
 
-Build a single plugin or every plugin under a repo root. `path` may be a plugin directory (contains `aipm.config.ts`<!-- -->) or a repo root (contains `plugins/`<!-- -->); the orchestrator detects which and returns a length-1 array for single-plugin input. See §5.2, §8.1.
+Build a single plugin or every plugin under a repo root. Returns an array with one result per built plugin. Post-build validation skips freshness checks and the published-surface boundary. Use [buildWithOutcome()](./core.buildwithoutcome.md) to receive validation findings alongside the results.
+
+
+</td></tr>
+<tr><td>
+
+[buildWithOutcome(targetPath, opts)](./core.buildwithoutcome.md)
+
+
+</td><td>
+
+Build a single plugin or every plugin under a repo root. Returns one result per built plugin and the findings from standalone validation after the build. Artifact drift is hard in CI and soft locally. Filesystem failures on repository inputs are hard findings in either environment. Includes the published-surface boundary check from [validate()](./core.validate.md)<!-- -->. Validation assumes source inputs stay unchanged by other processes during the call.
+
+Setting [BuildOptions.failFast](./core.buildoptions.failfast.md) rejects for the same post-build findings as [build()](./core.build.md)<!-- -->. Standalone-validation findings, including artifact drift, and observed filesystem findings appear in the returned validation result when the build succeeds. Fatal generation errors reject with any findings already established.
 
 
 </td></tr>
@@ -266,12 +279,34 @@ Raw input shape accepted by `defineWorkspace`<!-- -->. Authored as `aipm.workspa
 </td></tr>
 <tr><td>
 
+[BuildFreshnessIoFinding](./core.buildfreshnessiofinding.md)
+
+
+</td><td>
+
+A filesystem failure on a repository input in [BuildOutcome](./core.buildoutcome.md)<!-- -->.
+
+
+</td></tr>
+<tr><td>
+
 [BuildOptions](./core.buildoptions.md)
 
 
 </td><td>
 
 Options for [build()](./core.build.md)<!-- -->.
+
+
+</td></tr>
+<tr><td>
+
+[BuildOutcome](./core.buildoutcome.md)
+
+
+</td><td>
+
+Artifacts and post-build diagnostics from [buildWithOutcome()](./core.buildwithoutcome.md)<!-- -->.
 
 
 </td></tr>

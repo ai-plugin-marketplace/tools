@@ -15,7 +15,7 @@
  * @see packages/core/docs/specs/architecture.md §8.1 (Finding, FindingCode)
  */
 
-import * as fs from 'node:fs';
+import { referenceExists, repositoryFs as fs } from '../../pipeline/repository-fs.js';
 import * as path from 'node:path';
 
 import type { Finding } from '../../pipeline/types.js';
@@ -123,7 +123,12 @@ function validateManifestFileRefs(pluginDir: string, pluginName: string): Findin
 
       const resolved = path.join(pluginDir, refPath.slice(2));
 
-      if (!fs.existsSync(resolved)) {
+      if (
+        !referenceExists(
+          resolved,
+          mustBeDir === undefined ? undefined : mustBeDir ? 'directory' : 'file',
+        )
+      ) {
         findings.push(
           makeInvalid(
             pluginName,

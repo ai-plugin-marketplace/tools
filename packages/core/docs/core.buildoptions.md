@@ -50,7 +50,7 @@ boolean
 
 </td><td>
 
-_(Optional)_ Throw an error summarizing hard structural findings after artifact generation and validation. With [buildWithOutcome()](./core.buildwithoutcome.md)<!-- -->, also reject when filesystem operations fail on repository inputs. Artifact drift stays in the returned validation result. Default: false.
+_(Optional)_ Throw an error summarizing hard structural findings after artifact generation and validation. [buildWithOutcome()](./core.buildwithoutcome.md) uses the same post-build checks as [build()](./core.build.md)<!-- -->. Findings from standalone validation and observed filesystem failures are included in the outcome. Default: false.
 
 
 </td></tr>

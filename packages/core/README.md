@@ -58,8 +58,9 @@ Use `buildWithOutcome()` with the same arguments to get `{ results, validation }
 same build and then runs standalone validation, including freshness and published-surface
 diagnostics. Filesystem failures observed during the build or validation appear as hard
 `BuildFreshnessIoFinding` diagnostics with code `freshness-io`. Any such finding makes
-`validation.passed` false. With `failFast: true`, hard structural findings and filesystem failures
-reject the build. Artifact drift stays in the outcome and is hard in CI and soft locally.
+`validation.passed` false. With `failFast: true`, the same post-build checks reject as for
+`build()`. Standalone-validation findings and observed filesystem failures stay in the outcome.
+Artifact drift is hard in CI and soft locally.
 Fatal generation errors reject with any findings already established. Validation assumes source
 inputs stay unchanged by other processes during the call.
 

@@ -1,4 +1,3 @@
-import { execFileSync, spawnSync } from 'node:child_process';
 import fs from 'node:fs';
 import { syncBuiltinESMExports } from 'node:module';
 import * as path from 'node:path';
@@ -235,44 +234,4 @@ it.skipIf(process.platform === 'win32').each(['plugins/claude/hooks/claude.yaml'
     expectLegacyFindings(outcome, legacy);
     expectReadFailure(outcome, file, 'ENOENT');
   },
-);
-
-it.skipIf(process.platform === 'win32')(
-  'reports a FIFO hooks source without opening it',
-  () => {
-    repo = synthRegistryRepo([claude]);
-    const fifo = path.join(repo.repoRoot, 'plugins', 'claude', 'hooks', 'claude.yaml');
-    fs.mkdirSync(path.dirname(fifo));
-    const mkfifo = spawnSync('mkfifo', [fifo], { encoding: 'utf8' });
-    expect(mkfifo.status, mkfifo.stderr).toBe(0);
-
-    // Use the compiled entry point and a subprocess timeout so an unguarded read cannot hang Vitest.
-    execFileSync('pnpm', ['exec', 'tsc', '--build'], {
-      cwd: new URL('../../', import.meta.url),
-      stdio: 'inherit',
-    });
-    const entry = new URL('../../dist/index.js', import.meta.url).href;
-    const probe = spawnSync(
-      process.execPath,
-      [
-        '--input-type=module',
-        '-e',
-        `
-    import { buildWithOutcome } from ${JSON.stringify(entry)};
-    try {
-      const outcome = await buildWithOutcome(process.argv[1]);
-      console.log(JSON.stringify(outcome.validation.findings));
-    } catch (error) {
-      console.log(error.message);
-    }
-  `,
-        repo.repoRoot,
-      ],
-      { encoding: 'utf8', timeout: 5_000 },
-    );
-    expect(probe.error).toBeUndefined();
-    expect(probe.status, probe.stderr).toBe(0);
-    expect(probe.stdout).toMatch(/freshness-io.+expected a regular file.*claude\.yaml/);
-  },
-  120_000,
 );

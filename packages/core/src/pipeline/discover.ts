@@ -36,7 +36,12 @@
  * @see docs/specs/architecture.md §8.1, §3.2 (repository topology), §10.1 (validation order)
  */
 
-import { directoryExists, repositoryFs as fs, setRepositoryPaths } from './repository-fs.js';
+import {
+  directoryExists,
+  probeDiscoveryAlias,
+  repositoryFs as fs,
+  setRepositoryPaths,
+} from './repository-fs.js';
 import * as path from 'node:path';
 
 import { AIPM_CONFIG_FILENAME, hasRepoConfig, loadRepoConfig } from './load-config.js';
@@ -56,7 +61,6 @@ function hasConfig(dir: string): boolean {
   return fs.existsSync(path.join(dir, AIPM_CONFIG_FILENAME));
 }
 
-/** True iff `dir` exists and is a directory. */
 /**
  * Target-manifest markers whose presence identifies a directory as plugin-shaped even without
  * `aipm.config.ts`. One entry per target's minimum-required manifest — mirrors `validate.ts`'s
@@ -131,6 +135,7 @@ export async function discoverPlugins(targetPath: string): Promise<Discovery> {
       const pluginDirs: string[] = [];
       if (directoryExists(pluginsDir)) {
         for (const entry of fs.readdirSync(pluginsDir, { withFileTypes: true })) {
+          probeDiscoveryAlias(pluginsDir, entry);
           if (!entry.isDirectory()) continue;
           const candidate = path.join(pluginsDir, entry.name);
           // A config-less candidate is still discovered when it is plugin-shaped (#91) — deferred

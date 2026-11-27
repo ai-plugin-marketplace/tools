@@ -200,7 +200,12 @@ function checkRef(
   const normalized = ref.slice(2); // strip leading "./"
   const resolved = path.join(pluginDir, normalized);
 
-  if (!referenceExists(resolved, kind === 'directory' ? 'directory' : 'file')) {
+  if (
+    !referenceExists(
+      resolved,
+      kind === 'directory' ? 'directory' : kind === 'any' ? undefined : 'file',
+    )
+  ) {
     const hint = buildMissingHint(pluginName, field, ref);
     return hardFinding(
       pluginName,

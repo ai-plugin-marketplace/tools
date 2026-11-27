@@ -87,8 +87,8 @@ export const DEFAULT_SCAFFOLD_TARGETS = TARGET_IDS.filter(
 export interface BuildOptions {
   /**
    * Throw an error summarizing hard structural findings after artifact generation and validation.
-   * With {@link buildWithOutcome}, also reject when filesystem operations fail on repository inputs.
-   * Artifact drift stays in the returned validation result.
+   * {@link buildWithOutcome} uses the same post-build checks as {@link build}. Findings from
+   * standalone validation and observed filesystem failures are included in the outcome.
    * Default: false.
    */
   failFast?: boolean;

@@ -61,9 +61,10 @@ export function build(targetPath: string, opts?: BuildOptions): Promise<BuildRes
  * Includes the published-surface boundary check from {@link validate}.
  * Validation assumes source inputs stay unchanged by other processes during the call.
  *
- * Setting {@link BuildOptions.failFast} rejects after generation and validation complete if there
- * are hard structural findings or filesystem failures. Artifact drift stays in the returned
- * validation result. Fatal generation errors reject with any findings already established.
+ * Setting {@link BuildOptions.failFast} rejects for the same post-build findings as {@link build}.
+ * Standalone-validation findings, including artifact drift, and observed filesystem findings
+ * appear in the returned validation result when the build succeeds. Fatal generation errors
+ * reject with any findings already established.
  *
  * @public
  */

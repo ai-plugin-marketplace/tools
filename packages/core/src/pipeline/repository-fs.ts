@@ -1,13 +1,14 @@
 import { AsyncLocalStorage } from 'node:async_hooks';
 import * as fs from 'node:fs';
+import * as nodeModule from 'node:module';
 import * as path from 'node:path';
+import { fileURLToPath } from 'node:url';
 
 import type { BuildFreshnessIoFinding } from './types.js';
 
 interface RepositoryIo {
   repoRoot: string;
   pluginDirs: Set<string>;
-  tempDirs: Set<string>;
   plugin?: string;
   findings: Map<string, BuildFreshnessIoFinding>;
   errors: WeakSet<object>;
@@ -24,7 +25,6 @@ export function observeRepositoryIo<T>(
     {
       repoRoot: path.resolve(targetPath),
       pluginDirs: new Set(),
-      tempDirs: new Set(),
       findings,
       errors: new WeakSet(),
     },
@@ -113,19 +113,22 @@ function lookup(file: string): fs.Stats | undefined {
   return undefined;
 }
 
-function observe<T>(file: string, operation: () => T): T {
+function observe<T>(file: string, operation: () => T, resolvingModule = false): T {
   if (repositoryIo.getStore() === undefined) return operation();
   try {
     return operation();
   } catch (error) {
+    // A resolver may try a directory index below a regular file before trying another
+    // extension or parent. ENOTDIR on that candidate means the candidate is absent.
+    if (resolvingModule && (error as NodeJS.ErrnoException).code === 'ENOTDIR') throw error;
     if (error instanceof Error && 'code' in error && error.code === 'ENOENT') {
       // Optional probes such as skills-lock.json routinely read a path that is absent.
       try {
         if (lookup(path.resolve(file)) === undefined) throw error;
       } catch (lookupError) {
         if (lookupError === error) throw error;
-        record(error, file);
         record(lookupError, file);
+        if (isObservedIoError(lookupError)) repositoryIo.getStore()?.errors.add(error);
         throw error;
       }
     }
@@ -143,7 +146,10 @@ function probe(file: string, operation: () => void): void {
 }
 
 function existsSync(file: string): boolean {
-  if (repositoryIo.getStore() !== undefined) probe(file, () => void lookup(path.resolve(file)));
+  // existsSync returns false for a NUL in a manifest reference. statSync would throw.
+  if (repositoryIo.getStore() !== undefined && !file.includes('\0')) {
+    probe(file, () => void lookup(path.resolve(file)));
+  }
   // Keep the legacy answer, even when a broken link was found by the probe.
   return fs.existsSync(file);
 }
@@ -176,27 +182,14 @@ function readFileSync(file: string, encoding?: BufferEncoding): string | Buffer 
 function readdirSync(dir: string): string[];
 function readdirSync(dir: string, options: { withFileTypes: true }): fs.Dirent[];
 function readdirSync(dir: string, options?: { withFileTypes: true }): string[] | fs.Dirent[] {
-  if (options === undefined) {
-    const entries = observe(dir, () => fs.readdirSync(dir));
-    if (repositoryIo.getStore() !== undefined) {
-      for (const name of entries) {
-        const file = path.resolve(dir, name);
-        probe(file, () => void lookup(file));
-      }
-    }
-    return entries;
-  }
-  const entries = observe(dir, () => fs.readdirSync(dir, options));
-  if (repositoryIo.getStore() !== undefined) {
-    // Discovery still ignores aliases. A broken alias should never hide a valid sibling.
-    for (const entry of entries) {
-      if (entry.isSymbolicLink()) {
-        const file = path.resolve(dir, entry.name);
-        probe(file, () => void lookup(file));
-      }
-    }
-  }
-  return entries;
+  return observe(dir, () =>
+    options === undefined ? fs.readdirSync(dir) : fs.readdirSync(dir, options),
+  );
+}
+
+/** Discovery considers each entry in the plugins root, but still skips symlink aliases. */
+export function probeDiscoveryAlias(dir: string, entry: fs.Dirent): void {
+  if (observesRepositoryIo() && entry.isSymbolicLink()) existsSync(path.join(dir, entry.name));
 }
 
 /** A manifest reference can be used by a host even if it isn't under a conventional component directory. */
@@ -241,9 +234,7 @@ export function inputExists(file: string, expected: 'file' | 'directory'): boole
 
 export function isFileEntry(dir: string, entry: fs.Dirent, extension: string): boolean {
   if (!entry.name.endsWith(extension)) return false;
-  if (!entry.isFile() && repositoryIo.getStore() !== undefined) {
-    inputExists(path.join(dir, entry.name), 'file');
-  }
+  if (observesRepositoryIo() && entry.isSymbolicLink()) existsSync(path.join(dir, entry.name));
   return entry.isFile();
 }
 
@@ -254,51 +245,101 @@ export function directoryExists(dir: string): boolean {
   return directory;
 }
 
-/** jiti opens the config itself, so check its input at the same boundary before handing it over. */
-export function readConfig<T>(file: string, load: () => Promise<T>): Promise<T> {
-  if (repositoryIo.getStore() === undefined) return load();
-  readFileSync(file);
-  return load().catch((error: unknown) => {
-    record(error, file);
-    throw error;
-  });
+export function observesRepositoryIo(): boolean {
+  return repositoryIo.getStore() !== undefined;
 }
 
-function assertSafeOutput(file: string, allowDanglingLeaf = false): fs.Stats | undefined {
-  const io = repositoryIo.getStore();
-  if (io === undefined) return undefined;
-  if (!includesPath(io.repoRoot, file)) {
-    if ([...io.tempDirs].some((dir) => includesPath(dir, file))) {
-      return fs.statSync(file, { throwIfNoEntry: false });
-    }
-    throw invalidPath('EINVAL', file, 'output path resolves outside the repository');
-  }
+const configModuleIo = new AsyncLocalStorage<boolean>();
+const registerModuleHooks = (nodeModule as Partial<typeof nodeModule>).registerHooks;
+export const observesNativeModuleGraph = registerModuleHooks !== undefined;
+let configModuleHooks: ReturnType<typeof nodeModule.registerHooks> | undefined;
+let activeConfigLoads = 0;
 
-  const realRoot = fs.realpathSync.native(io.repoRoot);
-  let current = file;
-  for (;;) {
-    const stat = fs.statSync(current, { throwIfNoEntry: false });
-    if (stat !== undefined) {
-      if (!includesPath(realRoot, fs.realpathSync.native(current))) {
-        throw invalidPath('EINVAL', current, 'output path resolves outside the repository');
-      }
-      return current === file ? stat : undefined;
+function nativeModulePath(specifier: string, parentURL?: string): string | undefined {
+  if (path.isAbsolute(specifier)) return specifier;
+  if (!specifier.startsWith('file:') && !/^\.\.?\//.test(specifier)) return undefined;
+  if (!URL.canParse(specifier, parentURL)) return undefined;
+  const url = new URL(specifier, parentURL);
+  if (url.protocol !== 'file:' || /%(?:2f|5c)/i.test(url.pathname)) return undefined;
+  try {
+    return fileURLToPath(url);
+  } catch {
+    return undefined;
+  }
+}
+
+/** Jiti delegates native modules to Node. Scope the hooks to active observed config loads. */
+export async function withConfigModuleReads<T>(load: () => Promise<T>): Promise<T> {
+  if (registerModuleHooks === undefined) return load();
+  if (activeConfigLoads === 0) {
+    configModuleHooks = registerModuleHooks({
+      resolve(specifier, context, nextResolve) {
+        try {
+          return nextResolve(specifier, context);
+        } catch (error) {
+          if (configModuleIo.getStore()) {
+            const file = nativeModulePath(specifier, context.parentURL);
+            if (file !== undefined) existsSync(file);
+          }
+          throw error;
+        }
+      },
+      load(url, context, nextLoad) {
+        if (configModuleIo.getStore() && url.startsWith('file:')) {
+          readFileSync(fileURLToPath(url));
+        }
+        return nextLoad(url, context);
+      },
+    });
+  }
+  activeConfigLoads++;
+  try {
+    return await configModuleIo.run(true, load);
+  } finally {
+    if (--activeConfigLoads === 0) {
+      configModuleHooks?.deregister();
+      configModuleHooks = undefined;
     }
-    if (fs.lstatSync(current, { throwIfNoEntry: false })?.isSymbolicLink()) {
-      const failure = invalidPath('ENOENT', current, 'dangling symbolic link');
-      if (!allowDanglingLeaf || current !== file) throw failure;
-      record(failure, file);
-      const parent = fs.realpathSync.native(path.dirname(file));
-      const target = path.resolve(parent, fs.readlinkSync(file));
-      const realParent = fs.realpathSync.native(path.dirname(target));
-      if (!includesPath(realRoot, realParent)) {
-        throw invalidPath('EINVAL', current, 'output path resolves outside the repository');
-      }
-      // A second dangling link could redirect the otherwise safe-looking target.
-      lookup(target);
-      return undefined;
-    }
-    current = path.dirname(current);
+  }
+}
+
+function modulePath(file: string | URL): string {
+  return typeof file === 'string' ? file : fileURLToPath(file);
+}
+
+/** Jiti probes package metadata and candidates by URL as well as by path. */
+export const configModuleFs: object = {
+  ...fs,
+  statSync(file: string | URL, options?: { throwIfNoEntry: false }): fs.Stats | undefined {
+    const filename = modulePath(file);
+    return observe(
+      filename,
+      () => {
+        const stat = options === undefined ? fs.statSync(file) : fs.statSync(file, options);
+        if (stat === undefined) {
+          lookup(filename);
+        } else if (!stat.isDirectory() && !stat.isFile()) {
+          record(invalidPath('EINVAL', filename, 'expected a regular file'), filename);
+        }
+        return stat;
+      },
+      true,
+    );
+  },
+  lstatSync(file: string | URL): fs.Stats {
+    return observe(modulePath(file), () => fs.lstatSync(file));
+  },
+  realpathSync(file: string | URL): string {
+    return observe(modulePath(file), () => fs.realpathSync(file));
+  },
+  readFileSync(file: string | URL, encoding: BufferEncoding): string {
+    return readFileSync(modulePath(file), encoding);
+  },
+};
+
+function assertNonBlockingWrite(file: string): void {
+  if (observesRepositoryIo() && fs.statSync(file, { throwIfNoEntry: false })?.isFIFO()) {
+    throw invalidPath('EINVAL', file, 'cannot write to a FIFO');
   }
 }
 
@@ -317,39 +358,25 @@ export const repositoryFs = {
   copyFileSync(source: string, destination: string): void {
     observe(source, () => {
       if (repositoryIo.getStore() !== undefined) assertSafeRead(source);
-      assertSafeOutput(destination);
+      assertNonBlockingWrite(destination);
       fs.copyFileSync(source, destination);
     });
   },
-  mkdtempSync(prefix: string): string {
-    const dir = observe(path.dirname(prefix), () => fs.mkdtempSync(prefix));
-    repositoryIo.getStore()?.tempDirs.add(dir);
-    return dir;
-  },
-  mkdirSync(dir: string, options: { recursive: true }): string | undefined {
-    return observe(dir, () => {
-      assertSafeOutput(dir);
-      return fs.mkdirSync(dir, options);
-    });
-  },
+  mkdtempSync: (prefix: string) => observe(path.dirname(prefix), () => fs.mkdtempSync(prefix)),
+  mkdirSync: (dir: string, options: { recursive: true }) =>
+    observe(dir, () => fs.mkdirSync(dir, options)),
   writeFileSync(file: string | number, content: string | Buffer, encoding?: BufferEncoding): void {
     if (typeof file === 'number') {
       fs.writeFileSync(file, content, encoding);
       return;
     }
     observe(file, () => {
-      const stat = assertSafeOutput(path.resolve(file), true);
-      if (stat !== undefined && !stat.isFile()) {
-        throw invalidPath('EINVAL', file, 'expected a regular file');
-      }
+      assertNonBlockingWrite(file);
       fs.writeFileSync(file, content, encoding);
     });
   },
   rmSync(file: string, options?: fs.RmOptions): void {
     observe(file, () => {
-      const temps = repositoryIo.getStore()?.tempDirs;
-      if (!temps?.has(file)) assertSafeOutput(path.resolve(path.dirname(file)));
-      // Bundlers recreate the same temporary directory after clearing it, so keep its registration.
       fs.rmSync(file, options);
     });
   },

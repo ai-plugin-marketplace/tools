@@ -8,7 +8,7 @@
  * @see docs/specs/architecture.md §12.4, §12.5
  */
 
-import { inputExists, repositoryFs as fs } from '../../pipeline/repository-fs.js';
+import { repositoryFs as fs } from '../../pipeline/repository-fs.js';
 import * as path from 'node:path';
 import { buildKiroAgentConfig } from './transform.js';
 
@@ -35,8 +35,8 @@ function copyDir(src: string, dest: string): void {
   }
 }
 
-function copyIfExists(src: string, dest: string, expected: 'file' | 'directory'): boolean {
-  if (!inputExists(src, expected)) return false;
+function copyIfExists(src: string, dest: string): boolean {
+  if (!fs.existsSync(src)) return false;
   if (fs.statSync(src).isDirectory()) {
     copyDir(src, dest);
   } else {
@@ -88,7 +88,7 @@ export function bundleKiroPlugin(pluginDir: string, destDir: string): BundleKiro
   // Canonical files (README.md/LICENSE are intentionally excluded — see module doc above)
   const files: string[] = ['POWER.md', 'mcp.json'];
   for (const file of files) {
-    if (copyIfExists(path.join(pluginDir, file), path.join(destDir, file), 'file')) {
+    if (copyIfExists(path.join(pluginDir, file), path.join(destDir, file))) {
       emitted.push(file);
     }
   }
@@ -96,7 +96,7 @@ export function bundleKiroPlugin(pluginDir: string, destDir: string): BundleKiro
   // Canonical directories
   const dirs: string[] = ['steering', 'skills'];
   for (const dir of dirs) {
-    if (copyIfExists(path.join(pluginDir, dir), path.join(destDir, dir), 'directory')) {
+    if (copyIfExists(path.join(pluginDir, dir), path.join(destDir, dir))) {
       emitted.push(`${dir}/`);
     }
   }

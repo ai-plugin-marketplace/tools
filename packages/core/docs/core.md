@@ -63,7 +63,7 @@ Build a single plugin or every plugin under a repo root. Returns an array with o
 
 Build a single plugin or every plugin under a repo root. Returns one result per built plugin and the findings from standalone validation after the build. Artifact drift is hard in CI and soft locally. Filesystem failures on repository inputs are hard findings in either environment. Includes the published-surface boundary check from [validate()](./core.validate.md)<!-- -->. Validation assumes source inputs stay unchanged by other processes during the call.
 
-Setting [BuildOptions.failFast](./core.buildoptions.failfast.md) rejects after generation and validation complete if there are hard structural findings or filesystem failures. Artifact drift stays in the returned validation result. Fatal generation errors reject with any findings already established.
+Setting [BuildOptions.failFast](./core.buildoptions.failfast.md) rejects for the same post-build findings as [build()](./core.build.md)<!-- -->. Standalone-validation findings, including artifact drift, and observed filesystem findings appear in the returned validation result when the build succeeds. Fatal generation errors reject with any findings already established.
 
 
 </td></tr>

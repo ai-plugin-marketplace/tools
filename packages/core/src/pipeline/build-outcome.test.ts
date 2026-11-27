@@ -112,8 +112,8 @@ it.each(['', 'true'])(
       plugin: 'gem',
       message: failure.message,
     });
-    await expect(buildWithOutcome(repo.repoRoot, { failFast: true })).rejects.toThrow(
-      'freshness-io: ' + failure.message,
+    expect((await buildWithOutcome(repo.repoRoot, { failFast: true })).validation).toEqual(
+      validation,
     );
     await expect(validate(repo.repoRoot)).rejects.toBe(failure);
   },
@@ -177,7 +177,7 @@ it.each(['compare', 'regenerate'])(
       message: failure.message,
     });
     await expect(buildWithOutcome(repo.repoRoot, { failFast: true })).rejects.toThrow(
-      'freshness-io: ' + failure.message,
+      failureSummary,
     );
   },
 );
@@ -304,7 +304,7 @@ it.each(['oracle', 'sidecar'])(
     expect(validation.findings[1]?.message).toBe(failure.message);
     rootAttempts = 0;
     await expect(buildWithOutcome(root, { failFast: true })).rejects.toThrow(
-      'freshness-io: ' + failure.message,
+      'root-artifact-collision',
     );
     expect(readFileSync(authorContext, 'utf-8')).toBe('# Author-owned\n');
   },
@@ -421,9 +421,7 @@ it.skipIf(process.platform === 'win32')(
     );
     fs.rmSync(workspace);
     writeFileSync(workspace, "export default { marketplace: { name: 'workspace' } };\n");
-    await expect(buildWithOutcome(root, { failFast: true })).rejects.toThrow(
-      /frontmatter-invalid:[\s\S]+freshness-io:.*ELOOP/,
-    );
+    await expect(buildWithOutcome(root, { failFast: true })).rejects.toThrow('frontmatter-invalid');
   },
 );
 
@@ -513,9 +511,13 @@ it.each(['read', 'lookup', 'scan'])(
       passed: false,
       findings: [...legacy.findings, ioFinding],
     });
-    await expect(buildWithOutcome(plugin, { failFast: true })).rejects.toThrow(
-      /freshness-io: Cannot check command frontmatter/,
-    );
+    if (operation === 'lookup') {
+      await expect(buildWithOutcome(plugin, { failFast: true })).rejects.toThrow(
+        'frontmatter-invalid',
+      );
+    } else {
+      expect((await buildWithOutcome(plugin, { failFast: true })).validation).toEqual(validation);
+    }
 
     const agent = path.join(plugin, 'agents', 'broken.md');
     fs.mkdirSync(path.dirname(agent));
@@ -624,35 +626,6 @@ it('documents the outcome-only diagnostic in the architecture API example', () =
   expect(findingCode).not.toContain("'freshness-io'");
 });
 
-it.skipIf(process.platform === 'win32').each(['dangling', 'tracked', 'parent'])(
-  'refuses writes through a %s root artifact link outside the repository',
-  async (kind) => {
-    repo = geminiRepo({ name: 'workspace' });
-    const root = repo.repoRoot;
-    const outside = fs.mkdtempSync(path.join(path.dirname(root), 'aipm-outside-'));
-    try {
-      const link = path.join(root, kind === 'parent' ? 'commands' : 'GEMINI.md');
-      const target = path.join(outside, kind === 'parent' ? '' : 'target.md');
-      if (kind === 'tracked') {
-        fs.writeFileSync(target, '# Keep\n');
-        const sidecar = path.join(root, '.aipm', 'generated-root.json');
-        fs.mkdirSync(path.dirname(sidecar));
-        fs.writeFileSync(sidecar, '{"version":1,"paths":["GEMINI.md"]}');
-      }
-      fs.symlinkSync(target, link);
-
-      await expect(buildWithOutcome(root)).rejects.toThrow(
-        /freshness-io:.*output path resolves outside the repository/,
-      );
-      expect(fs.readlinkSync(link)).toBe(target);
-      if (kind === 'tracked') expect(fs.readFileSync(target, 'utf-8')).toBe('# Keep\n');
-      else expect(fs.readdirSync(outside)).toEqual([]);
-    } finally {
-      fs.rmSync(outside, { recursive: true });
-    }
-  },
-);
-
 it('reports an explicit plugins root occupied by a regular file', async () => {
   repo = geminiRepo();
   const root = repo.repoRoot;
@@ -663,34 +636,45 @@ it('reports an explicit plugins root occupied by a regular file', async () => {
   expect(validation.findings.find((finding) => finding.code === 'freshness-io')?.message).toContain(
     'ENOTDIR',
   );
-  await expect(buildWithOutcome(root, { failFast: true })).rejects.toThrow('ENOTDIR');
+  expect((await buildWithOutcome(root, { failFast: true })).validation).toEqual(validation);
 });
 
 it
   .skipIf(process.platform === 'win32')
-  .each(['plugins/loop', 'plugins/claude-only/agents/loop.md', 'plugins/claude-only/skills/loop'])(
-  'reports a pre-existing source link loop at %s',
-  async (relative) => {
-    repo = claudeRepo();
-    const file = path.join(repo.repoRoot, relative);
-    fs.mkdirSync(path.dirname(file), { recursive: true });
-    fs.symlinkSync(path.basename(file), file);
-    const { validation } = await buildWithOutcome(repo.repoRoot);
-    expect(validation.passed).toBe(false);
-    expect(
-      validation.findings.find((finding) => finding.code === 'freshness-io')?.message,
-    ).toContain('ELOOP');
-    await expect(buildWithOutcome(repo.repoRoot, { failFast: true })).rejects.toThrow('ELOOP');
-  },
-);
+  .each([
+    'plugins/loop',
+    'plugins/claude-only/agents/loop.md',
+    'plugins/claude-only/skills/example/SKILL.md',
+  ])('reports a pre-existing source link loop at %s', async (relative) => {
+  repo = claudeRepo();
+  const file = path.join(repo.repoRoot, relative);
+  fs.mkdirSync(path.dirname(file), { recursive: true });
+  fs.symlinkSync(path.basename(file), file);
+  const { validation } = await buildWithOutcome(repo.repoRoot);
+  expect(validation.passed).toBe(false);
+  expect(validation.findings.find((finding) => finding.code === 'freshness-io')?.message).toContain(
+    'ELOOP',
+  );
+  expect((await buildWithOutcome(repo.repoRoot, { failFast: true })).validation).toEqual(
+    validation,
+  );
+});
 
-it('rejects a bundle source file occupied by a directory', async () => {
+it('copies a bundle context path occupied by a directory as legacy build does', async () => {
   repo = geminiRepo();
   const context = path.join(repo.repoRoot, 'plugins', 'gem', 'GEMINI.md');
   fs.rmSync(context);
   fs.mkdirSync(context);
-  await expect(buildWithOutcome(repo.repoRoot, { failFast: true })).rejects.toThrow(
-    /expected a regular file.*GEMINI\.md/,
+  const legacy = await build(repo.repoRoot, { failFast: true });
+  const { results, validation } = await buildWithOutcome(repo.repoRoot, { failFast: true });
+  expect(results.map(({ artifacts }) => artifacts)).toEqual(
+    legacy.map(({ artifacts }) => artifacts),
+  );
+  expect(validation.findings.filter(({ code }) => code !== 'freshness-io')).toEqual(
+    (await validate(repo.repoRoot)).findings,
+  );
+  expect(fs.statSync(path.join(repo.repoRoot, 'dist/gemini/gem/GEMINI.md')).isDirectory()).toBe(
+    true,
   );
 });
 
@@ -711,7 +695,10 @@ it.skipIf(process.platform === 'win32')(
     const agents = path.join(repo.repoRoot, 'plugins', 'claude-only', 'agents');
     fs.symlinkSync('agents', agents);
     const options = { failFast: true, [Symbol.for('@ai-plugin-marketplace/cli/build')]: false };
-    await expect(buildWithOutcome(repo.repoRoot, options)).rejects.toThrow('ELOOP');
+    const { validation } = await buildWithOutcome(repo.repoRoot, options);
+    expect(validation.findings.find(({ code }) => code === 'freshness-io')?.message).toContain(
+      'ELOOP',
+    );
   },
 );
 
@@ -765,7 +752,7 @@ it('retains a malformed manifest finding when an agents scan fails', async () =>
     plugin: 'claude-only',
   });
   await expect(buildWithOutcome(repo.repoRoot, { failFast: true })).rejects.toThrow(
-    /schema-invalid:[\s\S]+freshness-io: Cannot enumerate agents/,
+    'schema-invalid',
   );
 });
 
@@ -853,9 +840,15 @@ it
       expect(validation.findings.filter(({ code }) => code !== 'freshness-io')).toEqual(
         (await validate(repo.repoRoot)).findings,
       );
-      await expect(buildWithOutcome(repo.repoRoot, { failFast: true })).rejects.toThrow(
-        /freshness-io:.*EACCES/,
-      );
+      if ((await validate(repo.repoRoot)).passed) {
+        expect((await buildWithOutcome(repo.repoRoot, { failFast: true })).validation).toEqual(
+          validation,
+        );
+      } else {
+        await expect(buildWithOutcome(repo.repoRoot, { failFast: true })).rejects.toThrow(
+          'schema-invalid',
+        );
+      }
     } finally {
       fs.chmodSync(input, 0o644);
     }
@@ -865,7 +858,6 @@ it
 it.skipIf(process.platform === 'win32').each([
   ['loop', 'broken.mdc', 'ELOOP'],
   ['dangling link', 'missing.mdc', 'ENOENT'],
-  ['directory link', '.', 'EISDIR'],
 ])('reports a Cursor rule %s as an I/O finding', async (_kind, target, code) => {
   repo = synthRegistryRepo([
     {
@@ -950,8 +942,8 @@ it('includes the published-surface findings from standalone validation', async (
     { code: 'unpublished-skill-installable', severity: 'hard' },
   ]);
   expect((await buildWithOutcome(repo.repoRoot)).validation).toEqual(validation);
-  await expect(buildWithOutcome(repo.repoRoot, { failFast: true })).rejects.toThrow(
-    'unpublished-skill-installable',
+  expect((await buildWithOutcome(repo.repoRoot, { failFast: true })).validation).toEqual(
+    validation,
   );
 });
 

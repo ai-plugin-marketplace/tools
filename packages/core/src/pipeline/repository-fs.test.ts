@@ -4,7 +4,7 @@ import * as path from 'node:path';
 import ts from 'typescript';
 import { expect, it } from 'vitest';
 
-it('routes production filesystem access through the repository boundary', () => {
+it('routes production filesystem access and config module loading through their adapters', () => {
   const src = path.resolve(import.meta.dirname, '..');
   const violations: string[] = [];
   for (const relative of fs.readdirSync(src, { recursive: true, encoding: 'utf8' })) {
@@ -38,7 +38,8 @@ it('routes production filesystem access through the repository boundary', () => 
         !typeOnly &&
         specifier !== undefined &&
         ts.isStringLiteral(specifier) &&
-        /^(?:node:)?fs(?:\/promises)?$/.test(specifier.text)
+        (/^(?:node:)?fs(?:\/promises)?$/.test(specifier.text) ||
+          (specifier.text === 'jiti' && relative !== path.join('pipeline', 'config-jiti.ts')))
       ) {
         violations.push(relative);
       }

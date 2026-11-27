@@ -1110,21 +1110,7 @@ async function collectStampedArtifacts(
 // Public entry point
 // ---------------------------------------------------------------------------
 
-/**
- * Build one plugin or every plugin under a repo root (§8.1). `targetPath` is detected as a single
- * plugin directory (contains `aipm.config.ts`) or a repo root (contains a `plugins/` directory).
- *
- * After emitting artifacts, runs `runValidate(targetPath, { skipFreshness: true })` per §5.4. When
- * `opts.failFast` is set and validation reports hard findings, throws an Error summarizing them;
- * otherwise the build results are returned and the caller (CLI) decides the exit code.
- *
- * @param targetPath - Absolute path to a plugin directory or repo root.
- * @param opts - Build options.
- * @returns One `BuildResult` per built plugin (length-1 for single-plugin input).
- * @throws {Error} If `targetPath` is neither a plugin nor a repo root, a config fails to load,
- *   a transform fails, or (when `failFast`) post-build validation reports hard findings.
- */
-export async function runBuild(targetPath: string, opts?: BuildOptions): Promise<BuildResult[]> {
+async function generateAndValidateBuild(targetPath: string, opts?: BuildOptions) {
   const { repoRoot, pluginDirs, distDir } = await discoverPlugins(targetPath);
 
   // One per-invocation config memo shared across the build loop and registry collection, so each
@@ -1256,6 +1242,32 @@ export async function runBuild(targetPath: string, opts?: BuildOptions): Promise
     skipFreshness: true,
     skipPublishedSurfaceBoundary: true,
   });
+  return { results, validation };
+}
+
+/**
+ * Build one plugin or every plugin under a repo root (§8.1). `targetPath` is detected as a single
+ * plugin directory (contains `aipm.config.ts`) or a repo root (contains a `plugins/` directory).
+ *
+ * After emitting artifacts, runs `runValidate(targetPath, { skipFreshness: true })` per §5.4. When
+ * `opts.failFast` is set and validation reports hard findings, throws an Error summarizing them;
+ * otherwise the build results are returned and the caller (CLI) decides the exit code.
+ *
+ * @param targetPath - Absolute path to a plugin directory or repo root.
+ * @param opts - Build options.
+ * @returns One `BuildResult` per built plugin (length-1 for single-plugin input).
+ * @throws {Error} If `targetPath` is neither a plugin nor a repo root, a config fails to load,
+ *   a transform fails, or (when `failFast`) post-build validation reports hard findings.
+ */
+export async function runBuild(
+  targetPath: string,
+  opts?: BuildOptions,
+  onPipelineError?: (cause: unknown) => Promise<never>,
+): Promise<BuildResult[]> {
+  const pipeline = generateAndValidateBuild(targetPath, opts);
+  const { results, validation } = await (onPipelineError === undefined
+    ? pipeline
+    : pipeline.catch(onPipelineError));
   if (opts?.failFast && !validation.passed) {
     const hardFindings = validation.findings.filter((f) => f.severity === 'hard');
     const summary = hardFindings

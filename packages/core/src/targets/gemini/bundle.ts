@@ -6,7 +6,7 @@
  * @see docs/specs/architecture.md §12.4 (transform step + per-target folder layout)
  */
 
-import { inputExists, repositoryFs as fs } from '../../pipeline/repository-fs.js';
+import { repositoryFs as fs } from '../../pipeline/repository-fs.js';
 import * as path from 'node:path';
 
 import { convertClaudeHooksYamlToGeminiJson, rewriteAgentFrontmatterTools } from './transform.js';
@@ -34,8 +34,8 @@ function copyDir(src: string, dest: string): void {
   }
 }
 
-function copyIfExists(src: string, dest: string, expected: 'file' | 'directory'): boolean {
-  if (!inputExists(src, expected)) return false;
+function copyIfExists(src: string, dest: string): boolean {
+  if (!fs.existsSync(src)) return false;
   if (fs.statSync(src).isDirectory()) {
     copyDir(src, dest);
   } else {
@@ -130,13 +130,13 @@ export function bundleGeminiPlugin(
   // guard (build.ts) — generation must never try to own files it does not generate.
   const flatFiles = ['gemini-extension.json', 'GEMINI.md'];
   for (const name of flatFiles) {
-    copyIfExists(path.join(pluginDir, name), path.join(destDir, name), 'file');
+    copyIfExists(path.join(pluginDir, name), path.join(destDir, name));
   }
 
   // ── Directories: skills/ and agents/ ─────────────────────────────────────
   const plainDirs = ['skills', 'agents'];
   for (const dir of plainDirs) {
-    copyIfExists(path.join(pluginDir, dir), path.join(destDir, dir), 'directory');
+    copyIfExists(path.join(pluginDir, dir), path.join(destDir, dir));
   }
 
   // Rewrite agent tool names after copying

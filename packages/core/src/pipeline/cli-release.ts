@@ -3,13 +3,18 @@ import semver from 'semver';
 
 export const CLI_PACKAGE_NAME = '@ai-plugin-marketplace/cli';
 
-export function isRegistryRange(range: string): boolean {
-  // npm can classify archive suffixes as files even when SemVer accepts them.
-  return (
-    /^[\dA-Za-z.*+<>=^~|\s-]+$/.test(range) &&
-    !/\.(?:tgz|tar\.gz|tar)$/i.test(range.trimEnd()) &&
-    semver.validRange(range) !== null
-  );
+export function normalizeRegistryRange(range: string): string | null {
+  // Reject paths, protocols and archive suffixes before the loose parser can discard them.
+  if (/[/\\:]/.test(range) || /\.(?:tgz|tar\.gz|tar)$/i.test(range.trimEnd())) {
+    return null;
+  }
+  // Preserve strict input as written, including shorthand and build identifiers.
+  return semver.validRange(range) === null ? semver.validRange(range, { loose: true }) : range;
+}
+
+export function isNpmPublishVersion(version: unknown): boolean {
+  // npm's publish manifest uses semver.clean(), which discards build identifiers.
+  return typeof version === 'string' && semver.clean(version) === version;
 }
 
 export function validateCliRelease(value: unknown, source: string) {
@@ -22,7 +27,7 @@ export function validateCliRelease(value: unknown, source: string) {
     name !== CLI_PACKAGE_NAME ||
     typeof version !== 'string' ||
     version !== canonical ||
-    !isRegistryRange(`^${version}`) ||
+    normalizeRegistryRange(`^${version}`) !== `^${version}` ||
     !semver.satisfies(version, `^${version}`)
   ) {
     throw new Error(

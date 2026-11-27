@@ -1,6 +1,9 @@
 #!/usr/bin/env node
 import { execFileSync, spawnSync } from 'node:child_process';
-import { validateCliRelease } from '../../packages/core/dist/pipeline/cli-release.js';
+import {
+  isNpmPublishVersion,
+  validateCliRelease,
+} from '../../packages/core/dist/pipeline/cli-release.js';
 
 function requireFile(archive, path) {
   const listing = execFileSync('tar', ['-tvf', archive, '--', path], { encoding: 'utf8' });
@@ -14,9 +17,17 @@ function readManifest(archive, path) {
   return JSON.parse(execFileSync('tar', ['-xOf', archive, '--', path], { encoding: 'utf8' }));
 }
 
+function requirePublishVersion({ name, version }) {
+  if (!isNpmPublishVersion(version)) {
+    throw new Error(`Expected ${name}@${version} to have a version npm publishes unchanged.`);
+  }
+}
+
 function verify(archive, cliArchive) {
   const manifest = readManifest(archive, 'package/package.json');
   const expected = validateCliRelease(readManifest(cliArchive, 'package/package.json'), cliArchive);
+  requirePublishVersion(expected);
+  requirePublishVersion(manifest);
 
   if (manifest.name === '@ai-plugin-marketplace/core') {
     const path = 'package/dist/cli-release/package.json';

@@ -60,9 +60,9 @@
         "{workspaceRoot}/vitest.config.ts",
         "{workspaceRoot}/tsconfig.json",
         "{workspaceRoot}/docs/specs/architecture.md",
-        "{workspaceRoot}/docs/specs/scaffold-refresh-and-upgrade.md",
-        "{workspaceRoot}/docs/specs/open-plugins-target.md",
+        "{workspaceRoot}/CONTRIBUTING.md",
         "{workspaceRoot}/RELEASING.md",
+        "{workspaceRoot}/.github/scripts/verify-npm-publish.mjs",
         "{workspaceRoot}/.github/template-repo.rev",
         { "env": "AIPM_TEMPLATE_REPO" },
         { "env": "AIPM_REQUIRE_TEMPLATE" }

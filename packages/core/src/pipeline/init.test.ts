@@ -19,7 +19,6 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import semver from 'semver';
 
 import { init } from '../index.js';
-import { CLI_PACKAGE_NAME, validateCliRelease } from './cli-release.js';
 import { runValidate } from './validate.js';
 
 /** The base version for the generated core dependency. */
@@ -158,24 +157,12 @@ describe('init', () => {
     expect(fs.existsSync(repoDir)).toBe(false);
   });
 
-  it.each(['0.8.0+build.tgz', '0.8.0-rc.tgz', 'v0.8.0'])(
-    'rejects invalid bundled release version %s',
-    (version) => {
-      expect(() => validateCliRelease({ name: CLI_PACKAGE_NAME, version }, 'test fixture')).toThrow(
-        'Invalid CLI release metadata',
-      );
-    },
-  );
-
-  it('preserves the full version when bundled metadata includes a build identifier', () => {
-    const release = { name: CLI_PACKAGE_NAME, version: '0.8.0+build.1' };
-    expect(validateCliRelease(release, 'test fixture')).toEqual(release);
-  });
-
   it.each([
     `${CLI_VERSION}+foo.tgz`,
     `${CLI_VERSION}-rc.tgz`,
     `${CLI_VERSION}-rc.TAR.GZ`,
+    `0${CLI_VERSION}+build.tgz`,
+    './cli',
     'file:./cli.tgz',
     'https://example.com/cli.tgz',
   ])('rejects a non-registry cliVersion %s before writing', async (cliVersion) => {
@@ -200,6 +187,14 @@ describe('init', () => {
     expect(readPackageJson(repoDir).devDependencies?.['@ai-plugin-marketplace/cli']).toBe(
       `^${cliVersion}`,
     );
+  });
+
+  it('normalizes a compatible loose compound range in the scaffold', async () => {
+    const repoDir = path.join(tmpDir, 'loose-compound-range');
+    await init(repoDir, { cliVersion: `0.0.1 || 0${CLI_VERSION}` });
+    const range = readPackageJson(repoDir).devDependencies?.['@ai-plugin-marketplace/cli'];
+    expect(range).toBe(semver.validRange(`^0.0.1 || ${CLI_VERSION}`));
+    expect(semver.satisfies(CLI_VERSION, range ?? '')).toBe(true);
   });
 
   it('writes the verified range when cliVersion is read through a getter', async () => {

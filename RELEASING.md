@@ -24,8 +24,10 @@ Release artifacts must go through `pnpm build` and `pnpm pack`. The release work
 workspace build and packs a CLI reference tarball. Changesets publishes through pnpm with
 lifecycle scripts enabled. The release workflow also verifies the tarballs pnpm hands to npm.
 It checks core's bundled CLI name and version against the CLI reference, requires core's runtime
-and types files, and checks the CLI tarball's identity against the same reference. A raw TypeScript
-build cannot prepare a release. To check the tarballs locally:
+and types files, and checks the CLI tarball's identity against the same reference. Use package
+versions npm publishes unchanged. The verifier rejects versions npm would rewrite, including
+versions with build identifiers. A raw TypeScript build cannot prepare a release. To check the
+tarballs locally:
 
 ```sh
 pnpm build

@@ -21,15 +21,15 @@ import * as fs from 'node:fs';
 import * as path from 'node:path';
 import semver from 'semver';
 
-import { CLI_PACKAGE_NAME, isRegistryRange, readCliRelease } from './cli-release.js';
+import { CLI_PACKAGE_NAME, normalizeRegistryRange, readCliRelease } from './cli-release.js';
 import { getGeneratorVersion } from './generator-version.js';
 import { buildInitFiles } from './init-template.js';
 import { writeScaffoldSidecar } from './scaffold-refresh.js';
 import type { InitOptions, InitOutcome } from './types.js';
 
 function resolveCliRange(cliRelease: string, override?: string): string {
-  const range = `^${override ?? cliRelease}`;
-  if (!isRegistryRange(range)) {
+  const range = normalizeRegistryRange(`^${override ?? cliRelease}`);
+  if (range === null) {
     throw new Error(
       "Invalid 'cliVersion': expected a version that can be used as a caret range for the npm registry.",
     );

@@ -41,7 +41,6 @@ beforeEach(() => {
     'tsconfig.base.json',
     'api-extractor-base.json',
     '.gitignore',
-    '.github/scripts',
   ]) {
     cpSync(join(workspace, file), join(checkout, file), { recursive: true });
   }
@@ -284,7 +283,7 @@ it.skipIf(process.platform === 'win32' || process.getuid?.() === 0)(
   60_000,
 );
 
-it('accepts stable shorthand and rejects it for the corresponding prerelease', async () => {
+it('normalizes compatible loose ranges and checks shorthand against prereleases', async () => {
   const manifest = readManifest(cliManifest);
   writeFileSync(join(checkout, cliManifest), JSON.stringify({ ...manifest, version: '0.8.0' }));
   await assertPnpm('--filter', corePackageName, 'build');
@@ -292,6 +291,22 @@ it('accepts stable shorthand and rejects it for the corresponding prerelease', a
   const stable = await publicInit('stable', '0.8');
   expect(stable.status, stable.stderr).toBe(0);
   assertScaffoldedRelease('stable', '0.8');
+
+  for (const [dir, override] of [
+    ['leading-zero', '0.08.0'],
+    ['comma', '0.8.0 , >=0.8.0'],
+  ] as const) {
+    const loose = await publicInit(dir, override);
+    expect(loose.status, loose.stderr).toBe(0);
+    const range = readManifest(`${dir}/package.json`).devDependencies?.[cliPackageName] ?? '';
+    expect(semver.validRange(range)).toBe(range);
+    expect(semver.satisfies('0.8.0', range)).toBe(true);
+  }
+
+  const incompatible = await publicInit('incompatible-loose', '0.09.0');
+  expect(incompatible.status).not.toBe(0);
+  expect(incompatible.stderr).toContain('excludes @ai-plugin-marketplace/cli@0.8.0');
+  expect(existsSync(join(checkout, 'incompatible-loose'))).toBe(false);
 
   writeFileSync(
     join(checkout, cliManifest),
@@ -355,6 +370,9 @@ it('refuses to pack core with missing, invalid, or stale metadata or missing ent
     { ...bundled, version: 'invalid' },
     { ...bundled, name: '@example/invalid-cli' },
     { ...bundled, version: '9007199254740991.0.0' },
+    { ...bundled, version: '0.8.0+build.tgz' },
+    { ...bundled, version: '0.8.0-rc.tgz' },
+    { ...bundled, version: 'v0.8.0' },
   ]) {
     const json = JSON.stringify(invalid);
     writeFileSync(sourcePath, json);
@@ -396,6 +414,9 @@ it('refuses to pack core with missing, invalid, or stale metadata or missing ent
 it.skipIf(process.platform === 'win32')(
   'checks the tarball passed to npm by pnpm publish even when pack hooks are skipped',
   async () => {
+    const verifier = '.github/scripts/verify-npm-publish.mjs';
+    mkdirSync(join(checkout, '.github/scripts'), { recursive: true });
+    cpSync(join(workspace, verifier), join(checkout, verifier));
     await assertPnpm('build');
     const cliTarball = join(checkout, 'cli.tgz');
     await assertPnpm('--filter', cliPackageName, 'pack', '--out', cliTarball);
@@ -408,12 +429,14 @@ it.skipIf(process.platform === 'win32')(
         'npm_config_offline=true',
         'npm_config_loglevel=notice',
         'npm_config_registry=http://127.0.0.1:1',
-        `npm_config_npm_path=${join(checkout, '.github/scripts/verify-npm-publish.mjs')}`,
+        `npm_config_npm_path=${join(checkout, verifier)}`,
         `AIPM_RELEASE_CLI_TARBALL=${cliTarball}`,
         'pnpm',
         'publish',
         '--dry-run',
         '--no-git-checks',
+        '--tag',
+        'next',
       );
     }
 
@@ -433,6 +456,32 @@ it.skipIf(process.platform === 'win32')(
     const bundledPath = join(checkout, bundledManifest);
     const identity = readManifest(bundledManifest);
     const differentVersion = semver.inc(identity.version, 'major');
+    const cli = join(checkout, cliManifest);
+    const cliContents = readFileSync(cli);
+    const releaseWithBuild = '0.8.1-review.0+qa.1';
+    writeFileSync(cli, JSON.stringify({ ...readManifest(cliManifest), version: releaseWithBuild }));
+    writeFileSync(bundledPath, JSON.stringify({ ...identity, version: releaseWithBuild }));
+    await assertPnpm('--filter', cliPackageName, 'pack', '--out', cliTarball);
+    for (const pkg of ['core', 'cli'] as const) {
+      await assertRejected(
+        `${cliPackageName}@${releaseWithBuild} to have a version npm publishes unchanged`,
+        pkg,
+      );
+    }
+    writeFileSync(cli, cliContents);
+    await assertPnpm('--filter', cliPackageName, 'pack', '--out', cliTarball);
+    writeFileSync(bundledPath, JSON.stringify(identity));
+
+    const coreManifest = 'packages/core/package.json';
+    const core = join(checkout, coreManifest);
+    const coreContents = readFileSync(core);
+    const coreWithBuild = `${readManifest(coreManifest).version}+qa.1`;
+    writeFileSync(core, JSON.stringify({ ...readManifest(coreManifest), version: coreWithBuild }));
+    await assertRejected(
+      `${corePackageName}@${coreWithBuild} to have a version npm publishes unchanged`,
+    );
+    writeFileSync(core, coreContents);
+
     rmSync(bundledPath);
     await assertRejected('package/dist/cli-release/package.json');
     writeFileSync(bundledPath, '{');
@@ -456,7 +505,6 @@ it.skipIf(process.platform === 'win32')(
     await assertRejected('package/dist/index.js');
     writeFileSync(runtimeEntry, runtime);
 
-    const coreManifest = 'packages/core/package.json';
     const withoutTypes = JSON.parse(readFileSync(join(checkout, coreManifest), 'utf8')) as {
       types?: string;
     };
@@ -464,7 +512,6 @@ it.skipIf(process.platform === 'win32')(
     writeFileSync(join(checkout, coreManifest), JSON.stringify(withoutTypes));
     await assertRejected('Core must declare runtime and types entry points.');
 
-    const cli = join(checkout, cliManifest);
     writeFileSync(cli, JSON.stringify({ ...readManifest(cliManifest), version: differentVersion }));
     await assertRejected('CLI publish tarball differs', 'cli');
   },

@@ -11,7 +11,6 @@
  * with `core 0.2.0`), so the generated `package.json` pins each to a caret of its *own* version.
  * `core`'s version is read at runtime from this package's `package.json` (resolved relative to
  * {@link import.meta.url}); the default CLI release comes from the CLI manifest at build time.
- * The CLI entrypoint supplies its own installed manifest via initFromCli.
  *
  * @see docs/specs/architecture.md §3.2 (template repo contents)
  * @see docs/specs/architecture.md §11 (template→toolkit dependency contract)
@@ -153,37 +152,7 @@ function findAncestorPnpmWorkspace(dir: string): string | undefined {
  *   {@link findAncestorPnpmWorkspace}), is `undefined` otherwise.
  * @throws {Error} When the target cannot be scaffolded into or the CLI range cannot be verified.
  */
-export function runInit(targetDir: string, opts?: InitOptions): Promise<InitOutcome> {
-  return writeInit(targetDir, opts, () => {
-    // The same workspace manifest is copied into dist by the TypeScript project reference.
-    const bundledRelease = readCliRelease(
-      new URL(
-        import.meta.url.endsWith('.ts')
-          ? '../../../cli/package.json'
-          : '../cli-release/package.json',
-        import.meta.url,
-      ),
-    );
-    return resolveCliRange(bundledRelease, opts?.cliVersion);
-  });
-}
-
-type InitNames = Pick<InitOptions, 'name' | 'marketplaceName'>;
-
-/** Scaffold for the CLI command using the release in its installed manifest. */
-export function runInitForCli(
-  targetDir: string,
-  cliPackageJson: URL,
-  opts?: InitNames,
-): Promise<InitOutcome> {
-  return writeInit(targetDir, opts, () => resolveCliRange(readCliRelease(cliPackageJson)));
-}
-
-async function writeInit(
-  targetDir: string,
-  opts: InitNames | undefined,
-  getCliRange: () => string,
-): Promise<InitOutcome> {
+export async function runInit(targetDir: string, opts?: InitOptions): Promise<InitOutcome> {
   const resolved = path.resolve(targetDir);
 
   if (!isFreshTarget(resolved)) {
@@ -193,7 +162,14 @@ async function writeInit(
     );
   }
 
-  const cliRange = getCliRange();
+  // Source tests read the workspace manifest. Published core reads the build's bundled copy.
+  const bundledRelease = readCliRelease(
+    new URL(
+      import.meta.url.endsWith('.ts') ? '../../../cli/package.json' : '../cli-release/package.json',
+      import.meta.url,
+    ),
+  );
+  const cliRange = resolveCliRange(bundledRelease, opts?.cliVersion);
 
   // Detected before writing anything, since the check is independent of the scaffold write below
   // and cheap to do up front. Note this does NOT reach the caller if a later step throws (name

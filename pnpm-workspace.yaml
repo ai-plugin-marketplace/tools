@@ -1,5 +1,6 @@
 packages:
   - 'packages/*'
+  - scripts/tsc
 
 # Allow Nx (and its esbuild dependency) to run their postinstall scripts so the
 # native task-runner / daemon binaries are available. Nx is a build/cache tool;
@@ -7,7 +8,3 @@ packages:
 onlyBuiltDependencies:
   - nx
   - esbuild
-
-# Keep the CLI manifest copy current even when TypeScript would skip it by timestamp.
-patchedDependencies:
-  typescript@5.9.3: patches/typescript@5.9.3.patch

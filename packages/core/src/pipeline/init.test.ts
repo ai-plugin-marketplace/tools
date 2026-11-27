@@ -19,7 +19,6 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import semver from 'semver';
 
 import { init } from '../index.js';
-import { initFromCli } from '../init-cli.js';
 import { runValidate } from './validate.js';
 
 /** The base version for the generated core dependency. */
@@ -188,15 +187,6 @@ describe('init', () => {
     expect(fs.existsSync(repoDir)).toBe(false);
   });
 
-  it('preserves a compatible major.minor shorthand in the rendered range', async () => {
-    const repoDir = path.join(tmpDir, 'compatible-version-shorthand');
-    const cliVersion = `${String(semver.major(CLI_VERSION))}.${String(semver.minor(CLI_VERSION))}`;
-    await init(repoDir, { cliVersion });
-    expect(readPackageJson(repoDir).devDependencies?.['@ai-plugin-marketplace/cli']).toBe(
-      `^${cliVersion}`,
-    );
-  });
-
   it('ignores extra manifest input to public init', async () => {
     const repoDir = path.join(tmpDir, 'extra-manifest');
     const opts = {
@@ -209,15 +199,6 @@ describe('init', () => {
     expect(readPackageJson(repoDir).devDependencies?.['@ai-plugin-marketplace/cli']).toBe(
       `^${CLI_VERSION}`,
     );
-  });
-
-  it('rejects a core manifest passed to the CLI entry point without writing', async () => {
-    const repoDir = path.join(tmpDir, 'wrong-package-manifest');
-    const coreManifest = new URL('../../package.json', import.meta.url);
-    await expect(initFromCli(repoDir, coreManifest)).rejects.toThrow(
-      'Invalid CLI release metadata',
-    );
-    expect(fs.existsSync(repoDir)).toBe(false);
   });
 
   it('pins pnpm via packageManager so CI resolves a pnpm version (§3.2)', async () => {

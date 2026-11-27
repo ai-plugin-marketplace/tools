@@ -21,6 +21,10 @@ pnpm run fix:format   # auto-format everything
 pnpm run fix:lint-ts  # auto-fix lint across packages
 ```
 
+The workspace `tsc` command copies the CLI manifest into core's build output by content.
+`pnpm run build`, `pnpm exec tsc --build`, and the CLI package build all use this command.
+Core's pack step checks the bundled manifest against the CLI manifest.
+
 A **pre-commit hook** (husky + lint-staged) auto-formats staged files and runs ESLint `--fix`
 before each commit. If the hook fails, fix the reported issues then re-stage and retry.
 

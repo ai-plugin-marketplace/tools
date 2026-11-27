@@ -11,15 +11,10 @@
       "types": "./dist/core.d.ts",
       "import": "./dist/index.js"
     },
-    "./init-cli": {
-      "types": "./dist/init-cli.d.ts",
-      "import": "./dist/init-cli.js"
-    },
     "./package.json": "./package.json"
   },
   "files": [
     "dist",
-    "!dist/cli-release/cli-release.tsbuildinfo",
     "README.md",
     "LICENSE"
   ],

@@ -13,9 +13,11 @@
       "{workspaceRoot}/tsconfig.base.json",
       "{workspaceRoot}/eslint.config.mjs",
       "{workspaceRoot}/.prettierrc.json",
-      // Core embeds the CLI version without taking a runtime dependency on the CLI.
-      "{workspaceRoot}/packages/cli/package.json",
-      "{workspaceRoot}/patches/typescript@*.patch"
+      // Hash the manifest bytes even when its mtime is unchanged and Nx can reuse its file map.
+      {
+        "runtime": "node -p \"require('node:crypto').createHash('sha256').update(require('node:fs').readFileSync('packages/cli/package.json')).digest('hex')\""
+      },
+      "{workspaceRoot}/scripts/tsc/**/*"
     ]
   },
   "targetDefaults": {

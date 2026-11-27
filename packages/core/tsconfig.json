@@ -4,7 +4,6 @@
     "outDir": "./dist",
     "rootDir": "./src"
   },
-  "references": [{ "path": "./tsconfig.cli-release.json" }],
   "include": ["src/**/*"],
   "exclude": ["src/**/*.test.ts", "src/test-support/**", "dist", "node_modules"]
 }

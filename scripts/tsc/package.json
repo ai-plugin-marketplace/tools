@@ -1,0 +1,11 @@
+{
+  "name": "@ai-plugin-marketplace/tsc",
+  "version": "0.0.0",
+  "private": true,
+  "bin": {
+    "tsc": "./tsc.mjs"
+  },
+  "dependencies": {
+    "typescript": "^5.7.3"
+  }
+}

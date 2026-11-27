@@ -31,10 +31,12 @@
     "clean": "rimraf dist *.tsbuildinfo"
   },
   "dependencies": {
-    "@ai-plugin-marketplace/core": "workspace:^"
+    "@ai-plugin-marketplace/core": "workspace:^",
+    "semver": "^7.7.4"
   },
   "devDependencies": {
     "@cfworker/json-schema": "^4.1.1",
+    "@types/semver": "^7.7.1",
     "skills": "^1.8.1"
   },
   "publishConfig": {

@@ -1,9 +1,11 @@
-import { execFile, execFileSync } from 'node:child_process';
+import { execFile } from 'node:child_process';
 import {
   cpSync,
+  existsSync,
   mkdirSync,
   mkdtempSync,
   readFileSync,
+  readdirSync,
   rmSync,
   statSync,
   symlinkSync,
@@ -21,7 +23,7 @@ const workspace = fileURLToPath(new URL('../../../../', import.meta.url));
 const corePackageName = '@ai-plugin-marketplace/core';
 const cliPackageName = '@ai-plugin-marketplace/cli';
 const bundledManifest = 'packages/core/dist/cli-release/package.json';
-const releaseBuildInfo = 'packages/core/dist/cli-release/cli-release.tsbuildinfo';
+const coreBuildInfo = 'packages/core/tsconfig.tsbuildinfo';
 const cliManifest = 'packages/cli/package.json';
 
 let checkout: string;
@@ -35,7 +37,9 @@ beforeEach(() => {
     'tsconfig.json',
     'tsconfig.base.json',
     'api-extractor-base.json',
-    'patches',
+    '.gitignore',
+    'scripts/tsc/package.json',
+    'scripts/tsc/tsc.mjs',
   ]) {
     cpSync(join(workspace, file), join(checkout, file), { recursive: true });
   }
@@ -48,13 +52,21 @@ beforeEach(() => {
   }
 
   symlinkSync(join(workspace, 'node_modules'), join(checkout, 'node_modules'), 'junction');
-  symlinkSync(
-    join(workspace, 'packages/core/node_modules'),
-    join(checkout, 'packages/core/node_modules'),
-    'junction',
-  );
-  const cliLinkedScope = join(checkout, 'packages/cli/node_modules/@ai-plugin-marketplace');
+  const coreDependencies = join(workspace, 'packages/core/node_modules');
+  if (existsSync(coreDependencies)) {
+    symlinkSync(coreDependencies, join(checkout, 'packages/core/node_modules'), 'junction');
+  }
+  const cliDependencies = join(workspace, 'packages/cli/node_modules');
+  const cliFixtureDependencies = join(checkout, 'packages/cli/node_modules');
+  const cliLinkedScope = join(cliFixtureDependencies, '@ai-plugin-marketplace');
   mkdirSync(cliLinkedScope, { recursive: true });
+  // Reuse installed dependencies while keeping the CLI linked to core within this fixture.
+  if (existsSync(cliDependencies)) {
+    for (const entry of readdirSync(cliDependencies)) {
+      if (entry === '@ai-plugin-marketplace' || entry.startsWith('.')) continue;
+      symlinkSync(join(cliDependencies, entry), join(cliFixtureDependencies, entry), 'junction');
+    }
+  }
   symlinkSync(join(checkout, 'packages/core'), join(cliLinkedScope, 'core'), 'junction');
 });
 
@@ -62,11 +74,16 @@ afterEach(() => {
   rmSync(checkout, { recursive: true, force: true });
 });
 
+function pnpmCommand(platform: NodeJS.Platform, args: string[]): [string, ...string[]] {
+  // cmd.exe resolves either the standalone pnpm.exe or a pnpm.cmd shim. Arguments are fixed.
+  return platform === 'win32' ? ['cmd.exe', '/d', '/c', 'pnpm', ...args] : ['pnpm', ...args];
+}
+
 function runPnpm(...args: string[]) {
-  // Windows exposes pnpm through a .cmd shim. These arguments are fixed test commands.
-  const windows = process.platform === 'win32';
-  const command = windows ? 'cmd.exe' : 'pnpm';
-  const commandArgs = windows ? ['/d', '/c', 'pnpm.cmd', ...args] : args;
+  return runCommand(...pnpmCommand(process.platform, args));
+}
+
+function runCommand(command: string, ...commandArgs: string[]) {
   return new Promise<{ status: number; stdout: string; stderr: string }>((resolve, reject) => {
     execFile(
       command,
@@ -79,7 +96,7 @@ function runPnpm(...args: string[]) {
       },
       (error, stdout, stderr) => {
         if (error && typeof error.code !== 'number') {
-          reject(new Error('Unable to run pnpm.', { cause: error }));
+          reject(new Error(`Unable to run ${command}.`, { cause: error }));
           return;
         }
         resolve({ status: error?.code ?? 0, stdout, stderr });
@@ -108,22 +125,39 @@ function assertScaffoldedRelease(dir: string, version: string): void {
   );
 }
 
-function assertPublicInit(dir: string, version: string): void {
-  execFileSync(
+function publicInit(dir: string, cliVersion?: string) {
+  return runCommand(
     process.execPath,
-    [
-      '--input-type=module',
-      '--eval',
-      "import { init } from '@ai-plugin-marketplace/core'; await init(process.argv[1]);",
-      join(checkout, dir),
-    ],
-    { cwd: join(checkout, 'packages/core') },
+    '--input-type=module',
+    '--eval',
+    `import { init } from './packages/core/dist/index.js';
+     const [dir, cliVersion] = process.argv.slice(1);
+     await init(dir, cliVersion === undefined ? undefined : { cliVersion });`,
+    dir,
+    ...(cliVersion === undefined ? [] : [cliVersion]),
   );
+}
+
+async function assertPublicInit(dir: string, version: string): Promise<void> {
+  const { status, stderr } = await publicInit(dir);
+  expect(status, stderr).toBe(0);
   assertScaffoldedRelease(dir, version);
 }
 
+it('lets Windows resolve pnpm through PATHEXT', () => {
+  expect(pnpmCommand('win32', ['exec', 'tsc', '--build'])).toEqual([
+    'cmd.exe',
+    '/d',
+    '/c',
+    'pnpm',
+    'exec',
+    'tsc',
+    '--build',
+  ]);
+});
+
 it.each([
-  { path: 'workspace build', args: ['build', '--skip-nx-cache'] },
+  { path: 'workspace build', args: ['build'] },
   { path: 'TypeScript project references', args: ['exec', 'tsc', '--build'] },
   { path: 'CLI package build', args: ['--filter', cliPackageName, 'run', 'build'] },
 ])(
@@ -137,17 +171,14 @@ it.each([
     const manifest = readManifest(cliManifest);
     await assertPnpm(...args);
     expect(readManifest(bundledManifest)).toEqual(manifest);
-    assertPublicInit('initial', manifest.version);
+    await assertPublicInit('initial', manifest.version);
 
-    // Remove just the output and retain the metadata project's incremental build state.
-    const buildInfo = join(checkout, releaseBuildInfo);
-    expect(statSync(buildInfo).isFile()).toBe(true);
+    // Remove just the metadata, leaving TypeScript's incremental state and source unchanged.
+    expect(statSync(join(checkout, coreBuildInfo)).isFile()).toBe(true);
     rmSync(join(checkout, bundledManifest));
-    const initSource = join(checkout, 'packages/core/src/pipeline/init.ts');
-    writeFileSync(initSource, readFileSync(initSource, 'utf8') + '\n// Incremental build probe.\n');
     await assertPnpm(...args);
     expect(readManifest(bundledManifest)).toEqual(manifest);
-    assertPublicInit('recreated', manifest.version);
+    await assertPublicInit('recreated', manifest.version);
 
     const version = semver.inc(manifest.version, 'major');
     if (version === null) throw new Error('Expected a valid CLI release.');
@@ -157,18 +188,61 @@ it.each([
     expect(statSync(sourceManifest).mtimeMs).toBe(originalMtime);
 
     // The already-built CLI reads its own manifest while core still holds the previous bundle.
-    execFileSync(process.execPath, ['packages/cli/dist/bin.js', 'init', 'from-cli'], {
-      cwd: checkout,
-    });
+    const fromCli = await runCommand(
+      process.execPath,
+      'packages/cli/dist/bin.js',
+      'init',
+      'from-cli',
+    );
+    expect(fromCli.status, fromCli.stderr).toBe(0);
+    expect(fromCli.stdout).toContain('Created plugin repo');
     assertScaffoldedRelease('from-cli', version);
-    assertPublicInit('still-bundled', manifest.version);
+    await assertPublicInit('still-bundled', manifest.version);
 
     await assertPnpm(...args);
     expect(readManifest(bundledManifest)).toEqual(updated);
-    assertPublicInit('updated', version);
+    await assertPublicInit('updated', version);
   },
   190_000,
 );
+
+it('accepts stable shorthand and rejects it for the corresponding prerelease', async () => {
+  const manifest = readManifest(cliManifest);
+  writeFileSync(join(checkout, cliManifest), JSON.stringify({ ...manifest, version: '0.8.0' }));
+  await assertPnpm('exec', 'tsc', '--build', 'packages/core');
+
+  const stable = await publicInit('stable', '0.8');
+  expect(stable.status, stable.stderr).toBe(0);
+  assertScaffoldedRelease('stable', '0.8');
+
+  writeFileSync(
+    join(checkout, cliManifest),
+    JSON.stringify({ ...manifest, version: '0.8.0-next.0' }),
+  );
+  await assertPnpm('exec', 'tsc', '--build', 'packages/core');
+  await assertPublicInit('default-prerelease', '0.8.0-next.0');
+
+  const prerelease = await publicInit('excluded-prerelease', '0.8');
+  expect(prerelease.status).not.toBe(0);
+  expect(prerelease.stderr).toContain('excludes @ai-plugin-marketplace/cli@0.8.0-next.0');
+  expect(existsSync(join(checkout, 'excluded-prerelease'))).toBe(false);
+}, 120_000);
+
+it('rejects an invalid installed CLI manifest before writing the scaffold', async () => {
+  await assertPnpm('exec', 'tsc', '--build');
+  const manifest = { ...readManifest(cliManifest), name: '@example/invalid-cli' };
+  writeFileSync(join(checkout, cliManifest), JSON.stringify(manifest));
+  const result = await runCommand(
+    process.execPath,
+    'packages/cli/dist/bin.js',
+    'init',
+    'invalid-cli',
+  );
+  expect(result.status).not.toBe(0);
+  expect(result.stderr).toContain('Invalid CLI release metadata');
+  expect(result.stdout).not.toContain('Created plugin repo');
+  expect(existsSync(join(checkout, 'invalid-cli'))).toBe(false);
+}, 60_000);
 
 it('refuses to pack core with missing or stale metadata', async () => {
   const pack = ['--filter', corePackageName, 'pack', '--json'];
@@ -187,7 +261,6 @@ it('refuses to pack core with missing or stale metadata', async () => {
   const packed = await runPnpm(...pack);
   expect(packed.status, packed.stdout + packed.stderr).toBe(0);
   expect(packed.stdout).toContain('dist/cli-release/package.json');
-  expect(packed.stdout).not.toContain('cli-release.tsbuildinfo');
 });
 
 it('runs the core built-package smoke test directly from a clean checkout', async () => {

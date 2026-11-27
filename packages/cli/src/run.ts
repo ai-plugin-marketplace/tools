@@ -43,7 +43,7 @@ import type {
   TargetId,
   ValidationResult,
 } from '@ai-plugin-marketplace/core';
-import { initFromCli } from '@ai-plugin-marketplace/core/init-cli';
+import { initFromCli } from './init.js';
 import { buildLintJson, buildLintSarif, formatLintText, lintExitCode } from './lint-format.js';
 import type { LintFormat } from './lint-format.js';
 
@@ -272,10 +272,10 @@ export async function run(argv: readonly string[], opts: RunOptions = {}): Promi
         // `--name` sets BOTH the package.json name and the marketplace name: the marketplace name
         // is the identity that matters (must be unique across marketplaces), and tying the repo
         // name to it reads cleanly for a freshly scaffolded repo.
-        const outcome = await initFromCli(dir, cliPackageJson, {
+        const created = path.resolve(dir);
+        const outcome = await initFromCli(created, cliPackageJson, {
           ...(nameOpt !== undefined ? { name: nameOpt, marketplaceName: nameOpt } : {}),
         });
-        const created = path.resolve(dir);
         out.write(`Created plugin repo at ${created}.\n`);
         // Issue #96: an ancestor pnpm-workspace.yaml means a `pnpm install` from `created` can be
         // swept into that ancestor's workspace (shared lockfile/hoisting) instead of staying

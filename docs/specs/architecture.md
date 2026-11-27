@@ -501,6 +501,8 @@ export interface MigrateResult {
 
 export interface InitOptions {
   name?: string; // repo name in the generated package.json; defaults to basename(dir)
+  marketplaceName?: string;
+  cliVersion?: string;
 }
 
 export interface InitOutcome {
@@ -510,7 +512,7 @@ export interface InitOutcome {
 }
 ```
 
-**Why `init` lives in `core`.** `init` scaffolds the thin consumer repo described in §3.2 — `package.json` (private, ESM, with the `@ai-plugin-marketplace/cli` dev dependency pinned to a caret of the current toolkit version), both repo-root marketplace registries, an empty `plugins/`, a README, and a CI workflow that runs `aipm build` then `aipm validate` (§10.5). Pinning the dev dependency in lockstep with `core` (§9.1) is the seam that makes `pnpm up` the single upgrade path (§11). It refuses to write into a non-empty directory.
+**Why `init` lives in `core`.** `init` scaffolds the thin consumer repo described in §3.2. The generated `package.json` uses separate caret ranges for core and CLI. Core reads its own installed version and bundles the CLI's release name and version as the default. Programmatic callers can set the caret base with `opts.cliVersion`, using a full version or compatible shorthand such as `0.8`. The resulting range must include the bundled CLI release. The `aipm init` command uses the release in its own installed manifest. The scaffold also writes the repo-root marketplace registries, an empty `plugins/`, a README, and a CI workflow that runs `aipm build` then `aipm validate` (§10.5). It refuses to write into a non-empty directory.
 
 **Ancestor-workspace guard (issue #96).** `init` always writes a local `package.json`, but a directory nested under an ancestor `pnpm-workspace.yaml` can still have a later `pnpm install` swept into that ancestor workspace (shared lockfile/hoisting) instead of staying local. `init` walks up from the target directory looking for an ancestor `pnpm-workspace.yaml` and reports it via `InitOutcome.ancestorWorkspace`; the `aipm init` CLI surface prints a warning to stderr when it is set, before instructing the user to run `pnpm install`.
 
@@ -534,16 +536,16 @@ export interface InitOutcome {
 
 **Subcommands.**
 
-| Subcommand                          | Wraps                                  |
-| ----------------------------------- | -------------------------------------- |
-| `aipm init [dir]`                   | `core.init(dir)` — default cwd         |
-| `aipm build [path]`                 | `core.build(path)` — default cwd       |
-| `aipm validate [path]`              | `core.validate(path)`                  |
-| `aipm scaffold <name>`              | `core.scaffold(name)`                  |
-| `aipm migrate [path]`               | `core.migrate(path)` — no-op in v0.1.0 |
-| `aipm check-support <plugin>`       | `core.checkSupport(pluginDir)`         |
-| `aipm add-target <plugin> <target>` | `core.addTarget(pluginDir, target)`    |
-| `aipm list-targets`                 | `core.listTargets()`                   |
+| Subcommand                          | Wraps                                     |
+| ----------------------------------- | ----------------------------------------- |
+| `aipm init [dir]`                   | Scaffolds using the installed CLI version |
+| `aipm build [path]`                 | `core.build(path)` — default cwd          |
+| `aipm validate [path]`              | `core.validate(path)`                     |
+| `aipm scaffold <name>`              | `core.scaffold(name)`                     |
+| `aipm migrate [path]`               | `core.migrate(path)` — no-op in v0.1.0    |
+| `aipm check-support <plugin>`       | `core.checkSupport(pluginDir)`            |
+| `aipm add-target <plugin> <target>` | `core.addTarget(pluginDir, target)`       |
+| `aipm list-targets`                 | `core.listTargets()`                      |
 
 **Naming convention.** CLI subcommand names are kebab-case; `core` exports are camelCase. The CLI handles the mapping at its argv boundary; downstream consumers never see the hyphenated form.
 
@@ -565,11 +567,11 @@ Extractions are additive and do not break existing consumers. See §12.4 for the
 
 ### 9.1 Three independent version lines
 
-| Axis                                     | What it versions                                   | Where it lives                                          |
-| ---------------------------------------- | -------------------------------------------------- | ------------------------------------------------------- |
-| **Toolkit version**                      | The `@ai-plugin-marketplace/*` packages (lockstep) | Each package's `package.json`                           |
-| **Plugin version**                       | The author's plugin content                        | `version` field in `aipm.config.ts`                     |
-| **Schema version** (per manifest family) | The shape of a target's manifest                   | Reserved `schemaVersion` field in each manifest (§12.2) |
+| Axis                                     | What it versions                                      | Where it lives                                          |
+| ---------------------------------------- | ----------------------------------------------------- | ------------------------------------------------------- |
+| **Toolkit version**                      | Each `@ai-plugin-marketplace/*` package independently | Each package's `package.json`                           |
+| **Plugin version**                       | The author's plugin content                           | `version` field in `aipm.config.ts`                     |
+| **Schema version** (per manifest family) | The shape of a target's manifest                      | Reserved `schemaVersion` field in each manifest (§12.2) |
 
 Independent: a patch toolkit release may leave all plugin and schema versions unchanged; a plugin author publishing `v1.2.0` does not trigger a toolkit version change.
 
@@ -685,17 +687,7 @@ The comparison is **version-stamp-agnostic** (§4.3.1): an artifact that differs
 
 ### 11.1 Pinning
 
-With two packages, the template's `package.json` is simple:
-
-```json
-{
-  "dependencies": {
-    "@ai-plugin-marketplace/cli": "^0.1.0"
-  }
-}
-```
-
-`cli` pins its `core` dependency to an exact version; transitively the template always gets a consistent pair. No `pnpm.overrides` needed in v0.1.0.
+The scaffold writes `@ai-plugin-marketplace/cli` and `@ai-plugin-marketplace/core` as dev dependencies. Each range is based on its own package version. In the toolkit workspace the CLI depends on core via `workspace:^`, which pnpm converts to a caret range when packaging the CLI.
 
 ### 11.2 Pinning when more packages exist
 
@@ -705,22 +697,25 @@ When additional packages are extracted (§12.4), the template will depend on a s
 
 ### 11.3 Upgrade flow
 
-Routine minor/patch:
+Use this command when both versions fit their existing dependency ranges and the selected core
+version satisfies the selected CLI release's core dependency range:
 
-```
-pnpm up @ai-plugin-marketplace/cli
-aipm build
-git commit -am "chore: upgrade @ai-plugin-marketplace to X.Y.Z"
+```sh
+pnpm up @ai-plugin-marketplace/cli @ai-plugin-marketplace/core
+pnpm exec aipm build
 ```
 
-Major:
+To cross a caret boundary, including a pre-1.0 minor line, select versions for both packages.
+For example, CLI `0.8.0` depends on core `^0.11.0`. With an existing core range `^0.10.0`,
+select a compatible pair explicitly:
 
+```sh
+pnpm add -D @ai-plugin-marketplace/cli@0.8.0 @ai-plugin-marketplace/core@0.11.0
+pnpm exec aipm build
 ```
-pnpm up @ai-plugin-marketplace/cli@latest
-aipm migrate
-aipm build
-git commit -am "chore: upgrade to @ai-plugin-marketplace vN"
-```
+
+For a major upgrade that requires migration, run `pnpm exec aipm migrate` before `pnpm exec aipm build`.
+Commit the updated manifests, lockfile, and generated artifacts.
 
 ### 11.4 What the template may customize
 
@@ -874,7 +869,7 @@ How do authors test their plugins? A `@ai-plugin-marketplace/testing` package (o
 - **Schema version** — the shape version of a target's manifest, stored in the manifest's `schemaVersion` field. Reserved in v0.1.0; consumed by future migrations. See §9.4, §12.2.
 - **Target** — a host-platform identity: `claude`, `cursor`, `gemini`, `kiro`, `vercel`, and future additions. A value, not a module.
 - **Target module** — the internal toolkit code implementing a target. Lives under `core/src/targets/<id>/`. Interface is internal and unstable in v0.1.0.
-- **Toolkit version** — the semver of `@ai-plugin-marketplace/*` packages, released in lockstep. See §9.
+- **Toolkit version** — the independently released semver version of a `@ai-plugin-marketplace/*` package. See §9.
 - **Transform step** — the named middle stage of the build pipeline: `transform(PluginSource) → PluginBuild`. The pipeline's seam for future renderers. Distinct from `transform.ts`, which names the per-target module file that implements the per-target portion of this stage.
 - **Validate phase** — the stage in which validators inspect on-disk state and emit findings. See §5.3.
 

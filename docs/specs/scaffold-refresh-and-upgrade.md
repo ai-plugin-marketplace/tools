@@ -83,9 +83,10 @@ auto-adopt without `--force`.)_
 
 `init` must render the cli and core deps **independently** (they can skew):
 
-- `cli` dep → `^<cliVersion>`, where the cli version is read by the cli entrypoint (it already reads
-  its own `package.json`) and passed into `runInit` via `InitOptions.cliVersion`.
-- `core` dep → `^<coreVersion>` (read as today, from core's `package.json`).
+- `cli` dep → a caret range that defaults to the CLI release bundled with core. Programmatic
+  `init()` must write a range that includes that release. The `aipm init` command uses the CLI
+  release from its installed `package.json`.
+- `core` dep → `^<coreVersion>`, read from core's installed `package.json`.
 
 This yields `cli ^0.1.1` + `core ^0.2.0` — installable, and matching the template. The stale
 "§9.1 lockstep" doc comments in `init.ts`/`init-template.ts` are corrected.
@@ -137,8 +138,9 @@ to the rendered pins is possible future work; not implemented.)_
 
 - **Unit:** the hash-guard decision table (match / diverged / missing / no-sidecar bootstrap),
   pure over injected file state. Negative cases: diverged-without-force skips; `--force` overwrites.
-- **Version-skew regression:** assert `init` pins `cli` to `cliVersion` and `core` to `coreVersion`
-  independently, and that the cli pin is never a nonexistent same-as-core version.
+- **Version-skew regression:** assert programmatic `init()` defaults to the bundled CLI release
+  and rejects ranges that exclude it before writing. Assert `aipm init` uses its installed CLI
+  version. Both entry points pin core independently to its installed version.
 - **UAT (temp dir):** `aipm init` into a temp dir → assert installable/expected files + sidecar;
   mutate a managed file → `--refresh` reports a conflict and leaves it; `--refresh --force`
   overwrites; bump the rendered content → `--refresh` updates a pristine file and the sidecar hash.

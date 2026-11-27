@@ -50,7 +50,7 @@ string
 
 </td><td>
 
-_(Optional)_ Version of `@ai-plugin-marketplace/cli` to pin the generated `package.json`<!-- -->'s `cli` dev dependency to (as `^<cliVersion>`<!-- -->). The cli entrypoint supplies its own version here; cli and core ship independently and may differ (e.g. `cli 0.1.1` ships with `core 0.2.0`<!-- -->). When omitted, falls back to core's own version (the historical lockstep assumption).
+_(Optional)_ Optional base version for the CLI dependency caret range (for example, `0.8`<!-- -->). The range must include the CLI release shipped with core.
 
 
 </td></tr>

@@ -19,7 +19,7 @@
     "LICENSE"
   ],
   "scripts": {
-    "build": "tsc --build && api-extractor run --local",
+    "build": "tsc --build && api-extractor run --local && node scripts/bundle-cli-release.mjs",
     "check": "nx run-many --targets=check:typecheck,check:lint-ts,check:api-report,test --projects=@ai-plugin-marketplace/core",
     "check:typecheck": "tsc --build",
     "check:lint-ts": "eslint src",
@@ -27,6 +27,7 @@
     "fix:api-report": "api-extractor run --local",
     "fix:lint-ts": "eslint src --fix",
     "test": "vitest run",
+    "prepack": "node scripts/check-cli-release.mjs",
     "docs": "api-documenter markdown -i temp -o docs",
     "clean": "rimraf dist *.tsbuildinfo temp"
   },

@@ -21,6 +21,17 @@ pnpm run fix:format   # auto-format everything
 pnpm run fix:lint-ts  # auto-fix lint across packages
 ```
 
+Run these commands from the workspace root to prepare release artifacts.
+
+```sh
+pnpm build
+pnpm --filter @ai-plugin-marketplace/core pack
+pnpm --filter @ai-plugin-marketplace/cli pack
+```
+
+The Nx build targets bundle the CLI's release name and version with core. Core's pack step
+verifies the bundled release metadata and the runtime and type entry points.
+
 A **pre-commit hook** (husky + lint-staged) auto-formats staged files and runs ESLint `--fix`
 before each commit. If the hook fails, fix the reported issues then re-stage and retry.
 

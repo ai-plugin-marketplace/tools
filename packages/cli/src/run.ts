@@ -18,14 +18,12 @@
 
 import * as fs from 'node:fs';
 import * as path from 'node:path';
-import { fileURLToPath } from 'node:url';
 
 import {
   addTarget,
   applyRuleSeverityOverrides,
   build,
   checkSupport,
-  init,
   lint,
   listTargets,
   migrate,
@@ -45,6 +43,7 @@ import type {
   TargetId,
   ValidationResult,
 } from '@ai-plugin-marketplace/core';
+import { initFromCli } from './init.js';
 import { buildLintJson, buildLintSarif, formatLintText, lintExitCode } from './lint-format.js';
 import type { LintFormat } from './lint-format.js';
 
@@ -90,10 +89,11 @@ Options:
   --version, -V                 Print toolkit version
 `;
 
+const cliPackageJson = new URL('../package.json', import.meta.url);
+
 /** Read this package's version from its own package.json, resolved relative to the compiled file. */
 function toolkitVersion(): string {
-  const pkgPath = path.join(path.dirname(fileURLToPath(import.meta.url)), '..', 'package.json');
-  const pkg = JSON.parse(fs.readFileSync(pkgPath, 'utf-8')) as { version: string };
+  const pkg = JSON.parse(fs.readFileSync(cliPackageJson, 'utf-8')) as { version: string };
   return pkg.version;
 }
 
@@ -272,11 +272,10 @@ export async function run(argv: readonly string[], opts: RunOptions = {}): Promi
         // `--name` sets BOTH the package.json name and the marketplace name: the marketplace name
         // is the identity that matters (must be unique across marketplaces), and tying the repo
         // name to it reads cleanly for a freshly scaffolded repo.
-        const outcome = await init(dir, {
-          cliVersion: toolkitVersion(),
+        const created = path.resolve(dir);
+        const outcome = await initFromCli(created, cliPackageJson, {
           ...(nameOpt !== undefined ? { name: nameOpt, marketplaceName: nameOpt } : {}),
         });
-        const created = path.resolve(dir);
         out.write(`Created plugin repo at ${created}.\n`);
         // Issue #96: an ancestor pnpm-workspace.yaml means a `pnpm install` from `created` can be
         // swept into that ancestor's workspace (shared lockfile/hoisting) instead of staying

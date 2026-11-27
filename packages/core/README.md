@@ -51,6 +51,13 @@ import {
 | `addTarget`    | Scaffold skeleton files for a new target in an existing plugin     |
 | `listTargets`  | Return the `TargetId` values this toolkit version recognises       |
 
+For programmatic scaffolding, `init(dir)` uses the CLI release metadata shipped with core.
+An optional `cliVersion` sets the caret base explicitly (for example, `0.8` yields `^0.8`).
+The resulting registry range must include the bundled CLI release. Compatible loose forms such as
+`0.08.0` are normalized to strict SemVer ranges. Compatible SemVer build identifiers are accepted.
+Specifiers that can resolve to paths, archives, or URLs are rejected.
+The core range comes from the installed core version.
+
 ### Key types
 
 `TargetId`, `BuildOptions`, `BuildResult`, `GeneratedFile`, `ValidateOptions`,

@@ -4,6 +4,9 @@
   "ignoreDependencies": ["husky", "lint-staged"],
   "ignore": ["agent-plugins/**", "aipm.repo.ts", "aipm.workspace.ts"],
   "workspaces": {
+    ".": {
+      "entry": [".github/scripts/verify-npm-publish.mjs"]
+    },
     "packages/core": {
       "entry": ["src/**/*.test.ts"],
       "project": ["src/**/*.ts"]

@@ -8,4 +8,4 @@ Scaffold with verified CLI release metadata while preserving programmatic `init(
 dependency range must include the bundled release. Compatible `cliVersion` shorthand,
 such as `0.8`, is accepted. `aipm init` uses its own installed manifest.
 The release workflow verifies the packaged CLI identity and core entry points before publishing.
-Programmatic `init` rejects build metadata and specifiers that could resolve to files or URLs.
+Programmatic `init` accepts compatible SemVer build identifiers and rejects specifiers that could resolve to files or URLs.

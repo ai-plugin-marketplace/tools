@@ -74,16 +74,10 @@ importers:
       '@ai-plugin-marketplace/core':
         specifier: workspace:^
         version: link:../core
-      semver:
-        specifier: ^7.7.4
-        version: 7.7.4
     devDependencies:
       '@cfworker/json-schema':
         specifier: ^4.1.1
         version: 4.1.1
-      '@types/semver':
-        specifier: ^7.7.1
-        version: 7.7.1
       skills:
         specifier: ^1.8.1
         version: 1.8.1

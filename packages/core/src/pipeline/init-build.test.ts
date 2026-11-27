@@ -1,5 +1,6 @@
 import { execFile } from 'node:child_process';
 import {
+  chmodSync,
   cpSync,
   existsSync,
   mkdirSync,
@@ -156,6 +157,13 @@ async function assertPublicInit(dir: string, version: string): Promise<void> {
   assertScaffoldedRelease(dir, version);
 }
 
+async function assertCliInit(dir: string, version: string): Promise<void> {
+  const result = await runCommand(process.execPath, 'packages/cli/dist/bin.js', 'init', dir);
+  expect(result.status, result.stderr).toBe(0);
+  expect(result.stdout).toContain('Created plugin repo');
+  assertScaffoldedRelease(dir, version);
+}
+
 it('lets Windows resolve pnpm through PATHEXT', () => {
   expect(pnpmCommand('win32', ['exec', 'tsc', '--build'])).toEqual([
     'cmd.exe',
@@ -208,15 +216,7 @@ it.each([
     expect(statSync(sourceManifest).mtimeMs).toBe(originalMtime);
 
     // The already-built CLI reads its own manifest while core still holds the previous bundle.
-    const fromCli = await runCommand(
-      process.execPath,
-      'packages/cli/dist/bin.js',
-      'init',
-      'from-cli',
-    );
-    expect(fromCli.status, fromCli.stderr).toBe(0);
-    expect(fromCli.stdout).toContain('Created plugin repo');
-    assertScaffoldedRelease('from-cli', version);
+    await assertCliInit('from-cli', version);
     await assertPublicInit('still-bundled', manifest.version);
 
     await assertPnpm(...args);
@@ -224,14 +224,64 @@ it.each([
     await assertPublicInit('updated', version);
 
     rmSync(join(checkout, 'packages/core/dist'), { recursive: true });
+    rmSync(join(checkout, 'packages/cli/dist'), { recursive: true });
     const cached = await runPnpm(...args);
     expect(cached.status, cached.stdout + cached.stderr).toBe(0);
     expect(cached.stdout).toMatch(/read the output from the cache/i);
     expect(readManifest(bundledManifest)).toEqual({ name: cliPackageName, version });
     expect(existsSync(join(checkout, 'packages/core/dist/core.d.ts'))).toBe(true);
     await assertPublicInit('cached', version);
+    await assertCliInit('cached-cli', version);
   },
   250_000,
+);
+
+it('builds a working aipm init from a clean filtered CLI build', async () => {
+  await assertPnpm('--filter', cliPackageName, 'build');
+  const version = readManifest(cliManifest).version;
+  await assertCliInit('from-cli', version);
+  await assertPublicInit('from-core', version);
+}, 60_000);
+
+it.skipIf(process.platform === 'win32' || process.getuid?.() === 0)(
+  'scaffolds under a umask that makes package.json unreadable',
+  async () => {
+    await assertPnpm('build');
+    const manifest = readManifest(cliManifest);
+    const differentVersion = semver.inc(manifest.version, 'major');
+    if (differentVersion === null) throw new Error('Expected a valid CLI release.');
+
+    function restoreDirectoryAccess(dir: string): void {
+      if (!existsSync(dir)) return;
+      chmodSync(dir, 0o700);
+      for (const entry of readdirSync(dir, { withFileTypes: true })) {
+        if (entry.isDirectory()) restoreDirectoryAccess(join(dir, entry.name));
+      }
+    }
+
+    for (const version of [manifest.version, differentVersion]) {
+      writeFileSync(join(checkout, cliManifest), JSON.stringify({ ...manifest, version }));
+      const dir = `from-cli-${version}`;
+      const result = await runCommand(
+        process.execPath,
+        '--input-type=module',
+        '--eval',
+        `process.umask(0o400);
+         process.argv.splice(1, 0, 'aipm');
+         await import('./packages/cli/dist/bin.js');`,
+        'init',
+        dir,
+      );
+      restoreDirectoryAccess(join(checkout, dir));
+      expect(result.status, result.stderr).toBe(0);
+      expect(result.stdout).toContain('Created plugin repo');
+      const packageJson = join(checkout, dir, 'package.json');
+      expect(statSync(packageJson).mode & 0o400).toBe(0);
+      chmodSync(packageJson, 0o600);
+      assertScaffoldedRelease(dir, version);
+    }
+  },
+  60_000,
 );
 
 it('accepts stable shorthand and rejects it for the corresponding prerelease', async () => {

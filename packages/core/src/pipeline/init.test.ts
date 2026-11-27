@@ -158,7 +158,7 @@ describe('init', () => {
     expect(fs.existsSync(repoDir)).toBe(false);
   });
 
-  it.each(['0.8.0+build', '0.8.0-rc.tgz', 'v0.8.0'])(
+  it.each(['0.8.0+build.tgz', '0.8.0-rc.tgz', 'v0.8.0'])(
     'rejects invalid bundled release version %s',
     (version) => {
       expect(() => validateCliRelease({ name: CLI_PACKAGE_NAME, version }, 'test fixture')).toThrow(
@@ -167,8 +167,12 @@ describe('init', () => {
     },
   );
 
+  it('preserves the full version when bundled metadata includes a build identifier', () => {
+    const release = { name: CLI_PACKAGE_NAME, version: '0.8.0+build.1' };
+    expect(validateCliRelease(release, 'test fixture')).toEqual(release);
+  });
+
   it.each([
-    `${CLI_VERSION}+build`,
     `${CLI_VERSION}+foo.tgz`,
     `${CLI_VERSION}-rc.tgz`,
     `${CLI_VERSION}-rc.TAR.GZ`,
@@ -178,6 +182,15 @@ describe('init', () => {
     const repoDir = path.join(tmpDir, 'non-registry');
     await expect(init(repoDir, { cliVersion })).rejects.toThrow('caret range for the npm registry');
     expect(fs.existsSync(repoDir)).toBe(false);
+  });
+
+  it('preserves compatible CLI versions with SemVer build identifiers', async () => {
+    const repoDir = path.join(tmpDir, 'build-identifier');
+    const cliVersion = `${CLI_VERSION.replace(/\+.*$/, '')}+build`;
+    await init(repoDir, { cliVersion });
+    expect(readPackageJson(repoDir).devDependencies?.['@ai-plugin-marketplace/cli']).toBe(
+      `^${cliVersion}`,
+    );
   });
 
   it('preserves compatible compound registry ranges', async () => {

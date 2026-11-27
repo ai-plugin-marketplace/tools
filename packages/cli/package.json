@@ -22,7 +22,7 @@
     "LICENSE"
   ],
   "scripts": {
-    "build": "tsc --build",
+    "build": "pnpm --filter @ai-plugin-marketplace/core build && tsc --build",
     "check": "nx run-many --targets=check:typecheck,check:lint-ts,test --projects=@ai-plugin-marketplace/cli",
     "check:typecheck": "tsc --build",
     "check:lint-ts": "eslint src",
@@ -31,12 +31,10 @@
     "clean": "rimraf dist *.tsbuildinfo"
   },
   "dependencies": {
-    "@ai-plugin-marketplace/core": "workspace:^",
-    "semver": "^7.7.4"
+    "@ai-plugin-marketplace/core": "workspace:^"
   },
   "devDependencies": {
     "@cfworker/json-schema": "^4.1.1",
-    "@types/semver": "^7.7.1",
     "skills": "^1.8.1"
   },
   "publishConfig": {
@@ -50,5 +48,16 @@
   "license": "MIT",
   "engines": {
     "node": ">=20.0.0"
+  },
+  "nx": {
+    "targets": {
+      "build": {
+        "executor": "nx:run-commands",
+        "options": {
+          "command": "tsc --build",
+          "cwd": "{projectRoot}"
+        }
+      }
+    }
   }
 }

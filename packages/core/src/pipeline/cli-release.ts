@@ -6,7 +6,7 @@ export const CLI_PACKAGE_NAME = '@ai-plugin-marketplace/cli';
 export function isRegistryRange(range: string): boolean {
   // npm can classify archive suffixes as files even when SemVer accepts them.
   return (
-    /^[\dA-Za-z.*<>=^~|\s-]+$/.test(range) &&
+    /^[\dA-Za-z.*+<>=^~|\s-]+$/.test(range) &&
     !/\.(?:tgz|tar\.gz|tar)$/i.test(range.trimEnd()) &&
     semver.validRange(range) !== null
   );
@@ -14,10 +14,14 @@ export function isRegistryRange(range: string): boolean {
 
 export function validateCliRelease(value: unknown, source: string) {
   const { name, version } = (value ?? {}) as { name?: unknown; version?: unknown };
+  const parsed = typeof version === 'string' ? semver.parse(version) : null;
+  const canonical = parsed?.build.length
+    ? `${parsed.version}+${parsed.build.join('.')}`
+    : parsed?.version;
   if (
     name !== CLI_PACKAGE_NAME ||
     typeof version !== 'string' ||
-    semver.valid(version) !== version ||
+    version !== canonical ||
     !isRegistryRange(`^${version}`) ||
     !semver.satisfies(version, `^${version}`)
   ) {

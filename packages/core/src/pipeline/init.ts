@@ -130,12 +130,18 @@ function findAncestorPnpmWorkspace(dir: string): string | undefined {
  *
  * @param targetDir - Absolute or relative path to the directory to scaffold into.
  * @param opts - Name and CLI release overrides.
+ * @param installedCliManifest - Internal CLI entry point's manifest. When present, verify it and
+ *   scaffold with its own release, which may differ from the verified bundled release.
  * @returns An {@link InitOutcome}: `ancestorWorkspace`, set when an ancestor directory has a
  *   `pnpm-workspace.yaml` (issue #96 ancestor-contamination guard — see
  *   {@link findAncestorPnpmWorkspace}), is `undefined` otherwise.
  * @throws {Error} When the target cannot be scaffolded into or the CLI range cannot be verified.
  */
-export async function runInit(targetDir: string, opts?: InitOptions): Promise<InitOutcome> {
+export async function runInit(
+  targetDir: string,
+  opts?: InitOptions,
+  installedCliManifest?: URL,
+): Promise<InitOutcome> {
   const resolved = path.resolve(targetDir);
 
   if (!isFreshTarget(resolved)) {
@@ -152,7 +158,10 @@ export async function runInit(targetDir: string, opts?: InitOptions): Promise<In
       import.meta.url,
     ),
   );
-  const cliRange = resolveCliRange(bundledRelease, opts?.cliVersion);
+  const cliRange =
+    installedCliManifest === undefined
+      ? resolveCliRange(bundledRelease, opts?.cliVersion)
+      : resolveCliRange(readCliRelease(installedCliManifest).version);
 
   // Detected before writing anything, since the check is independent of the scaffold write below
   // and cheap to do up front. Note this does NOT reach the caller if a later step throws (name

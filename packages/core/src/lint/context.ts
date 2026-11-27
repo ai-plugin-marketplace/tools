@@ -4,7 +4,7 @@
  */
 
 import * as fs from 'node:fs';
-import type { FreshnessIoHandler } from '../pipeline/validate.js';
+import type { FreshnessIoHandler } from '../pipeline/validation-io.js';
 import type { AipmWorkspace } from '../config.js';
 import type { ConfigCache } from '../pipeline/load-config.js';
 import type { TargetId } from '../pipeline/types.js';

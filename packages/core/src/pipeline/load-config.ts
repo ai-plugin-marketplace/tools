@@ -24,6 +24,7 @@ import * as path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 import { createJiti } from 'jiti';
+import { assertRegularFile } from './validation-io.js';
 
 import { defineConfig, defineRepoConfig, defineWorkspace } from '../config.js';
 import type {
@@ -191,6 +192,7 @@ export async function loadPluginConfig(
     );
   }
 
+  if (exists !== fs.existsSync) assertRegularFile(configPath);
   const defaultExport = await importDefaultExport(configPath, AIPM_CONFIG_FILENAME);
 
   // Re-validate through defineConfig so the result is a branded AipmConfig. defineConfig throws
@@ -246,6 +248,7 @@ export async function loadRepoConfig(
     return { ...DEFAULT_REPO_CONFIG };
   }
 
+  if (exists !== fs.existsSync) assertRegularFile(configPath);
   const defaultExport = await importDefaultExport(configPath, AIPM_REPO_CONFIG_FILENAME);
 
   try {
@@ -284,6 +287,7 @@ export async function loadWorkspaceConfig(
     return undefined;
   }
 
+  if (exists !== fs.existsSync) assertRegularFile(configPath);
   const defaultExport = await importDefaultExport(configPath, AIPM_WORKSPACE_CONFIG_FILENAME);
 
   try {

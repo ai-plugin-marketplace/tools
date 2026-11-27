@@ -4,9 +4,9 @@
 
 ## buildWithOutcome() function
 
-Build a single plugin or every plugin under a repo root. Returns one result per built plugin along with post-build validation findings. Artifact drift is hard in CI and soft locally. Filesystem failures that prevent validation checks are hard findings in either environment. The published-surface boundary check runs only in standalone [validate()](./core.validate.md)<!-- -->.
+Build a single plugin or every plugin under a repo root. Returns one result per built plugin along with post-build validation findings. Artifact drift is hard in CI and soft locally. Filesystem failures that prevent validation checks are hard findings in either environment. The published-surface boundary check runs only in standalone [validate()](./core.validate.md)<!-- -->. Validation assumes source inputs stay unchanged by other processes during the call.
 
-Setting [BuildOptions.failFast](./core.buildoptions.failfast.md) rejects after generation and validation complete if there are hard structural findings or filesystem failures. Artifact drift stays in the returned validation result.
+Setting [BuildOptions.failFast](./core.buildoptions.failfast.md) rejects after generation and validation complete if there are hard structural findings or filesystem failures. Artifact drift stays in the returned validation result. Fatal generation errors reject with any findings already established.
 
 **Signature:**
 

@@ -4,7 +4,7 @@
  * @see docs/specs/lint-engine.md L-D1 (Diagnostic), L-D4 (Rule)
  */
 
-import type { FreshnessIoHandler } from '../pipeline/validate.js';
+import type { FreshnessIoHandler } from '../pipeline/validation-io.js';
 import type { AipmWorkspace } from '../config.js';
 import type { ConfigCache } from '../pipeline/load-config.js';
 import type { FindingCode, TargetId } from '../pipeline/types.js';

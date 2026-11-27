@@ -23,6 +23,8 @@
  * @see docs/specs/architecture.md §12.5 (internal module shape), §3.4 (target isolation)
  */
 
+import { checkValidationIo } from '../../pipeline/validation-io.js';
+import type { FreshnessIoHandler } from '../../pipeline/validation-io.js';
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 
@@ -235,7 +237,11 @@ function extractAgentTools(content: string): string[] {
  * Severity is soft — unmapped tools are dropped from the Kiro bundle but do not
  * block the build.
  */
-function validateAgentToolNames(pluginDir: string, pluginName: string): Finding[] {
+function validateAgentToolNames(
+  pluginDir: string,
+  pluginName: string,
+  onIoError?: FreshnessIoHandler,
+): Finding[] {
   const agentsDir = path.join(pluginDir, 'agents');
   if (!fs.existsSync(agentsDir)) return [];
 
@@ -247,7 +253,12 @@ function validateAgentToolNames(pluginDir: string, pluginName: string): Finding[
 
     const agentName = entry.name.replace(/\.md$/, '');
     const agentPath = path.join(agentsDir, entry.name);
-    const content = fs.readFileSync(agentPath, 'utf-8');
+    const content = checkValidationIo(
+      () => fs.readFileSync(agentPath, 'utf-8'),
+      onIoError,
+      pluginName,
+    );
+    if (content === undefined) continue;
     const tools = extractAgentTools(content);
 
     for (const tool of tools) {
@@ -279,12 +290,18 @@ function validateAgentToolNames(pluginDir: string, pluginName: string): Finding[
  * Returns zero or more Findings. Callers combine these with other targets'
  * findings and the cross-target findings in the pipeline validator.
  */
-export function validateKiroPlugin(pluginDir: string): Finding[] {
+export function validateKiroPlugin(pluginDir: string, onIoError?: FreshnessIoHandler): Finding[] {
   const pluginName = path.basename(pluginDir);
 
   return [
-    ...validatePowerMd(pluginDir, pluginName),
-    ...validateMcpJson(pluginDir, pluginName),
-    ...validateAgentToolNames(pluginDir, pluginName),
+    ...(checkValidationIo(() => validatePowerMd(pluginDir, pluginName), onIoError, pluginName) ??
+      []),
+    ...(checkValidationIo(() => validateMcpJson(pluginDir, pluginName), onIoError, pluginName) ??
+      []),
+    ...(checkValidationIo(
+      () => validateAgentToolNames(pluginDir, pluginName, onIoError),
+      onIoError,
+      pluginName,
+    ) ?? []),
   ];
 }

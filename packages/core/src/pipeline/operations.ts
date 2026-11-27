@@ -58,10 +58,11 @@ export function build(targetPath: string, opts?: BuildOptions): Promise<BuildRes
  * along with post-build validation findings. Artifact drift is hard in CI and soft locally.
  * Filesystem failures that prevent validation checks are hard findings in either environment.
  * The published-surface boundary check runs only in standalone {@link validate}.
+ * Validation assumes source inputs stay unchanged by other processes during the call.
  *
  * Setting {@link BuildOptions.failFast} rejects after generation and validation complete if there
  * are hard structural findings or filesystem failures. Artifact drift stays in the returned
- * validation result.
+ * validation result. Fatal generation errors reject with any findings already established.
  *
  * @public
  */

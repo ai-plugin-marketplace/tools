@@ -61,6 +61,8 @@ with `failFast: true` if a filesystem failure prevents a validation check. Other
 failures appear as hard `BuildFreshnessIoFinding` diagnostics with code `freshness-io`.
 Artifact drift is reported in the outcome's `validation`. The outcome retains ownership
 and collision findings from generation and adds any new collisions found during validation.
+Fatal generation errors reject with any findings already established. Validation assumes source
+inputs stay unchanged by other processes during the call.
 
 ### Key types
 

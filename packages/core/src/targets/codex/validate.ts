@@ -15,6 +15,8 @@
  * @see packages/core/docs/specs/architecture.md §8.1 (Finding, FindingCode)
  */
 
+import { checkValidationIo } from '../../pipeline/validation-io.js';
+import type { FreshnessIoHandler } from '../../pipeline/validation-io.js';
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 
@@ -54,7 +56,11 @@ function normalisePathField(
 // Manifest file-ref validation
 // ---------------------------------------------------------------------------
 
-function validateManifestFileRefs(pluginDir: string, pluginName: string): Finding[] {
+function validateManifestFileRefs(
+  pluginDir: string,
+  pluginName: string,
+  onIoError?: FreshnessIoHandler,
+): Finding[] {
   const manifestPath = path.join(pluginDir, '.codex-plugin', 'plugin.json');
   if (!fs.existsSync(manifestPath)) return [];
 
@@ -134,7 +140,8 @@ function validateManifestFileRefs(pluginDir: string, pluginName: string): Findin
         continue;
       }
 
-      const stat = fs.statSync(resolved);
+      const stat = checkValidationIo(() => fs.statSync(resolved), onIoError, pluginName);
+      if (stat === undefined) continue;
 
       if (mustBeDir === true && !stat.isDirectory()) {
         findings.push(
@@ -185,11 +192,19 @@ function validateManifestFileRefs(pluginDir: string, pluginName: string): Findin
  * `pluginDir` is the absolute path to a `plugins/<name>/` directory.
  * All findings use `plugin: path.basename(pluginDir)`.
  */
-export function validateCodexPlugin(pluginDir: string): Finding[] {
+export function validateCodexPlugin(pluginDir: string, onIoError?: FreshnessIoHandler): Finding[] {
   const pluginName = path.basename(pluginDir);
   return [
-    ...validateManifestFileRefs(pluginDir, pluginName),
-    ...validateOpenPluginsConformance(pluginDir, pluginName),
+    ...(checkValidationIo(
+      () => validateManifestFileRefs(pluginDir, pluginName, onIoError),
+      onIoError,
+      pluginName,
+    ) ?? []),
+    ...(checkValidationIo(
+      () => validateOpenPluginsConformance(pluginDir, pluginName),
+      onIoError,
+      pluginName,
+    ) ?? []),
   ];
 }
 

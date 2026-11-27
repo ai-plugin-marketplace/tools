@@ -16,6 +16,8 @@
  * @see docs/specs/architecture.md §8.1 (Finding types)
  */
 
+import { checkValidationIo } from '../../pipeline/validation-io.js';
+import type { FreshnessIoHandler } from '../../pipeline/validation-io.js';
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 
@@ -53,7 +55,11 @@ function parseFrontmatter(content: string): Record<string, unknown> | undefined 
  *
  * Per §10.2 soft findings do not flip `ValidationResult.passed`.
  */
-function checkAgentToolTranslations(pluginDir: string, pluginName: string): Finding[] {
+function checkAgentToolTranslations(
+  pluginDir: string,
+  pluginName: string,
+  onIoError?: FreshnessIoHandler,
+): Finding[] {
   const findings: Finding[] = [];
   const agentsDir = path.join(pluginDir, 'agents');
 
@@ -65,7 +71,12 @@ function checkAgentToolTranslations(pluginDir: string, pluginName: string): Find
     if (!entry.isFile() || !entry.name.endsWith('.md')) continue;
 
     const agentPath = path.join(agentsDir, entry.name);
-    const content = fs.readFileSync(agentPath, 'utf-8');
+    const content = checkValidationIo(
+      () => fs.readFileSync(agentPath, 'utf-8'),
+      onIoError,
+      pluginName,
+    );
+    if (content === undefined) continue;
     const frontmatter = parseFrontmatter(content);
 
     if (!frontmatter) continue;
@@ -152,10 +163,18 @@ function checkGeminiExtensionJson(pluginDir: string, pluginName: string): Findin
  * `pluginDir` is the absolute path to a `plugins/<name>/` directory.
  * All findings use `plugin: path.basename(pluginDir)`.
  */
-export function validateGeminiPlugin(pluginDir: string): Finding[] {
+export function validateGeminiPlugin(pluginDir: string, onIoError?: FreshnessIoHandler): Finding[] {
   const pluginName = path.basename(pluginDir);
   return [
-    ...checkAgentToolTranslations(pluginDir, pluginName),
-    ...checkGeminiExtensionJson(pluginDir, pluginName),
+    ...(checkValidationIo(
+      () => checkAgentToolTranslations(pluginDir, pluginName, onIoError),
+      onIoError,
+      pluginName,
+    ) ?? []),
+    ...(checkValidationIo(
+      () => checkGeminiExtensionJson(pluginDir, pluginName),
+      onIoError,
+      pluginName,
+    ) ?? []),
   ];
 }

@@ -19,6 +19,8 @@
  * @see docs/specs/architecture.md §8.1 (Finding, FindingCode)
  */
 
+import { checkValidationIo } from '../../pipeline/validation-io.js';
+import type { FreshnessIoHandler } from '../../pipeline/validation-io.js';
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 
@@ -209,10 +211,18 @@ function validateMetadataDirIsolation(pluginDir: string, pluginName: string): Fi
  * `pluginDir` is the absolute path to a `plugins/<name>/` directory. All findings use
  * `plugin: path.basename(pluginDir)`.
  */
-export function validateOpenPluginsPlugin(pluginDir: string): Finding[] {
+export function validateOpenPluginsPlugin(
+  pluginDir: string,
+  onIoError?: FreshnessIoHandler,
+): Finding[] {
   const pluginName = path.basename(pluginDir);
   return [
-    ...validateManifest(pluginDir, pluginName),
-    ...validateMetadataDirIsolation(pluginDir, pluginName),
+    ...(checkValidationIo(() => validateManifest(pluginDir, pluginName), onIoError, pluginName) ??
+      []),
+    ...(checkValidationIo(
+      () => validateMetadataDirIsolation(pluginDir, pluginName),
+      onIoError,
+      pluginName,
+    ) ?? []),
   ];
 }

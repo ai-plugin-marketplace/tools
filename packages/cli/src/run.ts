@@ -23,7 +23,7 @@ import { fileURLToPath } from 'node:url';
 import {
   addTarget,
   applyRuleSeverityOverrides,
-  buildWithOutcome,
+  build,
   checkSupport,
   init,
   lint,
@@ -37,12 +37,13 @@ import {
 } from '@ai-plugin-marketplace/core';
 import type {
   AddTargetOutcome,
-  BuildOutcome,
   Diagnostic,
+  Finding,
   RefreshOutcome,
   RuleSeverityOverride,
   SupportReport,
   TargetId,
+  ValidationResult,
 } from '@ai-plugin-marketplace/core';
 import { buildLintJson, buildLintSarif, formatLintText, lintExitCode } from './lint-format.js';
 import type { LintFormat } from './lint-format.js';
@@ -152,15 +153,14 @@ function resolvePluginDir(arg: string): string {
 }
 
 /** Format a single finding as `[plugin] code (severity): message`, with an indented hint line. */
-function formatFinding(f: BuildOutcome['validation']['findings'][number]): string {
+function formatFinding(f: Finding): string {
   const scope = f.plugin !== undefined ? `[${f.plugin}] ` : '';
   const head = `${scope}${f.code} (${f.severity}): ${f.message}`;
-  const hint = 'hint' in f ? f.hint : undefined;
-  return hint !== undefined ? head + '\n    hint: ' + hint : head;
+  return f.hint !== undefined ? `${head}\n    hint: ${f.hint}` : head;
 }
 
 /** Write a validation result to the given stream; returns true iff it passed (no hard findings). */
-function reportValidation(result: BuildOutcome['validation'], out: NodeJS.WritableStream): boolean {
+function reportValidation(result: ValidationResult, out: NodeJS.WritableStream): boolean {
   for (const finding of result.findings) {
     out.write(`${formatFinding(finding)}\n`);
   }
@@ -301,20 +301,21 @@ export async function run(argv: readonly string[], opts: RunOptions = {}): Promi
         // Resolve the target from the first non-flag positional so `aipm build --force-downgrade`
         // does not mistake the flag for a path.
         const target = rest.find((a) => !a.startsWith('-')) ?? process.cwd();
-        // The bundled CLI retains its historical validation reporting.
-        const options = { forceDowngrade, [Symbol.for('@ai-plugin-marketplace/cli/build')]: true };
-        const { results, validation } = await buildWithOutcome(target, options);
+        const results = await build(target, { forceDowngrade });
         const artifactCount = results.reduce((n, r) => n + r.artifacts.length, 0);
         // §5.4: build runs validate before reporting success. The success summary is written
         // only when validate passes — printing it unconditionally would put a "Built N
         // plugin(s)" line ABOVE a hard finding that fails the run, misleading the user into
         // thinking the run succeeded (issue #97).
-        if (validation.passed) {
+        // The published-surface boundary check is left to `aipm validate`: an unmarked contributor
+        // skill elsewhere in the repo is not a reason for a build to fail.
+        const result = await validate(target, { skipPublishedSurfaceBoundary: true });
+        if (result.passed) {
           out.write(
             `Built ${String(results.length)} plugin(s), ${String(artifactCount)} artifact(s).\n`,
           );
         }
-        const passed = reportValidation(validation, out);
+        const passed = reportValidation(result, out);
         return passed ? 0 : 1;
       }
 

@@ -765,13 +765,14 @@ function rootCollisionFinding(owner: TargetId, relPath: string): Finding {
  * is suppressed entirely (no partial writes) and a single finding names the first offending path.
  *
  * Returns the collision findings plus the set of owners that collided (so the caller can skip
- * writing/tracking their files). Pure — no I/O beyond `existsSync`.
+ * writing/tracking their files). Outcome callers can supply a stricter collision check.
  */
 export function detectRootCollisions(
   repoRoot: string,
   artifacts: RootArtifacts,
   priorTracked: readonly string[],
-  exists: (file: string) => boolean = fs.existsSync,
+  collides: (file: string, tracked: boolean) => boolean = (file, tracked) =>
+    fs.existsSync(file) && !tracked,
 ): { findings: Finding[]; collidedOwners: Set<TargetId> } {
   const priorSet = new Set(priorTracked);
   const findings: Finding[] = [];
@@ -780,7 +781,7 @@ export function detectRootCollisions(
   for (const file of artifacts.files) {
     if (collidedOwners.has(file.owner)) continue; // already flagged this owner's first collision
     const abs = path.join(repoRoot, ...file.relPath.split('/'));
-    if (exists(abs) && !priorSet.has(file.relPath)) {
+    if (collides(abs, priorSet.has(file.relPath))) {
       findings.push(rootCollisionFinding(file.owner, file.relPath));
       collidedOwners.add(file.owner);
     }
@@ -826,7 +827,7 @@ export function readRootManifest(repoRoot: string, exists = fs.existsSync): stri
   return exists(manifest) ? fs.readFileSync(manifest, 'utf-8') : undefined;
 }
 
-export function parseRootManifestPaths(content: string): string[] {
+function parseRootManifestPaths(content: string): string[] {
   try {
     const parsed = JSON.parse(content) as unknown;
     if (
@@ -842,6 +843,26 @@ export function parseRootManifestPaths(content: string): string[] {
     // Corrupt sidecar → treat as nothing tracked; the collision guard protects existing files.
   }
   return [];
+}
+
+/** Read a sidecar that can safely authorize overwrites and orphan removal. */
+export function parseRootOwnership(content: string): string[] {
+  const parsed = JSON.parse(content) as { version?: unknown; paths?: unknown } | null;
+  if (
+    parsed?.version !== 1 ||
+    !Array.isArray(parsed.paths) ||
+    !parsed.paths.every(
+      (rel: unknown): rel is string =>
+        typeof rel === 'string' &&
+        !/[:\\]/.test(rel) &&
+        !rel.includes('\0') &&
+        rel.split('/').every((part) => part !== '' && part !== '.' && part !== '..') &&
+        rel.toLowerCase() !== ROOT_MANIFEST_REL.join('/'),
+    )
+  ) {
+    throw new Error('expected version 1 and repo-relative paths');
+  }
+  return parsed.paths;
 }
 
 /** Collect every file path under `dir`, relative to `dir`. Returns `[]` if `dir` is absent. */

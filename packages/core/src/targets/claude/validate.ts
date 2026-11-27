@@ -13,6 +13,8 @@
  * @see docs/specs/architecture.md §12.5 (internal module shape)
  */
 
+import { checkValidationIo } from '../../pipeline/validation-io.js';
+import type { FreshnessIoHandler } from '../../pipeline/validation-io.js';
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 
@@ -81,7 +83,11 @@ function normalizePathField(
  *   - `hooks`: the ref (if a string) must point to a `.json` file
  *   - `commands`: the ref can be a file or directory; existence is sufficient
  */
-function validateManifestFileRefs(pluginDir: string, pluginName: string): Finding[] {
+function validateManifestFileRefs(
+  pluginDir: string,
+  pluginName: string,
+  onIoError?: FreshnessIoHandler,
+): Finding[] {
   const manifestPath = path.join(pluginDir, '.claude-plugin', 'plugin.json');
   if (!fs.existsSync(manifestPath)) return [];
 
@@ -119,26 +125,43 @@ function validateManifestFileRefs(pluginDir: string, pluginName: string): Findin
 
   // skills: directory path(s)
   for (const ref of normalizePathField(manifest.skills)) {
-    const finding = checkRef(pluginDir, pluginName, 'skills', ref, 'directory');
-    if (finding !== null) findings.push(finding);
+    const finding = checkValidationIo(
+      () => checkRef(pluginDir, pluginName, 'skills', ref, 'directory'),
+      onIoError,
+      pluginName,
+    );
+    if (finding != null) findings.push(finding);
   }
 
   // agents: .md file path(s)
   for (const ref of normalizePathField(manifest.agents)) {
-    const finding = checkRef(pluginDir, pluginName, 'agents', ref, 'md-file');
-    if (finding !== null) findings.push(finding);
+    const finding = checkValidationIo(
+      () => checkRef(pluginDir, pluginName, 'agents', ref, 'md-file'),
+      onIoError,
+      pluginName,
+    );
+    if (finding != null) findings.push(finding);
   }
 
   // commands: path string(s) — file or directory, just check existence
   for (const ref of normalizePathField(manifest.commands)) {
-    const finding = checkRef(pluginDir, pluginName, 'commands', ref, 'any');
-    if (finding !== null) findings.push(finding);
+    const finding = checkValidationIo(
+      () => checkRef(pluginDir, pluginName, 'commands', ref, 'any'),
+      onIoError,
+      pluginName,
+    );
+    if (finding != null) findings.push(finding);
   }
 
   // hooks: path string → .json file (inline objects have no path to check)
-  if (typeof manifest.hooks === 'string') {
-    const finding = checkRef(pluginDir, pluginName, 'hooks', manifest.hooks, 'json-file');
-    if (finding !== null) findings.push(finding);
+  const hooks = manifest.hooks;
+  if (typeof hooks === 'string') {
+    const finding = checkValidationIo(
+      () => checkRef(pluginDir, pluginName, 'hooks', hooks, 'json-file'),
+      onIoError,
+      pluginName,
+    );
+    if (finding != null) findings.push(finding);
   }
 
   // mcpServers: a config-path string is NOT existence-checked (it names a `.mcp.json` config, not a
@@ -273,7 +296,11 @@ function buildMissingHint(pluginName: string, field: string, ref: string): strin
  * Validate YAML frontmatter of all `.md` files directly under `agents/` (one level deep).
  * Each file must have a frontmatter block and it must satisfy `claudeAgentFrontmatterSchema`.
  */
-function validateAgentFrontmatter(pluginDir: string, pluginName: string): Finding[] {
+function validateAgentFrontmatter(
+  pluginDir: string,
+  pluginName: string,
+  onIoError?: FreshnessIoHandler,
+): Finding[] {
   const agentsDir = path.join(pluginDir, 'agents');
   if (!fs.existsSync(agentsDir)) return [];
 
@@ -285,7 +312,12 @@ function validateAgentFrontmatter(pluginDir: string, pluginName: string): Findin
 
     const agentPath = path.join(agentsDir, entry.name);
     const relPath = `agents/${entry.name}`;
-    const content = fs.readFileSync(agentPath, 'utf-8');
+    const content = checkValidationIo(
+      () => fs.readFileSync(agentPath, 'utf-8'),
+      onIoError,
+      pluginName,
+    );
+    if (content === undefined) continue;
 
     // Require a frontmatter block: must start with "---\n" and have a closing "---"
     const fmMatch = /^---\r?\n([\s\S]*?)\r?\n---/m.exec(content);
@@ -575,17 +607,42 @@ function validateManifestHooksField(pluginDir: string, pluginName: string): Find
  *
  * All findings emitted here use `plugin: path.basename(pluginDir)`.
  */
-export function validateClaudePlugin(pluginDir: string): Finding[] {
+export function validateClaudePlugin(pluginDir: string, onIoError?: FreshnessIoHandler): Finding[] {
   const pluginName = path.basename(pluginDir);
 
   return [
-    ...validateManifestFileRefs(pluginDir, pluginName),
-    ...validateAgentFrontmatter(pluginDir, pluginName),
-    ...validateHooksFile(pluginDir, pluginName),
-    ...validateRetiredHooksFile(pluginDir, pluginName),
-    ...validateOrphanedHooksFile(pluginDir, pluginName),
-    ...validateManifestHooksField(pluginDir, pluginName),
-    ...validateOpenPluginsConformance(pluginDir, pluginName),
+    ...(checkValidationIo(
+      () => validateManifestFileRefs(pluginDir, pluginName, onIoError),
+      onIoError,
+      pluginName,
+    ) ?? []),
+    ...(checkValidationIo(
+      () => validateAgentFrontmatter(pluginDir, pluginName, onIoError),
+      onIoError,
+      pluginName,
+    ) ?? []),
+    ...(checkValidationIo(() => validateHooksFile(pluginDir, pluginName), onIoError, pluginName) ??
+      []),
+    ...(checkValidationIo(
+      () => validateRetiredHooksFile(pluginDir, pluginName),
+      onIoError,
+      pluginName,
+    ) ?? []),
+    ...(checkValidationIo(
+      () => validateOrphanedHooksFile(pluginDir, pluginName),
+      onIoError,
+      pluginName,
+    ) ?? []),
+    ...(checkValidationIo(
+      () => validateManifestHooksField(pluginDir, pluginName),
+      onIoError,
+      pluginName,
+    ) ?? []),
+    ...(checkValidationIo(
+      () => validateOpenPluginsConformance(pluginDir, pluginName),
+      onIoError,
+      pluginName,
+    ) ?? []),
   ];
 }
 

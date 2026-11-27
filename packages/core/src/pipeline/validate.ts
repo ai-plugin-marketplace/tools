@@ -34,7 +34,7 @@ import {
   managedRegistryPaths,
   managedVendorRegistryPaths,
   mergeRootArtifacts,
-  parseRootManifestPaths,
+  parseRootOwnership,
   readRootManifest,
   readRootManifestPaths,
   rootManifestPath,
@@ -42,6 +42,13 @@ import {
   serializeRootManifest,
 } from './artifacts.js';
 import type { RegistryArtifact, RootArtifacts } from './artifacts.js';
+import {
+  assertRegularFile,
+  captureValidationIo,
+  checkValidationIo,
+  strictExists,
+} from './validation-io.js';
+import type { FreshnessIoHandler } from './validation-io.js';
 import { discoverPlugins } from './discover.js';
 import type { Discovery } from './discover.js';
 import {
@@ -212,9 +219,13 @@ function readStructuralText(
   optional = false,
 ): string | undefined {
   try {
+    if (onIoError !== undefined) {
+      if (optional && !strictExists(file)) return undefined;
+      assertRegularFile(file);
+    }
     return fs.readFileSync(file, 'utf-8');
   } catch (err) {
-    if (onIoError !== undefined && !(optional && isMissing(err))) {
+    if (onIoError !== undefined) {
       if (!captureValidationIo(err, onIoError, plugin)) throw err;
     }
     return undefined;
@@ -224,7 +235,10 @@ function readStructuralText(
 /** Read and JSON-parse a structural input, returning undefined on parse failure. */
 function tryReadJson(filePath: string, onIoError?: FreshnessIoHandler, plugin?: string): unknown {
   const content = readStructuralText(filePath, onIoError, plugin);
-  if (content === undefined) return undefined;
+  return content === undefined ? undefined : parseJson(content);
+}
+
+function parseJson(content: string): unknown {
   try {
     return JSON.parse(content) as unknown;
   } catch {
@@ -309,9 +323,19 @@ export function validateFrontmatterParses(
   for (const sub of ['skills', 'agents', 'commands'] as const) {
     const dir = path.join(pluginDir, sub);
     for (const entry of readOptionalDirectory(dir, onIoError, pluginName)) {
-      if (sub === 'skills' && entry.isDirectory()) {
+      const candidate = path.join(dir, entry.name);
+      const linked = entry.isSymbolicLink() && onIoError !== undefined;
+      const stat = linked
+        ? checkValidationIo(() => fs.statSync(candidate), onIoError, pluginName)
+        : entry;
+      if (stat === undefined) continue;
+      if (sub === 'skills' && stat.isDirectory()) {
         files.push({ path: path.join(dir, entry.name, 'SKILL.md'), optional: true });
-      } else if (sub !== 'skills' && entry.isFile() && entry.name.endsWith('.md')) {
+      } else if (
+        sub !== 'skills' &&
+        (stat.isFile() || onIoError !== undefined) &&
+        entry.name.endsWith('.md')
+      ) {
         files.push({ path: path.join(dir, entry.name), optional: false });
       }
     }
@@ -1048,6 +1072,40 @@ function extractCodexSource(raw: unknown, pluginName: string): SourceExtraction 
   return { status: 'found', source: entry.source.path };
 }
 
+/** Validate present files even when the plugin has a single target. */
+function validateMcpFiles(pluginDir: string, onIoError: FreshnessIoHandler): Finding[] {
+  const findings: Finding[] = [];
+  const plugin = path.basename(pluginDir);
+  for (const rel of ['.mcp.json', 'mcp.json']) {
+    const content = readStructuralText(path.join(pluginDir, rel), onIoError, plugin, true);
+    if (content === undefined) continue;
+    if (!mcpConfigSchema.safeParse(parseJson(content)).success) {
+      findings.push(hard('schema-invalid', plugin, `Invalid MCP file '${rel}'.`));
+    }
+  }
+  return findings;
+}
+
+function validateHandAuthoredRegistries(
+  repoRoot: string,
+  onIoError: FreshnessIoHandler,
+): Finding[] {
+  const findings: Finding[] = [];
+  for (const { marketplaceRel, extractSource } of MARKETPLACE_REGISTRY_CHECKS) {
+    const file = path.join(repoRoot, ...marketplaceRel);
+    const content = readStructuralText(file, onIoError, undefined, true);
+    if (content === undefined) continue;
+    if (extractSource(parseJson(content), '').status === 'parse-error') {
+      findings.push({
+        severity: 'hard',
+        code: 'marketplace-registration',
+        message: `Failed to parse marketplace file '${file}'.`,
+      });
+    }
+  }
+  return findings;
+}
+
 /**
  * Verify the plugin is listed in the appropriate template-level marketplace.json files.
  *
@@ -1112,7 +1170,7 @@ export function validateMarketplaceRegistration(
     const extraction = extractSource(raw, pluginName);
 
     if (extraction.status === 'parse-error') {
-      if (inEnvelope) {
+      if (inEnvelope && onIoError === undefined) {
         findings.push(
           hard(
             'marketplace-registration',
@@ -1201,7 +1259,10 @@ export function validateCrossTarget(
  * target's `validate.ts` entry point and returns its findings (mostly `schema-invalid`). The
  * orchestrator dispatches only for targets in the envelope.
  */
-const TARGET_VALIDATORS: Record<TargetId, (pluginDir: string) => Finding[]> = {
+const TARGET_VALIDATORS: Record<
+  TargetId,
+  (pluginDir: string, onIoError?: FreshnessIoHandler) => Finding[]
+> = {
   claude: validateClaudePlugin,
   codex: validateCodexPlugin,
   cursor: validateCursorPlugin,
@@ -1223,8 +1284,22 @@ export function validatePerTargetSchemas(
   const findings: Finding[] = [];
   const pluginName = path.basename(pluginDir);
   for (const target of envelope) {
+    if (onIoError !== undefined) {
+      const usable = checkValidationIo(
+        () => {
+          for (const rel of TARGET_MIN_REQUIRED[target]) {
+            const file = path.join(pluginDir, rel);
+            if (strictExists(file)) assertRegularFile(file);
+          }
+          return true;
+        },
+        onIoError,
+        pluginName,
+      );
+      if (usable === undefined) continue;
+    }
     checkValidationIo(
-      () => findings.push(...TARGET_VALIDATORS[target](pluginDir)),
+      () => findings.push(...TARGET_VALIDATORS[target](pluginDir, onIoError)),
       onIoError,
       pluginName,
     );
@@ -1239,53 +1314,8 @@ export function validatePerTargetSchemas(
 export interface RootOwnership {
   findings: Finding[];
   collidedOwners: ReadonlySet<TargetId>;
+  protectedPaths: ReadonlySet<string>;
   writtenPaths: ReadonlySet<string> | undefined;
-}
-
-export type FreshnessIoHandler = (error: Error, plugin?: string) => void;
-
-/** Return whether the opt-in outcome captured a filesystem failure. */
-export function captureValidationIo(
-  err: unknown,
-  onIoError: FreshnessIoHandler | undefined,
-  plugin?: string,
-): boolean {
-  if (err instanceof ConfigLoadError && err.cause !== undefined) {
-    return captureValidationIo(err.cause, onIoError, plugin);
-  }
-  if (
-    onIoError === undefined ||
-    !(err instanceof Error) ||
-    !('code' in err) ||
-    typeof err.code !== 'string' ||
-    !/^(?:E[A-Z0-9]+|ERR_FS_[A-Z_]+)$/.test(err.code)
-  ) {
-    return false;
-  }
-  onIoError(err, plugin);
-  return true;
-}
-
-export function checkValidationIo<T>(
-  check: () => T,
-  onIoError: FreshnessIoHandler | undefined,
-  plugin?: string,
-): T | undefined {
-  try {
-    return check();
-  } catch (err) {
-    if (!captureValidationIo(err, onIoError, plugin)) throw err;
-    return undefined;
-  }
-}
-
-function isMissing(err: unknown): boolean {
-  return err instanceof Error && 'code' in err && err.code === 'ENOENT';
-}
-
-/** Strict validation lookups treat only ENOENT as absence. Legacy checks use existsSync. */
-export function strictExists(file: fs.PathLike): boolean {
-  return fs.statSync(file, { throwIfNoEntry: false }) !== undefined;
 }
 
 /** Undefined means a failed lookup. Do not report the input as absent in that case. */
@@ -1675,14 +1705,18 @@ export async function checkRootArtifactFreshness(
   } else {
     checkValidationIo(() => {
       manifestContent = readRootManifest(repoRoot, exists);
-      priorTracked = manifestContent === undefined ? [] : parseRootManifestPaths(manifestContent);
+      try {
+        priorTracked = manifestContent === undefined ? [] : parseRootOwnership(manifestContent);
+      } catch {
+        // Generation already reported the invalid sidecar. Do not use its ownership claims.
+      }
     }, onIoError);
   }
   if (priorTracked === undefined && ownership?.writtenPaths === undefined) return findings;
   const trackedForCollisions = [...(priorTracked ?? []), ...(ownership?.writtenPaths ?? [])];
-  const collisions = detectRootCollisions(repoRoot, root, trackedForCollisions, (abs) => {
+  const collisions = detectRootCollisions(repoRoot, root, trackedForCollisions, (abs, tracked) => {
     try {
-      return exists(abs);
+      return exists(abs) && !tracked;
     } catch (err) {
       if (!captureValidationIo(err, onIoError)) throw err;
       failedLookups.add(abs);
@@ -1711,7 +1745,7 @@ export async function checkRootArtifactFreshness(
     expectedTracked.push(rel);
     checkValidationIo(() => {
       const abs = path.join(repoRoot, ...rel.split('/'));
-      if (failedLookups.has(abs)) return;
+      if (failedLookups.has(abs) || ownership?.protectedPaths.has(abs)) return;
       if (!exists(abs)) {
         findings.push(
           freshnessFinding(
@@ -1891,23 +1925,29 @@ export async function runValidate(
   targetPath: string,
   opts?: ValidateOptions & {
     ci?: boolean;
-    preserveCliReporting?: boolean;
     rootOwnership?: RootOwnership | undefined;
     generationDiscovery?: Discovery | undefined;
+    outcomeFindings?: Finding[] | undefined;
   },
   onFreshnessIoError?: FreshnessIoHandler,
 ): Promise<ValidationResult> {
   const ci = opts?.ci ?? false;
   const skipFreshness = opts?.skipFreshness ?? false;
 
-  const findings = [...(opts?.rootOwnership?.findings ?? [])];
+  const findings = opts?.outcomeFindings ?? [];
   const exists = onFreshnessIoError === undefined ? fs.existsSync : strictExists;
   let completeTopology = true;
   const discover = (target: string): Promise<Discovery> =>
-    discoverPlugins(target, exists, (err, directory) => {
-      if (!captureValidationIo(err, onFreshnessIoError, path.basename(directory))) throw err;
-      completeTopology = false;
-    });
+    discoverPlugins(
+      target,
+      exists,
+      onFreshnessIoError === undefined
+        ? undefined
+        : (err, directory) => {
+            if (!captureValidationIo(err, onFreshnessIoError, path.basename(directory))) throw err;
+            completeTopology = false;
+          },
+    );
 
   // Discovery loads the optional `aipm.repo.ts`. An invalid repo config makes the whole repo's
   // topology unresolvable, so surface it as a single repo-scoped `repo-config-invalid` finding
@@ -1927,8 +1967,6 @@ export async function runValidate(
     discovery = opts.generationDiscovery;
   }
   const { repoRoot, distDir, pluginDirs } = discovery;
-  const pendingFreshness: { index: number; check: () => Promise<Finding[]> }[] = [];
-  const preserveCliReporting = opts?.preserveCliReporting === true;
 
   // One per-invocation config memo so each plugin's aipm.config.ts is transpiled once — reused by
   // the main loop below and the repo-level registry freshness step (see ConfigCache).
@@ -1953,6 +1991,9 @@ export async function runValidate(
     }
   }
   const generatesRegistries = workspace !== undefined;
+  if (onFreshnessIoError !== undefined && workspaceKnown && !generatesRegistries) {
+    findings.push(...validateHandAuthoredRegistries(repoRoot, onFreshnessIoError));
+  }
 
   for (const pluginDir of pluginDirs) {
     const pluginName = path.basename(pluginDir);
@@ -1998,6 +2039,9 @@ export async function runValidate(
       diagnosticToFinding(d, ci),
     );
     findings.push(...schemaFindings);
+    if (onFreshnessIoError !== undefined) {
+      findings.push(...validateMcpFiles(pluginDir, onFreshnessIoError));
+    }
     const hasBlockingSchemaError = schemaFindings.some((f) => f.severity === 'hard');
 
     // ── 3. Envelope adherence ───────────────────────────────────────────────
@@ -2031,13 +2075,7 @@ export async function runValidate(
     }
 
     // ── 5. Freshness ─────────────────────────────────────────────────────────
-    const check = async (): Promise<Finding[]> =>
-      (await pluginFreshnessRule.check(ctx)).map((d) => diagnosticToFinding(d, ci));
-    if (preserveCliReporting) {
-      pendingFreshness.push({ index: findings.length, check });
-    } else {
-      findings.push(...(await check()));
-    }
+    findings.push(...(await pluginFreshnessRule.check(ctx)).map((d) => diagnosticToFinding(d, ci)));
   }
 
   // ── 6. Repo-level default/placeholder marketplace-name check (always SOFT) ──
@@ -2104,59 +2142,33 @@ export async function runValidate(
       onFreshnessIoError,
       configCache,
     });
-    let preflightCompleted = false;
-    if (preserveCliReporting) {
-      try {
-        await computeExpectedRootArtifacts(repoRoot, allPluginDirs, workspace, configCache);
-        preflightCompleted = true;
-      } catch {
-        // Preflight ignored root oracle errors. Retry the oracle at its reporting position.
-      }
-      if (preflightCompleted) {
-        // Keep the preflight sidecar read before the historical reporting read.
-        readRootManifestPaths(repoRoot);
-      }
-    }
-
-    const checkRoot = async (): Promise<Finding[]> =>
-      checkRootArtifactFreshness(
-        repoRoot,
-        allPluginDirs,
-        workspace,
-        ci,
-        skipFreshness,
-        // Preflight establishes structural ordering only. Recompute current expected bytes.
-        preserveCliReporting ? undefined : configCache,
-        onFreshnessIoError,
-        opts?.rootOwnership,
+    if (!skipFreshness) {
+      findings.push(
+        ...(await registryFreshnessRule.check(repoScopedCtx)).map((d) =>
+          diagnosticToFinding(d, ci),
+        ),
       );
-    const checkRegistries = async (): Promise<Finding[]> =>
-      (await registryFreshnessRule.check(repoScopedCtx)).map((d) => diagnosticToFinding(d, ci));
-    if (preserveCliReporting) {
-      pendingFreshness.push({ index: findings.length, check: checkRegistries });
-      pendingFreshness.push({ index: findings.length, check: checkRoot });
-    } else {
-      if (!skipFreshness) findings.push(...(await checkRegistries()));
-      if (opts?.rootOwnership === undefined) {
-        findings.push(
-          ...(await rootArtifactFreshnessRule.check(repoScopedCtx)).map((d) =>
-            diagnosticToFinding(d, ci),
-          ),
-        );
-      } else {
-        findings.push(...(await checkRoot()));
-      }
     }
-  }
-
-  // The CLI's historical preflight ran every structural check before freshness could throw.
-  // Execute the deferred checks in their original reporting order and insert their findings
-  // beside the corresponding structural findings.
-  let inserted = 0;
-  for (const { index, check } of pendingFreshness) {
-    const fresh = await check();
-    findings.splice(index + inserted, 0, ...fresh);
-    inserted += fresh.length;
+    if (opts?.rootOwnership === undefined) {
+      findings.push(
+        ...(await rootArtifactFreshnessRule.check(repoScopedCtx)).map((d) =>
+          diagnosticToFinding(d, ci),
+        ),
+      );
+    } else {
+      findings.push(
+        ...(await checkRootArtifactFreshness(
+          repoRoot,
+          allPluginDirs,
+          workspace,
+          ci,
+          skipFreshness,
+          configCache,
+          onFreshnessIoError,
+          opts.rootOwnership,
+        )),
+      );
+    }
   }
 
   // ── 8. Published-surface boundary: unpublished skills must be marked internal (#118) ──

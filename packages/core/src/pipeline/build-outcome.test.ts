@@ -645,3 +645,181 @@ it('documents the outcome-only diagnostic in the architecture API example', () =
   expect(findingCode).toBeDefined();
   expect(findingCode).not.toContain("'freshness-io'");
 });
+
+it.skipIf(process.platform === 'win32').each(['dangling', 'tracked', 'parent'])(
+  'refuses to write through a %s root artifact link',
+  async (kind) => {
+    repo = geminiRepo({ name: 'workspace' });
+    const root = repo.repoRoot;
+    const outside = path.join(root, 'untouched');
+    fs.mkdirSync(outside);
+    const link = path.join(root, kind === 'parent' ? 'commands' : 'GEMINI.md');
+    const target = path.join(outside, kind === 'parent' ? '' : 'target.md');
+    if (kind === 'tracked') {
+      fs.writeFileSync(target, '# Keep\n');
+      const sidecar = path.join(root, '.aipm', 'generated-root.json');
+      fs.mkdirSync(path.dirname(sidecar));
+      fs.writeFileSync(sidecar, '{"version":1,"paths":["GEMINI.md"]}');
+    }
+    fs.symlinkSync(target, link);
+    const { validation } = await buildWithOutcome(root);
+    expect(validation.passed).toBe(false);
+    expect(
+      validation.findings.find((finding) => finding.code === 'root-artifact-collision')?.message,
+    ).toContain(path.basename(link));
+    await expect(buildWithOutcome(root, { failFast: true })).rejects.toThrow(
+      'root-artifact-collision',
+    );
+    expect(fs.readlinkSync(link)).toBe(target);
+    if (kind === 'tracked') expect(fs.readFileSync(target, 'utf-8')).toBe('# Keep\n');
+    else expect(fs.readdirSync(outside)).toEqual([]);
+  },
+);
+
+it('reports an explicit plugins root occupied by a regular file', async () => {
+  repo = geminiRepo();
+  const root = repo.repoRoot;
+  fs.writeFileSync(path.join(root, 'aipm.repo.ts'), "export default { pluginsRoot: 'bad' };");
+  fs.writeFileSync(path.join(root, 'bad'), 'regular file');
+  const { validation } = await buildWithOutcome(root);
+  expect(validation.passed).toBe(false);
+  expect(validation.findings.find((finding) => finding.code === 'freshness-io')?.message).toContain(
+    'ENOTDIR',
+  );
+  await expect(buildWithOutcome(root, { failFast: true })).rejects.toThrow('ENOTDIR');
+});
+
+it
+  .skipIf(process.platform === 'win32')
+  .each(['plugins/loop', 'plugins/claude-only/agents/loop.md', 'plugins/claude-only/skills/loop'])(
+  'reports a pre-existing source link loop at %s',
+  async (relative) => {
+    repo = claudeRepo();
+    const file = path.join(repo.repoRoot, relative);
+    fs.mkdirSync(path.dirname(file), { recursive: true });
+    fs.symlinkSync(path.basename(file), file);
+    const { validation } = await buildWithOutcome(repo.repoRoot);
+    expect(validation.passed).toBe(false);
+    expect(
+      validation.findings.find((finding) => finding.code === 'freshness-io')?.message,
+    ).toContain('ELOOP');
+    await expect(buildWithOutcome(repo.repoRoot, { failFast: true })).rejects.toThrow('ELOOP');
+  },
+);
+
+it('rejects a bundle source file occupied by a directory', async () => {
+  repo = geminiRepo();
+  const context = path.join(repo.repoRoot, 'plugins', 'gem', 'GEMINI.md');
+  fs.rmSync(context);
+  fs.mkdirSync(context);
+  await expect(buildWithOutcome(repo.repoRoot, { failFast: true })).rejects.toThrow(
+    /expected a regular file.*GEMINI\.md/,
+  );
+});
+
+function claudeRepo(): SynthRegistryRepo {
+  return synthRegistryRepo([
+    {
+      name: 'claude-only',
+      targets: ['claude'],
+      files: { '.claude-plugin/plugin.json': '{"name":"claude-only","version":"0.0.1"}' },
+    },
+  ]);
+}
+
+it.skipIf(process.platform === 'win32')(
+  'always checks source paths with extra symbol options',
+  async () => {
+    repo = claudeRepo();
+    const agents = path.join(repo.repoRoot, 'plugins', 'claude-only', 'agents');
+    fs.symlinkSync('agents', agents);
+    const options = { failFast: true, [Symbol.for('@ai-plugin-marketplace/cli/build')]: false };
+    await expect(buildWithOutcome(repo.repoRoot, options)).rejects.toThrow('ELOOP');
+  },
+);
+
+it.each([
+  ['plugins/claude-only/.mcp.json', 'schema-invalid'],
+  ['.claude-plugin/marketplace.json', 'marketplace-registration'],
+  ['.aipm/generated-root.json', 'schema-invalid'],
+])('reports malformed %s before it can pass or be replaced', async (relative, code) => {
+  repo = relative.startsWith('.aipm/') ? geminiRepo({ name: 'workspace' }) : claudeRepo();
+  const file = path.join(repo.repoRoot, relative);
+  fs.mkdirSync(path.dirname(file), { recursive: true });
+  fs.writeFileSync(file, '{broken');
+  const { validation } = await buildWithOutcome(repo.repoRoot);
+  expect(validation.passed).toBe(false);
+  expect(validation.findings.find((finding) => finding.code === code)?.message).toContain(
+    path.basename(file),
+  );
+  await expect(buildWithOutcome(repo.repoRoot, { failFast: true })).rejects.toThrow(code);
+  expect(fs.readFileSync(file, 'utf-8')).toBe('{broken');
+});
+
+it('retains a malformed manifest finding when an agents scan fails', async () => {
+  repo = claudeRepo();
+  const plugin = path.join(repo.repoRoot, 'plugins', 'claude-only');
+  const agents = path.join(plugin, 'agents');
+  fs.mkdirSync(agents);
+  fs.writeFileSync(path.join(plugin, '.claude-plugin/plugin.json'), '{broken');
+  const failure = Object.assign(new Error('Cannot enumerate agents'), { code: 'EACCES' });
+  const read = fs.readdirSync;
+  vi.spyOn(fs, 'readdirSync').mockImplementation((file, options) => {
+    if (file === agents) throw failure;
+    return read(file, options) as fs.Dirent<Buffer>[];
+  });
+  syncBuiltinESMExports();
+  const { validation } = await buildWithOutcome(repo.repoRoot);
+  expect(validation.passed).toBe(false);
+  expect(
+    validation.findings.find((finding) => finding.code === 'schema-invalid')?.message,
+  ).toContain('plugin.json');
+  expect(validation.findings).toContainEqual({
+    code: 'freshness-io',
+    message: failure.message,
+    severity: 'hard',
+    plugin: 'claude-only',
+  });
+  await expect(buildWithOutcome(repo.repoRoot, { failFast: true })).rejects.toThrow(
+    /schema-invalid:[\s\S]+freshness-io: Cannot enumerate agents/,
+  );
+});
+
+it('retains a root collision in the rejection when orphan cleanup fails', async () => {
+  repo = geminiRepo({ name: 'workspace' });
+  const root = repo.repoRoot;
+  const sidecar = path.join(root, '.aipm', 'generated-root.json');
+  fs.mkdirSync(path.dirname(sidecar));
+  fs.writeFileSync(sidecar, '{"version":1,"paths":["orphan"]}');
+  fs.mkdirSync(path.join(root, 'orphan'));
+  fs.writeFileSync(path.join(root, 'GEMINI.md'), '# Author-owned\n');
+
+  await expect(buildWithOutcome(root, { failFast: true })).rejects.toThrow(
+    /EISDIR:[\s\S]+root-artifact-collision:[\s\S]+GEMINI\.md/,
+  );
+});
+
+it.skipIf(process.platform === 'win32')(
+  'replaces broken files in its own generated bundle',
+  async () => {
+    repo = geminiRepo();
+    const out = path.join(repo.repoRoot, 'dist', 'gemini', 'gem', 'GEMINI.md');
+    fs.mkdirSync(path.dirname(out), { recursive: true });
+    fs.symlinkSync(path.basename(out), out);
+    const { validation } = await buildWithOutcome(repo.repoRoot, { failFast: true });
+    expect(validation.passed).toBe(true);
+    expect(fs.lstatSync(out).isFile()).toBe(true);
+    expect(fs.readFileSync(out, 'utf-8')).toBe('# Gemini\n');
+  },
+);
+
+it.each([
+  new URL('../../../../docs/specs/architecture.md', import.meta.url),
+  new URL('../../README.md', import.meta.url),
+  new URL('../../docs/core.buildwithoutcome.md', import.meta.url),
+])('documents stable source inputs in %s', (file) => {
+  const content = fs.readFileSync(file, 'utf-8');
+  expect(content.replace(/\s+/g, ' ')).toContain(
+    'source inputs stay unchanged by other processes during the call',
+  );
+});

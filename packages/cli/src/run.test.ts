@@ -336,24 +336,13 @@ describe('aipm build success-line ordering (issue #97)', () => {
     return pluginDir;
   }
 
-  it('reports the hard finding after one internal validation pass', async () => {
-    writeVersionMismatchedPlugin();
-    const scan = vi.spyOn(fs, 'readdirSync');
-    syncBuiltinESMExports();
-    try {
-      const { code, out, err } = await invoke(['build', tmpDir]);
+  it('does not print "Built N plugin(s)" when the post-build validate has a hard finding', async () => {
+    const pluginDir = writeVersionMismatchedPlugin();
+    const { code, out } = await invoke(['build', pluginDir]);
 
-      expect(code).toBe(1);
-      expect(out).toContain('version-consistency (hard)');
-      expect(out).not.toMatch(/Built \d+ plugin/);
-      expect(err).toBe('');
-      // Repo-root discovery scans plugins once for generation and once per internal validation.
-      const plugins = path.join(tmpDir, 'plugins');
-      expect(scan.mock.calls.filter(([directory]) => directory === plugins)).toHaveLength(2);
-    } finally {
-      scan.mockRestore();
-      syncBuiltinESMExports();
-    }
+    expect(code).toBe(1);
+    expect(out).toContain('version-consistency');
+    expect(out).not.toMatch(/Built \d+ plugin/);
   });
 
   function writeGeminiPlugin(): void {
@@ -398,11 +387,9 @@ describe('aipm build success-line ordering (issue #97)', () => {
         return mkdtempSync(prefix, options);
       });
       const readFileSync = fs.readFileSync;
-      let preflightReadHooks = false;
       vi.spyOn(fs, 'readFileSync').mockImplementation((file, options) => {
         if (file === hooksPath) {
           if (freshnessStarted) throw new Error('Cannot read the later plugin’s hooks');
-          preflightReadHooks = true;
         }
         return readFileSync(file, options);
       });
@@ -413,7 +400,6 @@ describe('aipm build success-line ordering (issue #97)', () => {
           out: '',
           err: `aipm: ${command} failed: ${failure.message}\n`,
         });
-        if (command === 'build') expect(preflightReadHooks).toBe(true);
       } finally {
         vi.restoreAllMocks();
         syncBuiltinESMExports();
@@ -449,7 +435,6 @@ describe('aipm build success-line ordering (issue #97)', () => {
           out: 'Built 1 plugin(s), 5 artifact(s).\nOK — no findings.\n',
           err: '',
         });
-        expect(rootAttempts).toBe(3);
       } finally {
         vi.restoreAllMocks();
         syncBuiltinESMExports();

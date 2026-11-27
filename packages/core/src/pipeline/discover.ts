@@ -39,6 +39,7 @@
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 
+import { invalidInputPath } from './validation-io.js';
 import { AIPM_CONFIG_FILENAME, hasRepoConfig, loadRepoConfig } from './load-config.js';
 
 /** Result of resolving a `targetPath` to concrete plugin directories and a dist root. */
@@ -84,11 +85,17 @@ const PLUGIN_SHAPE_MANIFESTS = [
  * general "this directory has authored plugin content" signal for targets that ship skills
  * alongside a manifest.
  */
-function hasSkills(dir: string, exists: typeof fs.existsSync): boolean {
+function hasSkills(dir: string, exists: typeof fs.existsSync, strict: boolean): boolean {
   const skillsDir = path.join(dir, 'skills');
-  if (!isDirectory(skillsDir, exists)) return false;
+  if (!exists(skillsDir)) return false;
+  if (!fs.statSync(skillsDir).isDirectory()) {
+    if (strict) throw invalidInputPath('ENOTDIR', skillsDir, 'expected a skills directory');
+    return false;
+  }
   for (const entry of fs.readdirSync(skillsDir, { withFileTypes: true })) {
-    if (entry.isDirectory() && exists(path.join(skillsDir, entry.name, 'SKILL.md'))) {
+    const candidate = path.join(skillsDir, entry.name);
+    const stat = strict && entry.isSymbolicLink() ? fs.statSync(candidate) : entry;
+    if (stat.isDirectory() && exists(path.join(candidate, 'SKILL.md'))) {
       return true;
     }
   }
@@ -101,9 +108,10 @@ function hasSkills(dir: string, exists: typeof fs.existsSync): boolean {
  * discovery so validate/build can report it, #91) from "not a plugin at all" (silently excluded,
  * unchanged non-goal — an empty or unrelated directory under `plugins/` stays ignored).
  */
-function isPluginShaped(dir: string, exists: typeof fs.existsSync): boolean {
+function isPluginShaped(dir: string, exists: typeof fs.existsSync, strict: boolean): boolean {
   return (
-    PLUGIN_SHAPE_MANIFESTS.some((rel) => exists(path.join(dir, rel))) || hasSkills(dir, exists)
+    PLUGIN_SHAPE_MANIFESTS.some((rel) => exists(path.join(dir, rel))) ||
+    hasSkills(dir, exists, strict)
   );
 }
 
@@ -136,17 +144,37 @@ export async function discoverPlugins(
     const pluginsDir = path.join(resolved, repoConfig.pluginsRoot);
     // An explicit `aipm.repo.ts` marks a repo root even before its plugins dir exists, so a
     // freshly-initialised embedded repo still resolves as a repo root rather than a single plugin.
-    if (hasRepoConfig(resolved, exists) || isDirectory(pluginsDir, exists)) {
+    const explicit = hasRepoConfig(resolved, exists);
+    const strictDirectory = onCandidateError === undefined ? undefined : exists(pluginsDir);
+    if (explicit || (strictDirectory ?? isDirectory(pluginsDir, exists))) {
       const pluginDirs: string[] = [];
-      if (isDirectory(pluginsDir, exists)) {
+      if (strictDirectory ?? isDirectory(pluginsDir, exists)) {
+        if (onCandidateError !== undefined && !fs.statSync(pluginsDir).isDirectory()) {
+          onCandidateError(
+            invalidInputPath('ENOTDIR', pluginsDir, 'expected a plugins directory'),
+            pluginsDir,
+          );
+          return {
+            repoRoot: resolved,
+            distDir: path.join(resolved, repoConfig.distDir),
+            pluginDirs,
+          };
+        }
         for (const entry of fs.readdirSync(pluginsDir, { withFileTypes: true })) {
-          if (!entry.isDirectory()) continue;
           const candidate = path.join(pluginsDir, entry.name);
           // A config-less candidate is still discovered when it is plugin-shaped (#91) — deferred
           // to the config loader downstream, which reports it as `envelope-invalid`/throws rather
           // than letting it drop silently out of the plugin list.
           try {
-            if (hasConfig(candidate, exists) || isPluginShaped(candidate, exists)) {
+            const stat =
+              onCandidateError !== undefined && entry.isSymbolicLink()
+                ? fs.statSync(candidate)
+                : entry;
+            if (!stat.isDirectory()) continue;
+            if (
+              hasConfig(candidate, exists) ||
+              isPluginShaped(candidate, exists, onCandidateError !== undefined)
+            ) {
               pluginDirs.push(candidate);
             }
           } catch (err) {

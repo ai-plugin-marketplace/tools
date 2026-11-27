@@ -20,6 +20,8 @@
  * @see packages/core/docs/specs/architecture.md §8.1 (Finding, FindingCode)
  */
 
+import { checkValidationIo } from '../../pipeline/validation-io.js';
+import type { FreshnessIoHandler } from '../../pipeline/validation-io.js';
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 
@@ -66,7 +68,11 @@ function normalisePathField(
 // Manifest file-ref validation
 // ---------------------------------------------------------------------------
 
-function validateManifestFileRefs(pluginDir: string, pluginName: string): Finding[] {
+function validateManifestFileRefs(
+  pluginDir: string,
+  pluginName: string,
+  onIoError?: FreshnessIoHandler,
+): Finding[] {
   const manifestPath = path.join(pluginDir, '.cursor-plugin', 'plugin.json');
   if (!fs.existsSync(manifestPath)) return [];
 
@@ -146,7 +152,8 @@ function validateManifestFileRefs(pluginDir: string, pluginName: string): Findin
         continue;
       }
 
-      const stat = fs.statSync(resolved);
+      const stat = checkValidationIo(() => fs.statSync(resolved), onIoError, pluginName);
+      if (stat === undefined) continue;
 
       if (mustBeDir === true && !stat.isDirectory()) {
         findings.push(
@@ -307,7 +314,11 @@ function parseMdcFrontmatter(content: string): Record<string, unknown> | null {
   return parsed as Record<string, unknown>;
 }
 
-function validateCursorRules(pluginDir: string, pluginName: string): Finding[] {
+function validateCursorRules(
+  pluginDir: string,
+  pluginName: string,
+  onIoError?: FreshnessIoHandler,
+): Finding[] {
   const rulesDir = path.join(pluginDir, 'rules');
   if (!fs.existsSync(rulesDir)) return [];
 
@@ -318,7 +329,12 @@ function validateCursorRules(pluginDir: string, pluginName: string): Finding[] {
     if (!entry.isFile() || !entry.name.endsWith('.mdc')) continue;
 
     const filePath = path.join(rulesDir, entry.name);
-    const content = fs.readFileSync(filePath, 'utf-8');
+    const content = checkValidationIo(
+      () => fs.readFileSync(filePath, 'utf-8'),
+      onIoError,
+      pluginName,
+    );
+    if (content === undefined) continue;
 
     let frontmatter: Record<string, unknown> | null;
     try {
@@ -363,14 +379,34 @@ function validateCursorRules(pluginDir: string, pluginName: string): Finding[] {
  * `pluginDir` is the absolute path to a `plugins/<name>/` directory.
  * All findings use `plugin: path.basename(pluginDir)`.
  */
-export function validateCursorPlugin(pluginDir: string): Finding[] {
+export function validateCursorPlugin(pluginDir: string, onIoError?: FreshnessIoHandler): Finding[] {
   const pluginName = path.basename(pluginDir);
   return [
-    ...validateManifestFileRefs(pluginDir, pluginName),
-    ...validateRetiredHooksRef(pluginDir, pluginName),
-    ...validateCursorHooksFile(pluginDir, pluginName),
-    ...validateCursorRules(pluginDir, pluginName),
-    ...validateOpenPluginsConformance(pluginDir, pluginName),
+    ...(checkValidationIo(
+      () => validateManifestFileRefs(pluginDir, pluginName, onIoError),
+      onIoError,
+      pluginName,
+    ) ?? []),
+    ...(checkValidationIo(
+      () => validateRetiredHooksRef(pluginDir, pluginName),
+      onIoError,
+      pluginName,
+    ) ?? []),
+    ...(checkValidationIo(
+      () => validateCursorHooksFile(pluginDir, pluginName),
+      onIoError,
+      pluginName,
+    ) ?? []),
+    ...(checkValidationIo(
+      () => validateCursorRules(pluginDir, pluginName, onIoError),
+      onIoError,
+      pluginName,
+    ) ?? []),
+    ...(checkValidationIo(
+      () => validateOpenPluginsConformance(pluginDir, pluginName),
+      onIoError,
+      pluginName,
+    ) ?? []),
   ];
 }
 

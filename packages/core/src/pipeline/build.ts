@@ -666,19 +666,20 @@ async function buildAndValidate(
     }
   }
 
-  // The results-only build skips freshness. The outcome API checks it with the same severity
-  // as standalone validation. The published-surface boundary belongs to standalone validation.
-  const validation = await runValidate(
-    targetPath,
-    {
-      skipPublishedSurfaceBoundary: true,
-      ...(checks === undefined ? { skipFreshness: true } : { ci: Boolean(process.env['CI']) }),
-      rootOwnership,
-      generationDiscovery: checks === undefined ? undefined : discovery,
-      outcomeFindings: checks?.findings,
-    },
-    onIoError,
-  );
+  // The outcome API includes the same checks and freshness severity as standalone validation.
+  const validation =
+    checks === undefined
+      ? await runValidate(targetPath, { skipFreshness: true, skipPublishedSurfaceBoundary: true })
+      : await runValidate(
+          targetPath,
+          { ci: Boolean(process.env['CI']) },
+          {
+            rootOwnership,
+            generationDiscovery: discovery,
+            findings: checks.findings,
+            onIoError: checks.onIoError,
+          },
+        );
   if (checks === undefined && opts?.failFast) assertBuildPassed(validation.findings, false);
   const ioFindings = checks?.ioFindings ?? [];
 

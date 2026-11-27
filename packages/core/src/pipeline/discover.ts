@@ -94,8 +94,8 @@ function hasSkills(dir: string, exists: typeof fs.existsSync, strict: boolean): 
   }
   for (const entry of fs.readdirSync(skillsDir, { withFileTypes: true })) {
     const candidate = path.join(skillsDir, entry.name);
-    const stat = strict && entry.isSymbolicLink() ? fs.statSync(candidate) : entry;
-    if (stat.isDirectory() && exists(path.join(candidate, 'SKILL.md'))) {
+    if (strict && entry.isSymbolicLink()) fs.statSync(candidate);
+    if (entry.isDirectory() && exists(path.join(candidate, 'SKILL.md'))) {
       return true;
     }
   }
@@ -166,11 +166,9 @@ export async function discoverPlugins(
           // to the config loader downstream, which reports it as `envelope-invalid`/throws rather
           // than letting it drop silently out of the plugin list.
           try {
-            const stat =
-              onCandidateError !== undefined && entry.isSymbolicLink()
-                ? fs.statSync(candidate)
-                : entry;
-            if (!stat.isDirectory()) continue;
+            // Probe aliases for broken targets while discovering only real plugin directories.
+            if (onCandidateError !== undefined && entry.isSymbolicLink()) fs.statSync(candidate);
+            if (!entry.isDirectory()) continue;
             if (
               hasConfig(candidate, exists) ||
               isPluginShaped(candidate, exists, onCandidateError !== undefined)

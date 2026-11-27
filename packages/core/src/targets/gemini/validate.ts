@@ -16,7 +16,7 @@
  * @see docs/specs/architecture.md §8.1 (Finding types)
  */
 
-import { checkValidationIo } from '../../pipeline/validation-io.js';
+import { checkValidationIo, readValidationJson } from '../../pipeline/validation-io.js';
 import type { FreshnessIoHandler } from '../../pipeline/validation-io.js';
 import * as fs from 'node:fs';
 import * as path from 'node:path';
@@ -113,16 +113,19 @@ function checkAgentToolTranslations(
  * finding. Absence of the file produces no finding (cross-target envelope-adherence
  * handles the missing-file case).
  */
-function checkGeminiExtensionJson(pluginDir: string, pluginName: string): Finding[] {
+function checkGeminiExtensionJson(
+  pluginDir: string,
+  pluginName: string,
+  onIoError?: FreshnessIoHandler,
+): Finding[] {
   const manifestPath = path.join(pluginDir, 'gemini-extension.json');
 
   if (!fs.existsSync(manifestPath)) return [];
 
-  let raw: unknown;
-  try {
-    raw = JSON.parse(fs.readFileSync(manifestPath, 'utf-8')) as unknown;
-  } catch (err) {
-    const msg = err instanceof Error ? err.message : String(err);
+  const json = readValidationJson(manifestPath, onIoError, pluginName);
+  if (json === undefined) return [];
+  if (!json.ok) {
+    const msg = json.error instanceof Error ? json.error.message : String(json.error);
     return [
       {
         severity: 'hard',
@@ -134,7 +137,7 @@ function checkGeminiExtensionJson(pluginDir: string, pluginName: string): Findin
     ];
   }
 
-  const result = geminiExtensionManifestSchema.safeParse(raw);
+  const result = geminiExtensionManifestSchema.safeParse(json.value);
   if (!result.success) {
     const issues = result.error.issues
       .map((i) => `${i.path.join('.') || '(root)'}: ${i.message}`)
@@ -172,7 +175,7 @@ export function validateGeminiPlugin(pluginDir: string, onIoError?: FreshnessIoH
       pluginName,
     ) ?? []),
     ...(checkValidationIo(
-      () => checkGeminiExtensionJson(pluginDir, pluginName),
+      () => checkGeminiExtensionJson(pluginDir, pluginName, onIoError),
       onIoError,
       pluginName,
     ) ?? []),

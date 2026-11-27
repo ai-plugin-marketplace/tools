@@ -15,7 +15,7 @@
  * @see packages/core/docs/specs/architecture.md §8.1 (Finding, FindingCode)
  */
 
-import { checkValidationIo } from '../../pipeline/validation-io.js';
+import { checkValidationIo, readValidationJson } from '../../pipeline/validation-io.js';
 import type { FreshnessIoHandler } from '../../pipeline/validation-io.js';
 import * as fs from 'node:fs';
 import * as path from 'node:path';
@@ -64,10 +64,9 @@ function validateManifestFileRefs(
   const manifestPath = path.join(pluginDir, '.codex-plugin', 'plugin.json');
   if (!fs.existsSync(manifestPath)) return [];
 
-  let raw: unknown;
-  try {
-    raw = JSON.parse(fs.readFileSync(manifestPath, 'utf-8'));
-  } catch {
+  const json = readValidationJson(manifestPath, onIoError, pluginName);
+  if (json === undefined) return [];
+  if (!json.ok) {
     return [
       makeInvalid(
         pluginName,
@@ -77,7 +76,7 @@ function validateManifestFileRefs(
     ];
   }
 
-  const parsed = codexPluginManifestSchema.safeParse(raw);
+  const parsed = codexPluginManifestSchema.safeParse(json.value);
   if (!parsed.success) {
     const issues = parsed.error.issues.map((i) => i.message).join('; ');
     return [

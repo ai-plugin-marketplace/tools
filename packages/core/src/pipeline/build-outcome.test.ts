@@ -7,7 +7,7 @@ import { afterEach, expect, it, vi } from 'vitest';
 
 import { build, buildWithOutcome, validate } from '../index.js';
 import { synthRegistryRepo } from '../test-support/synth-plugin.js';
-import type { SynthRegistryRepo } from '../test-support/synth-plugin.js';
+import type { SynthRegistryPlugin, SynthRegistryRepo } from '../test-support/synth-plugin.js';
 import * as validator from './validate.js';
 
 let repo: SynthRegistryRepo | undefined;
@@ -823,3 +823,188 @@ it.each([
     'source inputs stay unchanged by other processes during the call',
   );
 });
+
+it('keeps caller-owned options out of public validation state', async () => {
+  repo = claudeRepo();
+  const outcomeFindings = [
+    { code: 'schema-invalid', severity: 'hard', plugin: 'caller', message: 'Caller finding' },
+  ];
+  const options = { skipFreshness: true, outcomeFindings };
+
+  expect(await validate(repo.repoRoot, options)).toEqual({ findings: [], passed: true });
+  fs.writeFileSync(
+    path.join(repo.repoRoot, 'plugins', 'claude-only', '.claude-plugin', 'plugin.json'),
+    '{broken',
+  );
+  expect(await validate(repo.repoRoot, options)).toEqual(
+    await validate(repo.repoRoot, { skipFreshness: true }),
+  );
+  expect(outcomeFindings).toHaveLength(1);
+});
+
+it
+  .skipIf(process.platform === 'win32' || process.getuid?.() === 0)
+  .each(['custom/agent.md', '.claude-plugin/plugin.json'])(
+  'reports an unreadable Claude %s as an I/O finding',
+  async (relative) => {
+    repo = synthRegistryRepo([
+      {
+        name: 'test',
+        targets: ['claude'],
+        files: {
+          '.claude-plugin/plugin.json': '{"name":"test","agents":"./custom/agent.md"}',
+          'custom/agent.md': '# Agent\n',
+        },
+      },
+    ]);
+    const input = path.join(repo.repoRoot, 'plugins', 'test', relative);
+    fs.chmodSync(input, 0o000);
+    try {
+      const { validation } = await buildWithOutcome(repo.repoRoot);
+      expect(validation.passed).toBe(false);
+      expect(validation.findings).toMatchObject([
+        {
+          code: 'freshness-io',
+          severity: 'hard',
+          plugin: 'test',
+        },
+      ]);
+      expect(validation.findings[0]?.message).toContain('EACCES');
+      expect(validation.findings[0]?.message).toContain(input);
+      await expect(buildWithOutcome(repo.repoRoot, { failFast: true })).rejects.toThrow(
+        /freshness-io:.*EACCES/,
+      );
+    } finally {
+      fs.chmodSync(input, 0o644);
+    }
+  },
+);
+
+it.skipIf(process.platform === 'win32').each([
+  ['loop', 'broken.mdc', 'ELOOP'],
+  ['dangling link', 'missing.mdc', 'ENOENT'],
+  ['directory link', '.', 'EINVAL'],
+])('reports a Cursor rule %s as an I/O finding', async (_kind, target, code) => {
+  repo = synthRegistryRepo([
+    {
+      name: 'test',
+      targets: ['cursor'],
+      files: { '.cursor-plugin/plugin.json': '{"name":"test"}' },
+    },
+  ]);
+  const rules = path.join(repo.repoRoot, 'plugins', 'test', 'rules');
+  const link = path.join(rules, 'broken.mdc');
+  fs.mkdirSync(rules);
+  fs.symlinkSync(target, link);
+  expect(await validate(repo.repoRoot)).toEqual({ findings: [], passed: true });
+  const { validation } = await buildWithOutcome(repo.repoRoot);
+  expect(validation.passed).toBe(false);
+  expect(validation.findings).toMatchObject([
+    {
+      code: 'freshness-io',
+      severity: 'hard',
+      plugin: 'test',
+    },
+  ]);
+  expect(validation.findings[0]?.message).toContain(code);
+  expect(validation.findings[0]?.message).toContain(link);
+});
+
+it.skipIf(process.platform === 'win32').each(['name: false\ndescription: false', 'name: ['])(
+  'keeps main validation behavior for a healthy linked Vercel skill with %j',
+  async (frontmatter) => {
+    repo = synthRegistryRepo([
+      {
+        name: 'test',
+        targets: ['vercel'],
+        files: { 'skills/good/SKILL.md': '---\nname: good\ndescription: A skill\n---\nBody\n' },
+      },
+    ]);
+    const linkedSkill = path.join(repo.repoRoot, 'dist', 'linked-skill');
+    fs.mkdirSync(linkedSkill, { recursive: true });
+    fs.writeFileSync(path.join(linkedSkill, 'SKILL.md'), `---\n${frontmatter}\n---\nBody\n`);
+    const dir = path.join(repo.repoRoot, 'plugins', 'test', 'skills', 'alias');
+    fs.symlinkSync(linkedSkill, dir);
+    const baseline = await validate(repo.repoRoot);
+    expect(baseline).toEqual({ findings: [], passed: true });
+
+    const { validation } = await buildWithOutcome(repo.repoRoot, { failFast: true });
+    expect(validation).toEqual(baseline);
+  },
+);
+
+it.skipIf(process.platform === 'win32')(
+  'keeps root artifacts when a plugin has a healthy alias',
+  async () => {
+    repo = geminiRepo({ name: 'workspace' });
+    const plugins = path.join(repo.repoRoot, 'plugins');
+    fs.symlinkSync('gem', path.join(plugins, 'alias'));
+    const results = await build(repo.repoRoot, { failFast: true });
+    expect(results).toHaveLength(1);
+    const manifest = path.join(repo.repoRoot, 'gemini-extension.json');
+    const contents = fs.readFileSync(manifest, 'utf-8');
+
+    const outcome = await buildWithOutcome(repo.repoRoot);
+    expect(outcome.results).toHaveLength(1);
+    expect(outcome.results[0]).toMatchObject({
+      plugin: 'gem',
+      artifacts: results[0]?.artifacts,
+    });
+    expect(outcome.validation).toEqual(await validate(repo.repoRoot));
+    expect(outcome.validation).toEqual({ findings: [], passed: true });
+    expect(fs.readFileSync(manifest, 'utf-8')).toBe(contents);
+  },
+);
+
+it('includes the published-surface findings from standalone validation', async () => {
+  repo = claudeRepo();
+  const skill = path.join(repo.repoRoot, '.claude', 'skills', 'release', 'SKILL.md');
+  fs.mkdirSync(path.dirname(skill), { recursive: true });
+  fs.writeFileSync(skill, '---\nname: release\ndescription: Release helper\n---\nBody\n');
+
+  await build(repo.repoRoot, { failFast: true });
+  const validation = await validate(repo.repoRoot);
+  expect(validation.findings).toMatchObject([
+    { code: 'unpublished-skill-installable', severity: 'hard' },
+  ]);
+  expect((await buildWithOutcome(repo.repoRoot)).validation).toEqual(validation);
+  await expect(buildWithOutcome(repo.repoRoot, { failFast: true })).rejects.toThrow(
+    'unpublished-skill-installable',
+  );
+});
+
+it.each([
+  {
+    name: 'Codex hooks',
+    targets: ['codex'],
+    files: { '.codex-plugin/plugin.json': '{"name":"test"}', 'hooks/hooks.json': '{broken' },
+  },
+  {
+    name: 'Gemini command',
+    targets: ['gemini'],
+    files: {
+      'gemini-extension.json': '{"name":"test","version":"0.0.1"}',
+      'GEMINI.md': '# Test\n',
+      'commands/check.toml': 'prompt = [\n',
+    },
+  },
+  {
+    name: 'Claude skill without a closing frontmatter fence',
+    targets: ['claude'],
+    files: {
+      '.claude-plugin/plugin.json': '{"name":"test"}',
+      'skills/test/SKILL.md': '---\nname: test\ndescription: Test\n',
+    },
+  },
+] satisfies SynthRegistryPlugin[])(
+  'keeps existing content checks for $name',
+  async ({ targets, files }) => {
+    repo = synthRegistryRepo([{ name: 'test', targets, files }]);
+    await build(repo.repoRoot, { failFast: true });
+    expect(await validate(repo.repoRoot)).toEqual({ findings: [], passed: true });
+    expect((await buildWithOutcome(repo.repoRoot, { failFast: true })).validation).toEqual({
+      findings: [],
+      passed: true,
+    });
+  },
+);

@@ -55,7 +55,7 @@ import {
 
 `build()` returns a `BuildResult[]` and skips freshness checks during post-build validation.
 Use `buildWithOutcome()` with the same arguments to get `{ results, validation }` from one build
-and validation pass, including freshness diagnostics. With `failFast: true`, both functions
+and validation pass, including freshness and published-surface diagnostics. With `failFast: true`, both functions
 reject on hard structural findings after writing artifacts. `buildWithOutcome()` also rejects
 with `failFast: true` if a filesystem failure prevents a validation check. Otherwise those
 failures appear as hard `BuildFreshnessIoFinding` diagnostics with code `freshness-io`.

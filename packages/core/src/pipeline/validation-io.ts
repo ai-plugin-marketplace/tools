@@ -60,3 +60,30 @@ export function assertRegularFile(file: string): void {
   const stat = fs.statSync(file);
   if (!stat.isFile()) throw invalidInputPath('EINVAL', file, 'expected a regular file');
 }
+
+export function assertReadableFile(file: string): void {
+  assertRegularFile(file);
+  fs.accessSync(file, fs.constants.R_OK);
+}
+
+/** Read JSON for an existing schema check, retaining its legacy parse diagnostic for callers
+ * without an I/O handler. An intercepted I/O failure has no JSON to validate.
+ */
+export function readValidationJson(
+  file: string,
+  onIoError: FreshnessIoHandler | undefined,
+  plugin: string,
+): { ok: true; value: unknown } | { ok: false; error: unknown } | undefined {
+  let content: string;
+  try {
+    if (onIoError !== undefined) assertRegularFile(file);
+    content = fs.readFileSync(file, 'utf-8');
+  } catch (error) {
+    return captureValidationIo(error, onIoError, plugin) ? undefined : { ok: false, error };
+  }
+  try {
+    return { ok: true, value: JSON.parse(content) as unknown };
+  } catch (error) {
+    return { ok: false, error };
+  }
+}

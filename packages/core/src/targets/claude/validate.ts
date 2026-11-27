@@ -13,7 +13,12 @@
  * @see docs/specs/architecture.md §12.5 (internal module shape)
  */
 
-import { checkValidationIo } from '../../pipeline/validation-io.js';
+import {
+  checkValidationIo,
+  invalidInputPath,
+  readValidationJson,
+  strictExists,
+} from '../../pipeline/validation-io.js';
 import type { FreshnessIoHandler } from '../../pipeline/validation-io.js';
 import * as fs from 'node:fs';
 import * as path from 'node:path';
@@ -91,10 +96,9 @@ function validateManifestFileRefs(
   const manifestPath = path.join(pluginDir, '.claude-plugin', 'plugin.json');
   if (!fs.existsSync(manifestPath)) return [];
 
-  let raw: unknown;
-  try {
-    raw = JSON.parse(fs.readFileSync(manifestPath, 'utf-8')) as unknown;
-  } catch {
+  const json = readValidationJson(manifestPath, onIoError, pluginName);
+  if (json === undefined) return [];
+  if (!json.ok) {
     return [
       hardFinding(
         pluginName,
@@ -104,7 +108,7 @@ function validateManifestFileRefs(
     ];
   }
 
-  const parseResult = claudePluginManifestSchema.safeParse(raw);
+  const parseResult = claudePluginManifestSchema.safeParse(json.value);
   if (!parseResult.success) {
     // Shape errors (including a missing required field, e.g. `name`) — surface a hard finding
     // here. Skip ref checking: there is no reliably-shaped manifest data to check refs against.
@@ -126,7 +130,7 @@ function validateManifestFileRefs(
   // skills: directory path(s)
   for (const ref of normalizePathField(manifest.skills)) {
     const finding = checkValidationIo(
-      () => checkRef(pluginDir, pluginName, 'skills', ref, 'directory'),
+      () => checkRef(pluginDir, pluginName, 'skills', ref, 'directory', onIoError !== undefined),
       onIoError,
       pluginName,
     );
@@ -136,7 +140,7 @@ function validateManifestFileRefs(
   // agents: .md file path(s)
   for (const ref of normalizePathField(manifest.agents)) {
     const finding = checkValidationIo(
-      () => checkRef(pluginDir, pluginName, 'agents', ref, 'md-file'),
+      () => checkRef(pluginDir, pluginName, 'agents', ref, 'md-file', onIoError !== undefined),
       onIoError,
       pluginName,
     );
@@ -146,7 +150,7 @@ function validateManifestFileRefs(
   // commands: path string(s) — file or directory, just check existence
   for (const ref of normalizePathField(manifest.commands)) {
     const finding = checkValidationIo(
-      () => checkRef(pluginDir, pluginName, 'commands', ref, 'any'),
+      () => checkRef(pluginDir, pluginName, 'commands', ref, 'any', onIoError !== undefined),
       onIoError,
       pluginName,
     );
@@ -157,7 +161,7 @@ function validateManifestFileRefs(
   const hooks = manifest.hooks;
   if (typeof hooks === 'string') {
     const finding = checkValidationIo(
-      () => checkRef(pluginDir, pluginName, 'hooks', hooks, 'json-file'),
+      () => checkRef(pluginDir, pluginName, 'hooks', hooks, 'json-file', onIoError !== undefined),
       onIoError,
       pluginName,
     );
@@ -196,6 +200,7 @@ function checkRef(
   field: string,
   ref: string,
   kind: RefKind,
+  checkReadability: boolean,
 ): Finding | null {
   // Schema already enforces `./` prefix and `.md`/`.json` suffixes, but we
   // re-check gracefully so the validator is robust against schema bypass.
@@ -218,7 +223,7 @@ function checkRef(
   const normalized = ref.slice(2); // strip leading "./"
   const resolved = path.join(pluginDir, normalized);
 
-  if (!fs.existsSync(resolved)) {
+  if (!(checkReadability ? strictExists(resolved) : fs.existsSync(resolved))) {
     const hint = buildMissingHint(pluginName, field, ref);
     return hardFinding(
       pluginName,
@@ -269,6 +274,13 @@ function checkRef(
         `rename the file to end with ".json"`,
       );
     }
+  }
+
+  if (checkReadability) {
+    if (!stat.isFile() && !stat.isDirectory()) {
+      throw invalidInputPath('EINVAL', resolved, 'expected a file or directory');
+    }
+    fs.accessSync(resolved, fs.constants.R_OK);
   }
 
   return null;
@@ -410,7 +422,11 @@ function isRegularFile(absPath: string): boolean {
  * against `claudeHooksFileSchema`: that schema is the YAML compiler's source contract, which is
  * narrower than the events and handler forms Claude Code accepts in a hand-written file.
  */
-function validateHooksFile(pluginDir: string, pluginName: string): Finding[] {
+function validateHooksFile(
+  pluginDir: string,
+  pluginName: string,
+  onIoError?: FreshnessIoHandler,
+): Finding[] {
   const hooksPath = path.join(pluginDir, ...CLAUDE_HOOKS_PATH.split('/'));
   if (!fs.existsSync(hooksPath)) return [];
   if (!isRegularFile(hooksPath)) {
@@ -423,10 +439,9 @@ function validateHooksFile(pluginDir: string, pluginName: string): Finding[] {
     ];
   }
 
-  let raw: unknown;
-  try {
-    raw = JSON.parse(fs.readFileSync(hooksPath, 'utf-8')) as unknown;
-  } catch {
+  const json = readValidationJson(hooksPath, onIoError, pluginName);
+  if (json === undefined) return [];
+  if (!json.ok) {
     return [
       hardFinding(
         pluginName,
@@ -435,6 +450,7 @@ function validateHooksFile(pluginDir: string, pluginName: string): Finding[] {
       ),
     ];
   }
+  const raw = json.value;
 
   if (typeof raw !== 'object' || raw === null || Array.isArray(raw)) {
     return [
@@ -621,8 +637,11 @@ export function validateClaudePlugin(pluginDir: string, onIoError?: FreshnessIoH
       onIoError,
       pluginName,
     ) ?? []),
-    ...(checkValidationIo(() => validateHooksFile(pluginDir, pluginName), onIoError, pluginName) ??
-      []),
+    ...(checkValidationIo(
+      () => validateHooksFile(pluginDir, pluginName, onIoError),
+      onIoError,
+      pluginName,
+    ) ?? []),
     ...(checkValidationIo(
       () => validateRetiredHooksFile(pluginDir, pluginName),
       onIoError,

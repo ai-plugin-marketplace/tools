@@ -17,7 +17,7 @@
  * @see https://agentskills.io (agentskills.io spec — source of name/description constraints)
  */
 
-import { checkValidationIo } from '../../pipeline/validation-io.js';
+import { assertRegularFile, checkValidationIo } from '../../pipeline/validation-io.js';
 import type { FreshnessIoHandler } from '../../pipeline/validation-io.js';
 import * as fs from 'node:fs';
 import * as path from 'node:path';
@@ -222,8 +222,14 @@ export function validateVercelPlugin(pluginDir: string, onIoError?: FreshnessIoH
   const findings: Finding[] = [];
   for (const skillPath of skillPaths) {
     findings.push(
-      ...(checkValidationIo(() => validateSkillMd(skillPath, pluginName), onIoError, pluginName) ??
-        []),
+      ...(checkValidationIo(
+        () => {
+          if (onIoError !== undefined) assertRegularFile(skillPath);
+          return validateSkillMd(skillPath, pluginName);
+        },
+        onIoError,
+        pluginName,
+      ) ?? []),
     );
   }
   return findings;

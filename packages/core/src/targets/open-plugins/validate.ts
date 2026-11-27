@@ -19,7 +19,7 @@
  * @see docs/specs/architecture.md §8.1 (Finding, FindingCode)
  */
 
-import { checkValidationIo } from '../../pipeline/validation-io.js';
+import { checkValidationIo, readValidationJson } from '../../pipeline/validation-io.js';
 import type { FreshnessIoHandler } from '../../pipeline/validation-io.js';
 import * as fs from 'node:fs';
 import * as path from 'node:path';
@@ -86,14 +86,17 @@ export function resolveContainedPath(pluginDir: string, refPath: string): string
 // Manifest schema + file-ref validation
 // ---------------------------------------------------------------------------
 
-function validateManifest(pluginDir: string, pluginName: string): Finding[] {
+function validateManifest(
+  pluginDir: string,
+  pluginName: string,
+  onIoError?: FreshnessIoHandler,
+): Finding[] {
   const manifestPath = path.join(pluginDir, '.plugin', 'plugin.json');
   if (!fs.existsSync(manifestPath)) return [];
 
-  let raw: unknown;
-  try {
-    raw = JSON.parse(fs.readFileSync(manifestPath, 'utf-8'));
-  } catch {
+  const json = readValidationJson(manifestPath, onIoError, pluginName);
+  if (json === undefined) return [];
+  if (!json.ok) {
     return [
       makeInvalid(
         pluginName,
@@ -103,7 +106,7 @@ function validateManifest(pluginDir: string, pluginName: string): Finding[] {
     ];
   }
 
-  const parsed = openPluginsManifestSchema.safeParse(raw);
+  const parsed = openPluginsManifestSchema.safeParse(json.value);
   if (!parsed.success) {
     const issues = parsed.error.issues.map((i) => i.message).join('; ');
     return [
@@ -217,8 +220,11 @@ export function validateOpenPluginsPlugin(
 ): Finding[] {
   const pluginName = path.basename(pluginDir);
   return [
-    ...(checkValidationIo(() => validateManifest(pluginDir, pluginName), onIoError, pluginName) ??
-      []),
+    ...(checkValidationIo(
+      () => validateManifest(pluginDir, pluginName, onIoError),
+      onIoError,
+      pluginName,
+    ) ?? []),
     ...(checkValidationIo(
       () => validateMetadataDirIsolation(pluginDir, pluginName),
       onIoError,

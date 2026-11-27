@@ -314,7 +314,7 @@ Invoked by `aipm validate` (or as a subphase of `aipm build`). Inspects on-disk 
 ### 5.4 Phase invariants
 
 - Author produces inputs; Build produces outputs; Validate inspects both.
-- Both core build operations run validation once after writing artifacts. `build()` returns the per-plugin results array and skips freshness checks. `buildWithOutcome()` returns the results and validation findings, including freshness checks. With `failFast` enabled, either operation rejects on hard structural findings. `buildWithOutcome()` also rejects when a filesystem error prevents a structural or freshness check.
+- Both core build operations run validation once after writing artifacts. `build()` returns the per-plugin results array and skips freshness checks. `buildWithOutcome()` returns the results and validation findings, including freshness and published-surface checks. With `failFast` enabled, either operation rejects on hard structural findings. `buildWithOutcome()` also rejects when a filesystem error prevents a structural or freshness check.
 - The CLI calls `build()` and then `validate()` with the published-surface boundary check disabled. Fatal errors go to stderr, and hard validation findings go to stdout with exit status 1. Artifact drift is hard in CI and soft locally. Standalone validation also checks the published-surface boundary.
 - `buildWithOutcome()` assumes source inputs stay unchanged by other processes during the call. It reports filesystem failures that prevent validation as hard diagnostics. Fatal generation errors reject with any findings already established.
 

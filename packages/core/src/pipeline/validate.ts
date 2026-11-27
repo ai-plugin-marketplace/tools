@@ -43,6 +43,7 @@ import {
 } from './artifacts.js';
 import type { RegistryArtifact, RootArtifacts } from './artifacts.js';
 import {
+  assertReadableFile,
   assertRegularFile,
   captureValidationIo,
   checkValidationIo,
@@ -324,19 +325,31 @@ export function validateFrontmatterParses(
     const dir = path.join(pluginDir, sub);
     for (const entry of readOptionalDirectory(dir, onIoError, pluginName)) {
       const candidate = path.join(dir, entry.name);
-      const linked = entry.isSymbolicLink() && onIoError !== undefined;
-      const stat = linked
-        ? checkValidationIo(() => fs.statSync(candidate), onIoError, pluginName)
-        : entry;
-      if (stat === undefined) continue;
-      if (sub === 'skills' && stat.isDirectory()) {
-        files.push({ path: path.join(dir, entry.name, 'SKILL.md'), optional: true });
+      if (entry.isSymbolicLink() && onIoError !== undefined) {
+        // Probe linked inputs without extending frontmatter validation to their targets.
+        checkValidationIo(
+          () => {
+            const stat = fs.statSync(candidate);
+            if (sub === 'skills' && stat.isDirectory()) {
+              const skill = path.join(candidate, 'SKILL.md');
+              if (strictExists(skill)) assertReadableFile(skill);
+            } else if (sub !== 'skills' && entry.name.endsWith('.md')) {
+              assertReadableFile(candidate);
+            }
+          },
+          onIoError,
+          pluginName,
+        );
+        continue;
+      }
+      if (sub === 'skills' && entry.isDirectory()) {
+        files.push({ path: path.join(candidate, 'SKILL.md'), optional: true });
       } else if (
         sub !== 'skills' &&
-        (stat.isFile() || onIoError !== undefined) &&
+        (entry.isFile() || onIoError !== undefined) &&
         entry.name.endsWith('.md')
       ) {
-        files.push({ path: path.join(dir, entry.name), optional: false });
+        files.push({ path: candidate, optional: false });
       }
     }
   }
@@ -1918,23 +1931,24 @@ function compareTrees(
  *
  * @param targetPath - Absolute path to a single plugin directory or a repo root.
  * @param opts - Validate options. `ci` controls freshness severity (default: local/soft).
- * @param onFreshnessIoError - Report recoverable I/O errors to the build outcome.
+ * @param state - Internal build validation state.
  * @returns The combined validation result.
  */
 export async function runValidate(
   targetPath: string,
-  opts?: ValidateOptions & {
-    ci?: boolean;
-    rootOwnership?: RootOwnership | undefined;
-    generationDiscovery?: Discovery | undefined;
-    outcomeFindings?: Finding[] | undefined;
+  opts?: ValidateOptions & { ci?: boolean },
+  state?: {
+    rootOwnership: RootOwnership | undefined;
+    generationDiscovery: Discovery;
+    findings: Finding[];
+    onIoError: FreshnessIoHandler;
   },
-  onFreshnessIoError?: FreshnessIoHandler,
 ): Promise<ValidationResult> {
   const ci = opts?.ci ?? false;
   const skipFreshness = opts?.skipFreshness ?? false;
 
-  const findings = opts?.outcomeFindings ?? [];
+  const findings = state?.findings ?? [];
+  const onFreshnessIoError = state?.onIoError;
   const exists = onFreshnessIoError === undefined ? fs.existsSync : strictExists;
   let completeTopology = true;
   const discover = (target: string): Promise<Discovery> =>
@@ -1962,9 +1976,9 @@ export async function runValidate(
     } else if (!captureValidationIo(err, onFreshnessIoError)) {
       throw err;
     }
-    if (opts?.generationDiscovery === undefined) return { findings, passed: false };
+    if (state === undefined) return { findings, passed: false };
     completeTopology = false;
-    discovery = opts.generationDiscovery;
+    discovery = state.generationDiscovery;
   }
   const { repoRoot, distDir, pluginDirs } = discovery;
 
@@ -2149,7 +2163,7 @@ export async function runValidate(
         ),
       );
     }
-    if (opts?.rootOwnership === undefined) {
+    if (state?.rootOwnership === undefined) {
       findings.push(
         ...(await rootArtifactFreshnessRule.check(repoScopedCtx)).map((d) =>
           diagnosticToFinding(d, ci),
@@ -2165,20 +2179,16 @@ export async function runValidate(
           skipFreshness,
           configCache,
           onFreshnessIoError,
-          opts.rootOwnership,
+          state.rootOwnership,
         )),
       );
     }
   }
 
   // ── 8. Published-surface boundary: unpublished skills must be marked internal (#118) ──
-  // Repo-level and independent of registry generation: install channels that scan the repository
-  // for SKILL.md files (the `skills` CLI) ignore registries entirely, so a registry that is
-  // correct says nothing about what those channels offer. The rule classifies skills against the
-  // repo-wide published set and is a no-op when `repoRoot` is not an aipm repo root (a lone plugin
-  // directory has no published surface to guard). Not a freshness check, so it is independent of
-  // `skipFreshness`; `build` opts out through its own option, because a contributor file outside
-  // the plugins says nothing about whether the build output is valid.
+  // Install channels that scan the repository for SKILL.md files ignore registries. This rule
+  // runs independently of freshness and is a no-op when there is no repo-wide published surface.
+  // The results-only build opts out.
   if (!(opts?.skipPublishedSurfaceBoundary ?? false)) {
     const boundaryCtx = createRuleContext({
       pluginDir: repoRoot,

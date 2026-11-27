@@ -20,7 +20,12 @@
  * @see packages/core/docs/specs/architecture.md §8.1 (Finding, FindingCode)
  */
 
-import { checkValidationIo } from '../../pipeline/validation-io.js';
+import {
+  assertReadableFile,
+  checkValidationIo,
+  readValidationJson,
+  strictExists,
+} from '../../pipeline/validation-io.js';
 import type { FreshnessIoHandler } from '../../pipeline/validation-io.js';
 import * as fs from 'node:fs';
 import * as path from 'node:path';
@@ -76,10 +81,9 @@ function validateManifestFileRefs(
   const manifestPath = path.join(pluginDir, '.cursor-plugin', 'plugin.json');
   if (!fs.existsSync(manifestPath)) return [];
 
-  let raw: unknown;
-  try {
-    raw = JSON.parse(fs.readFileSync(manifestPath, 'utf-8'));
-  } catch {
+  const json = readValidationJson(manifestPath, onIoError, pluginName);
+  if (json === undefined) return [];
+  if (!json.ok) {
     return [
       makeInvalid(
         pluginName,
@@ -89,7 +93,7 @@ function validateManifestFileRefs(
     ];
   }
 
-  const parsed = cursorPluginManifestSchema.safeParse(raw);
+  const parsed = cursorPluginManifestSchema.safeParse(json.value);
   if (!parsed.success) {
     const issues = parsed.error.issues.map((i) => i.message).join('; ');
     return [
@@ -249,14 +253,17 @@ function validateRetiredHooksRef(pluginDir: string, pluginName: string): Finding
  * The toolkit stamps a top-level `_generated` sentinel onto the file (§4.3); it is a
  * toolkit-owned field, so it is dropped before the strict schema check rather than rejected.
  */
-function validateCursorHooksFile(pluginDir: string, pluginName: string): Finding[] {
+function validateCursorHooksFile(
+  pluginDir: string,
+  pluginName: string,
+  onIoError?: FreshnessIoHandler,
+): Finding[] {
   const hooksPath = path.join(pluginDir, 'hooks', 'cursor.json');
   if (!fs.existsSync(hooksPath)) return [];
 
-  let raw: unknown;
-  try {
-    raw = JSON.parse(fs.readFileSync(hooksPath, 'utf-8'));
-  } catch {
+  const json = readValidationJson(hooksPath, onIoError, pluginName);
+  if (json === undefined) return [];
+  if (!json.ok) {
     return [
       makeInvalid(
         pluginName,
@@ -265,6 +272,7 @@ function validateCursorHooksFile(pluginDir: string, pluginName: string): Finding
       ),
     ];
   }
+  const raw = json.value;
 
   // Drop the toolkit-owned `_generated` sentinel (§4.3) so the strict schema validates only the
   // hook payload rather than rejecting the sentinel field.
@@ -320,15 +328,27 @@ function validateCursorRules(
   onIoError?: FreshnessIoHandler,
 ): Finding[] {
   const rulesDir = path.join(pluginDir, 'rules');
-  if (!fs.existsSync(rulesDir)) return [];
+  if (!(onIoError === undefined ? fs.existsSync(rulesDir) : strictExists(rulesDir))) return [];
 
   const findings: Finding[] = [];
 
   const entries = fs.readdirSync(rulesDir, { withFileTypes: true });
   for (const entry of entries) {
-    if (!entry.isFile() || !entry.name.endsWith('.mdc')) continue;
+    if (!entry.name.endsWith('.mdc')) continue;
 
     const filePath = path.join(rulesDir, entry.name);
+    if (!entry.isFile()) {
+      if (onIoError !== undefined) {
+        checkValidationIo(
+          () => {
+            assertReadableFile(filePath);
+          },
+          onIoError,
+          pluginName,
+        );
+      }
+      continue;
+    }
     const content = checkValidationIo(
       () => fs.readFileSync(filePath, 'utf-8'),
       onIoError,
@@ -393,7 +413,7 @@ export function validateCursorPlugin(pluginDir: string, onIoError?: FreshnessIoH
       pluginName,
     ) ?? []),
     ...(checkValidationIo(
-      () => validateCursorHooksFile(pluginDir, pluginName),
+      () => validateCursorHooksFile(pluginDir, pluginName, onIoError),
       onIoError,
       pluginName,
     ) ?? []),

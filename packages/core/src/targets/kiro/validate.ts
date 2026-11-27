@@ -23,7 +23,7 @@
  * @see docs/specs/architecture.md §12.5 (internal module shape), §3.4 (target isolation)
  */
 
-import { checkValidationIo } from '../../pipeline/validation-io.js';
+import { checkValidationIo, readValidationJson } from '../../pipeline/validation-io.js';
 import type { FreshnessIoHandler } from '../../pipeline/validation-io.js';
 import * as fs from 'node:fs';
 import * as path from 'node:path';
@@ -162,14 +162,17 @@ function validatePowerMd(pluginDir: string, pluginName: string): Finding[] {
  * If `mcp.json` exists, parse JSON and validate against `kiroMcpConfigSchema`.
  * Missing file → no finding (envelope-adherence owns that check).
  */
-function validateMcpJson(pluginDir: string, pluginName: string): Finding[] {
+function validateMcpJson(
+  pluginDir: string,
+  pluginName: string,
+  onIoError?: FreshnessIoHandler,
+): Finding[] {
   const mcpPath = path.join(pluginDir, 'mcp.json');
   if (!fs.existsSync(mcpPath)) return [];
 
-  let raw: unknown;
-  try {
-    raw = JSON.parse(fs.readFileSync(mcpPath, 'utf-8')) as unknown;
-  } catch {
+  const json = readValidationJson(mcpPath, onIoError, pluginName);
+  if (json === undefined) return [];
+  if (!json.ok) {
     return [
       hardSchemaFinding(
         pluginName,
@@ -179,7 +182,7 @@ function validateMcpJson(pluginDir: string, pluginName: string): Finding[] {
     ];
   }
 
-  const result = kiroMcpConfigSchema.safeParse(raw);
+  const result = kiroMcpConfigSchema.safeParse(json.value);
   if (!result.success) {
     const issues = result.error.issues
       .map((i) => `${i.path.join('.') || '(root)'}: ${i.message}`)
@@ -296,8 +299,11 @@ export function validateKiroPlugin(pluginDir: string, onIoError?: FreshnessIoHan
   return [
     ...(checkValidationIo(() => validatePowerMd(pluginDir, pluginName), onIoError, pluginName) ??
       []),
-    ...(checkValidationIo(() => validateMcpJson(pluginDir, pluginName), onIoError, pluginName) ??
-      []),
+    ...(checkValidationIo(
+      () => validateMcpJson(pluginDir, pluginName, onIoError),
+      onIoError,
+      pluginName,
+    ) ?? []),
     ...(checkValidationIo(
       () => validateAgentToolNames(pluginDir, pluginName, onIoError),
       onIoError,

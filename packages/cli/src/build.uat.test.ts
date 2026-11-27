@@ -1,11 +1,16 @@
-import { spawnSync } from 'node:child_process';
+import { execFileSync, spawnSync } from 'node:child_process';
 import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { expect, it } from 'vitest';
+import { beforeAll, expect, it } from 'vitest';
 
-const bin = fileURLToPath(new URL('../dist/bin.js', import.meta.url));
+const cliDir = fileURLToPath(new URL('../', import.meta.url));
+const bin = path.join(cliDir, 'dist', 'bin.js');
+
+beforeAll(() => {
+  execFileSync('pnpm', ['exec', 'tsc', '--build'], { cwd: cliDir, stdio: 'inherit' });
+}, 120_000);
 
 it.each([
   {

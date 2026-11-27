@@ -24,7 +24,7 @@
  * @see docs/specs/lint-engine.md §3.2
  */
 
-import * as fs from 'node:fs';
+import { repositoryFs as fs } from '../../pipeline/repository-fs.js';
 import * as path from 'node:path';
 import { offsetToPosition, rangeForPath } from '../document.js';
 import type { Diagnostic, Range, Rule, RuleContext } from '../types.js';

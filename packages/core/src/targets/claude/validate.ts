@@ -14,13 +14,11 @@
  */
 
 import {
-  checkValidationIo,
-  invalidInputPath,
-  readValidationJson,
-  strictExists,
-} from '../../pipeline/validation-io.js';
-import type { FreshnessIoHandler } from '../../pipeline/validation-io.js';
-import * as fs from 'node:fs';
+  collectReadableChecks,
+  isFileEntry,
+  referenceExists,
+  repositoryFs as fs,
+} from '../../pipeline/repository-fs.js';
 import * as path from 'node:path';
 
 import { parse as parseYaml } from 'yaml';
@@ -88,17 +86,14 @@ function normalizePathField(
  *   - `hooks`: the ref (if a string) must point to a `.json` file
  *   - `commands`: the ref can be a file or directory; existence is sufficient
  */
-function validateManifestFileRefs(
-  pluginDir: string,
-  pluginName: string,
-  onIoError?: FreshnessIoHandler,
-): Finding[] {
+function validateManifestFileRefs(pluginDir: string, pluginName: string): Finding[] {
   const manifestPath = path.join(pluginDir, '.claude-plugin', 'plugin.json');
   if (!fs.existsSync(manifestPath)) return [];
 
-  const json = readValidationJson(manifestPath, onIoError, pluginName);
-  if (json === undefined) return [];
-  if (!json.ok) {
+  let raw: unknown;
+  try {
+    raw = JSON.parse(fs.readFileSync(manifestPath, 'utf-8')) as unknown;
+  } catch {
     return [
       hardFinding(
         pluginName,
@@ -108,7 +103,7 @@ function validateManifestFileRefs(
     ];
   }
 
-  const parseResult = claudePluginManifestSchema.safeParse(json.value);
+  const parseResult = claudePluginManifestSchema.safeParse(raw);
   if (!parseResult.success) {
     // Shape errors (including a missing required field, e.g. `name`) — surface a hard finding
     // here. Skip ref checking: there is no reliably-shaped manifest data to check refs against.
@@ -129,43 +124,26 @@ function validateManifestFileRefs(
 
   // skills: directory path(s)
   for (const ref of normalizePathField(manifest.skills)) {
-    const finding = checkValidationIo(
-      () => checkRef(pluginDir, pluginName, 'skills', ref, 'directory', onIoError !== undefined),
-      onIoError,
-      pluginName,
-    );
-    if (finding != null) findings.push(finding);
+    const finding = checkRef(pluginDir, pluginName, 'skills', ref, 'directory');
+    if (finding !== null) findings.push(finding);
   }
 
   // agents: .md file path(s)
   for (const ref of normalizePathField(manifest.agents)) {
-    const finding = checkValidationIo(
-      () => checkRef(pluginDir, pluginName, 'agents', ref, 'md-file', onIoError !== undefined),
-      onIoError,
-      pluginName,
-    );
-    if (finding != null) findings.push(finding);
+    const finding = checkRef(pluginDir, pluginName, 'agents', ref, 'md-file');
+    if (finding !== null) findings.push(finding);
   }
 
   // commands: path string(s) — file or directory, just check existence
   for (const ref of normalizePathField(manifest.commands)) {
-    const finding = checkValidationIo(
-      () => checkRef(pluginDir, pluginName, 'commands', ref, 'any', onIoError !== undefined),
-      onIoError,
-      pluginName,
-    );
-    if (finding != null) findings.push(finding);
+    const finding = checkRef(pluginDir, pluginName, 'commands', ref, 'any');
+    if (finding !== null) findings.push(finding);
   }
 
   // hooks: path string → .json file (inline objects have no path to check)
-  const hooks = manifest.hooks;
-  if (typeof hooks === 'string') {
-    const finding = checkValidationIo(
-      () => checkRef(pluginDir, pluginName, 'hooks', hooks, 'json-file', onIoError !== undefined),
-      onIoError,
-      pluginName,
-    );
-    if (finding != null) findings.push(finding);
+  if (typeof manifest.hooks === 'string') {
+    const finding = checkRef(pluginDir, pluginName, 'hooks', manifest.hooks, 'json-file');
+    if (finding !== null) findings.push(finding);
   }
 
   // mcpServers: a config-path string is NOT existence-checked (it names a `.mcp.json` config, not a
@@ -200,7 +178,6 @@ function checkRef(
   field: string,
   ref: string,
   kind: RefKind,
-  checkReadability: boolean,
 ): Finding | null {
   // Schema already enforces `./` prefix and `.md`/`.json` suffixes, but we
   // re-check gracefully so the validator is robust against schema bypass.
@@ -223,7 +200,7 @@ function checkRef(
   const normalized = ref.slice(2); // strip leading "./"
   const resolved = path.join(pluginDir, normalized);
 
-  if (!(checkReadability ? strictExists(resolved) : fs.existsSync(resolved))) {
+  if (!referenceExists(resolved, kind === 'directory' ? 'directory' : 'file')) {
     const hint = buildMissingHint(pluginName, field, ref);
     return hardFinding(
       pluginName,
@@ -276,13 +253,6 @@ function checkRef(
     }
   }
 
-  if (checkReadability) {
-    if (!stat.isFile() && !stat.isDirectory()) {
-      throw invalidInputPath('EINVAL', resolved, 'expected a file or directory');
-    }
-    fs.accessSync(resolved, fs.constants.R_OK);
-  }
-
   return null;
 }
 
@@ -308,11 +278,7 @@ function buildMissingHint(pluginName: string, field: string, ref: string): strin
  * Validate YAML frontmatter of all `.md` files directly under `agents/` (one level deep).
  * Each file must have a frontmatter block and it must satisfy `claudeAgentFrontmatterSchema`.
  */
-function validateAgentFrontmatter(
-  pluginDir: string,
-  pluginName: string,
-  onIoError?: FreshnessIoHandler,
-): Finding[] {
+function validateAgentFrontmatter(pluginDir: string, pluginName: string): Finding[] {
   const agentsDir = path.join(pluginDir, 'agents');
   if (!fs.existsSync(agentsDir)) return [];
 
@@ -320,16 +286,11 @@ function validateAgentFrontmatter(
   const findings: Finding[] = [];
 
   for (const entry of entries) {
-    if (!entry.isFile() || !entry.name.endsWith('.md')) continue;
+    if (!isFileEntry(agentsDir, entry, '.md')) continue;
 
     const agentPath = path.join(agentsDir, entry.name);
     const relPath = `agents/${entry.name}`;
-    const content = checkValidationIo(
-      () => fs.readFileSync(agentPath, 'utf-8'),
-      onIoError,
-      pluginName,
-    );
-    if (content === undefined) continue;
+    const content = fs.readFileSync(agentPath, 'utf-8');
 
     // Require a frontmatter block: must start with "---\n" and have a closing "---"
     const fmMatch = /^---\r?\n([\s\S]*?)\r?\n---/m.exec(content);
@@ -422,11 +383,7 @@ function isRegularFile(absPath: string): boolean {
  * against `claudeHooksFileSchema`: that schema is the YAML compiler's source contract, which is
  * narrower than the events and handler forms Claude Code accepts in a hand-written file.
  */
-function validateHooksFile(
-  pluginDir: string,
-  pluginName: string,
-  onIoError?: FreshnessIoHandler,
-): Finding[] {
+function validateHooksFile(pluginDir: string, pluginName: string): Finding[] {
   const hooksPath = path.join(pluginDir, ...CLAUDE_HOOKS_PATH.split('/'));
   if (!fs.existsSync(hooksPath)) return [];
   if (!isRegularFile(hooksPath)) {
@@ -439,9 +396,10 @@ function validateHooksFile(
     ];
   }
 
-  const json = readValidationJson(hooksPath, onIoError, pluginName);
-  if (json === undefined) return [];
-  if (!json.ok) {
+  let raw: unknown;
+  try {
+    raw = JSON.parse(fs.readFileSync(hooksPath, 'utf-8')) as unknown;
+  } catch {
     return [
       hardFinding(
         pluginName,
@@ -450,7 +408,6 @@ function validateHooksFile(
       ),
     ];
   }
-  const raw = json.value;
 
   if (typeof raw !== 'object' || raw === null || Array.isArray(raw)) {
     return [
@@ -623,46 +580,18 @@ function validateManifestHooksField(pluginDir: string, pluginName: string): Find
  *
  * All findings emitted here use `plugin: path.basename(pluginDir)`.
  */
-export function validateClaudePlugin(pluginDir: string, onIoError?: FreshnessIoHandler): Finding[] {
+export function validateClaudePlugin(pluginDir: string): Finding[] {
   const pluginName = path.basename(pluginDir);
 
-  return [
-    ...(checkValidationIo(
-      () => validateManifestFileRefs(pluginDir, pluginName, onIoError),
-      onIoError,
-      pluginName,
-    ) ?? []),
-    ...(checkValidationIo(
-      () => validateAgentFrontmatter(pluginDir, pluginName, onIoError),
-      onIoError,
-      pluginName,
-    ) ?? []),
-    ...(checkValidationIo(
-      () => validateHooksFile(pluginDir, pluginName, onIoError),
-      onIoError,
-      pluginName,
-    ) ?? []),
-    ...(checkValidationIo(
-      () => validateRetiredHooksFile(pluginDir, pluginName),
-      onIoError,
-      pluginName,
-    ) ?? []),
-    ...(checkValidationIo(
-      () => validateOrphanedHooksFile(pluginDir, pluginName),
-      onIoError,
-      pluginName,
-    ) ?? []),
-    ...(checkValidationIo(
-      () => validateManifestHooksField(pluginDir, pluginName),
-      onIoError,
-      pluginName,
-    ) ?? []),
-    ...(checkValidationIo(
-      () => validateOpenPluginsConformance(pluginDir, pluginName),
-      onIoError,
-      pluginName,
-    ) ?? []),
-  ];
+  return collectReadableChecks([
+    () => validateManifestFileRefs(pluginDir, pluginName),
+    () => validateAgentFrontmatter(pluginDir, pluginName),
+    () => validateHooksFile(pluginDir, pluginName),
+    () => validateRetiredHooksFile(pluginDir, pluginName),
+    () => validateOrphanedHooksFile(pluginDir, pluginName),
+    () => validateManifestHooksField(pluginDir, pluginName),
+    () => validateOpenPluginsConformance(pluginDir, pluginName),
+  ]);
 }
 
 /**

@@ -26,7 +26,7 @@ import { convertClaudeHooksYamlToJson } from '../targets/claude/transform.js';
 import { convertClaudeHooksYamlToCursorJson } from '../targets/cursor/transform.js';
 import { CURSOR_SHIM_FILENAME, CURSOR_SHIM_RUNNER_SOURCE } from '../targets/cursor/shim-runner.js';
 import { build, buildWithOutcome } from '../index.js';
-import { computePluginHookArtifacts } from './artifacts.js';
+import { computePluginHookArtifacts } from './build.js';
 import { runBuild } from './build.js';
 import { GeneratorDowngradeError, getGeneratorVersion } from './generator-version.js';
 import {

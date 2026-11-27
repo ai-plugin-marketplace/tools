@@ -11,7 +11,7 @@
 
 import { validatePerTargetSchemas } from '../../pipeline/validate.js';
 import { findingToDiagnostic } from '../diagnostic.js';
-import type { Diagnostic, InternalRuleContext, Rule } from '../types.js';
+import type { Diagnostic, Rule, RuleContext } from '../types.js';
 import { docsUrlFor } from './docs-url.js';
 
 const RULE_ID = 'schema/target-conformance';
@@ -27,8 +27,8 @@ export const targetSchemaRule: Rule = {
     // mode would instead validate a single known manifest shape directly, not via an envelope.)
     appliesTo: ['aipm-repo'],
   },
-  check(ctx: InternalRuleContext): Diagnostic[] {
-    const findings = validatePerTargetSchemas(ctx.pluginDir, ctx.envelope, ctx.onFreshnessIoError);
+  check(ctx: RuleContext): Diagnostic[] {
+    const findings = validatePerTargetSchemas(ctx.pluginDir, ctx.envelope);
     return findings.map((f) => findingToDiagnostic(f, RULE_ID, 'schema', docsUrlFor(RULE_ID)));
   },
 };

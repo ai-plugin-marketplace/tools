@@ -19,12 +19,11 @@
  * @see docs/specs/architecture.md §5.2, §5.3 (build/validate consume the loaded envelope)
  */
 
-import * as fs from 'node:fs';
+import { readConfig, repositoryFs as fs } from './repository-fs.js';
 import * as path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 import { createJiti } from 'jiti';
-import { assertRegularFile } from './validation-io.js';
 
 import { defineConfig, defineRepoConfig, defineWorkspace } from '../config.js';
 import type {
@@ -125,7 +124,7 @@ async function importDefaultExport(configPath: string, filename: string): Promis
 
   let mod: Record<string, unknown>;
   try {
-    mod = await jiti.import<Record<string, unknown>>(configPath);
+    mod = await readConfig(configPath, () => jiti.import<Record<string, unknown>>(configPath));
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
     throw new ConfigLoadError(`Failed to import ${filename}: ${message}`, { cause: err });
@@ -179,20 +178,18 @@ export function createConfigCache(): ConfigCache {
 export async function loadPluginConfig(
   pluginDir: string,
   cache?: ConfigCache,
-  exists = fs.existsSync,
 ): Promise<AipmConfig> {
   const cached = cache?.get(pluginDir);
   if (cached !== undefined) return cached;
 
   const configPath = configPathFor(pluginDir);
 
-  if (!exists(configPath)) {
+  if (!fs.existsSync(configPath)) {
     throw new ConfigLoadError(
       `No ${AIPM_CONFIG_FILENAME} found in ${pluginDir}. Every plugin must declare a support envelope (spec §6.1).`,
     );
   }
 
-  if (exists !== fs.existsSync) assertRegularFile(configPath);
   const defaultExport = await importDefaultExport(configPath, AIPM_CONFIG_FILENAME);
 
   // Re-validate through defineConfig so the result is a branded AipmConfig. defineConfig throws
@@ -223,8 +220,8 @@ export interface ResolvedRepoConfig {
 export const DEFAULT_REPO_CONFIG: ResolvedRepoConfig = { pluginsRoot: 'plugins', distDir: 'dist' };
 
 /** True iff `repoRoot` contains an `aipm.repo.ts`. */
-export function hasRepoConfig(repoRoot: string, exists = fs.existsSync): boolean {
-  return exists(path.join(repoRoot, AIPM_REPO_CONFIG_FILENAME));
+export function hasRepoConfig(repoRoot: string): boolean {
+  return fs.existsSync(path.join(repoRoot, AIPM_REPO_CONFIG_FILENAME));
 }
 
 /**
@@ -239,16 +236,12 @@ export function hasRepoConfig(repoRoot: string, exists = fs.existsSync): boolean
  * @returns The resolved repo config.
  * @throws {ConfigLoadError} If the file exists but cannot be imported or fails validation.
  */
-export async function loadRepoConfig(
-  repoRoot: string,
-  exists = fs.existsSync,
-): Promise<ResolvedRepoConfig> {
+export async function loadRepoConfig(repoRoot: string): Promise<ResolvedRepoConfig> {
   const configPath = path.join(repoRoot, AIPM_REPO_CONFIG_FILENAME);
-  if (!exists(configPath)) {
+  if (!fs.existsSync(configPath)) {
     return { ...DEFAULT_REPO_CONFIG };
   }
 
-  if (exists !== fs.existsSync) assertRegularFile(configPath);
   const defaultExport = await importDefaultExport(configPath, AIPM_REPO_CONFIG_FILENAME);
 
   try {
@@ -278,16 +271,12 @@ export function hasWorkspaceConfig(repoRoot: string): boolean {
  * @returns The validated workspace config, or `undefined` when no `aipm.workspace.ts` exists.
  * @throws {ConfigLoadError} If the file exists but cannot be imported or fails validation.
  */
-export async function loadWorkspaceConfig(
-  repoRoot: string,
-  exists = fs.existsSync,
-): Promise<AipmWorkspace | undefined> {
+export async function loadWorkspaceConfig(repoRoot: string): Promise<AipmWorkspace | undefined> {
   const configPath = path.join(repoRoot, AIPM_WORKSPACE_CONFIG_FILENAME);
-  if (!exists(configPath)) {
+  if (!fs.existsSync(configPath)) {
     return undefined;
   }
 
-  if (exists !== fs.existsSync) assertRegularFile(configPath);
   const defaultExport = await importDefaultExport(configPath, AIPM_WORKSPACE_CONFIG_FILENAME);
 
   try {

@@ -8,7 +8,7 @@
  * @see docs/specs/architecture.md §12.4, §12.5
  */
 
-import * as fs from 'node:fs';
+import { inputExists, repositoryFs as fs } from '../../pipeline/repository-fs.js';
 import * as path from 'node:path';
 import { buildKiroAgentConfig } from './transform.js';
 
@@ -21,24 +21,24 @@ function copyFile(src: string, dest: string): void {
   fs.copyFileSync(src, dest);
 }
 
-function copyDir(src: string, dest: string, exists: typeof fs.existsSync): void {
-  if (!exists(src)) return;
+function copyDir(src: string, dest: string): void {
+  if (!fs.existsSync(src)) return;
   fs.mkdirSync(dest, { recursive: true });
   for (const entry of fs.readdirSync(src, { withFileTypes: true })) {
     const srcPath = path.join(src, entry.name);
     const destPath = path.join(dest, entry.name);
     if (entry.isDirectory()) {
-      copyDir(srcPath, destPath, exists);
+      copyDir(srcPath, destPath);
     } else {
       copyFile(srcPath, destPath);
     }
   }
 }
 
-function copyIfExists(src: string, dest: string, exists: typeof fs.existsSync): boolean {
-  if (!exists(src)) return false;
+function copyIfExists(src: string, dest: string, expected: 'file' | 'directory'): boolean {
+  if (!inputExists(src, expected)) return false;
   if (fs.statSync(src).isDirectory()) {
-    copyDir(src, dest, exists);
+    copyDir(src, dest);
   } else {
     copyFile(src, dest);
   }
@@ -76,13 +76,9 @@ export interface BundleKiroPluginResult {
  *
  * Impure (I/O): reads from `pluginDir`, writes to `destDir`.
  */
-export function bundleKiroPlugin(
-  pluginDir: string,
-  destDir: string,
-  exists = fs.existsSync,
-): BundleKiroPluginResult {
+export function bundleKiroPlugin(pluginDir: string, destDir: string): BundleKiroPluginResult {
   // Clear dest first, matching buildKiroStandalone's cleanDir behaviour.
-  if (exists(destDir)) {
+  if (fs.existsSync(destDir)) {
     fs.rmSync(destDir, { recursive: true });
   }
 
@@ -92,7 +88,7 @@ export function bundleKiroPlugin(
   // Canonical files (README.md/LICENSE are intentionally excluded — see module doc above)
   const files: string[] = ['POWER.md', 'mcp.json'];
   for (const file of files) {
-    if (copyIfExists(path.join(pluginDir, file), path.join(destDir, file), exists)) {
+    if (copyIfExists(path.join(pluginDir, file), path.join(destDir, file), 'file')) {
       emitted.push(file);
     }
   }
@@ -100,14 +96,14 @@ export function bundleKiroPlugin(
   // Canonical directories
   const dirs: string[] = ['steering', 'skills'];
   for (const dir of dirs) {
-    if (copyIfExists(path.join(pluginDir, dir), path.join(destDir, dir), exists)) {
+    if (copyIfExists(path.join(pluginDir, dir), path.join(destDir, dir), 'directory')) {
       emitted.push(`${dir}/`);
     }
   }
 
   // Generate .kiro/agents/<name>.json from agent .md files
   const agentsSrc = path.join(pluginDir, 'agents');
-  if (exists(agentsSrc)) {
+  if (fs.existsSync(agentsSrc)) {
     const kiroAgentsDir = path.join(destDir, '.kiro', 'agents');
     let anyGenerated = false;
 

@@ -16,9 +16,7 @@
  * @see docs/specs/architecture.md §8.1 (Finding types)
  */
 
-import { checkValidationIo, readValidationJson } from '../../pipeline/validation-io.js';
-import type { FreshnessIoHandler } from '../../pipeline/validation-io.js';
-import * as fs from 'node:fs';
+import { isFileEntry, repositoryFs as fs } from '../../pipeline/repository-fs.js';
 import * as path from 'node:path';
 
 import { parse as parseYaml } from 'yaml';
@@ -55,11 +53,7 @@ function parseFrontmatter(content: string): Record<string, unknown> | undefined 
  *
  * Per §10.2 soft findings do not flip `ValidationResult.passed`.
  */
-function checkAgentToolTranslations(
-  pluginDir: string,
-  pluginName: string,
-  onIoError?: FreshnessIoHandler,
-): Finding[] {
+function checkAgentToolTranslations(pluginDir: string, pluginName: string): Finding[] {
   const findings: Finding[] = [];
   const agentsDir = path.join(pluginDir, 'agents');
 
@@ -68,15 +62,10 @@ function checkAgentToolTranslations(
   const entries = fs.readdirSync(agentsDir, { withFileTypes: true });
 
   for (const entry of entries) {
-    if (!entry.isFile() || !entry.name.endsWith('.md')) continue;
+    if (!isFileEntry(agentsDir, entry, '.md')) continue;
 
     const agentPath = path.join(agentsDir, entry.name);
-    const content = checkValidationIo(
-      () => fs.readFileSync(agentPath, 'utf-8'),
-      onIoError,
-      pluginName,
-    );
-    if (content === undefined) continue;
+    const content = fs.readFileSync(agentPath, 'utf-8');
     const frontmatter = parseFrontmatter(content);
 
     if (!frontmatter) continue;
@@ -113,19 +102,16 @@ function checkAgentToolTranslations(
  * finding. Absence of the file produces no finding (cross-target envelope-adherence
  * handles the missing-file case).
  */
-function checkGeminiExtensionJson(
-  pluginDir: string,
-  pluginName: string,
-  onIoError?: FreshnessIoHandler,
-): Finding[] {
+function checkGeminiExtensionJson(pluginDir: string, pluginName: string): Finding[] {
   const manifestPath = path.join(pluginDir, 'gemini-extension.json');
 
   if (!fs.existsSync(manifestPath)) return [];
 
-  const json = readValidationJson(manifestPath, onIoError, pluginName);
-  if (json === undefined) return [];
-  if (!json.ok) {
-    const msg = json.error instanceof Error ? json.error.message : String(json.error);
+  let raw: unknown;
+  try {
+    raw = JSON.parse(fs.readFileSync(manifestPath, 'utf-8')) as unknown;
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
     return [
       {
         severity: 'hard',
@@ -137,7 +123,7 @@ function checkGeminiExtensionJson(
     ];
   }
 
-  const result = geminiExtensionManifestSchema.safeParse(json.value);
+  const result = geminiExtensionManifestSchema.safeParse(raw);
   if (!result.success) {
     const issues = result.error.issues
       .map((i) => `${i.path.join('.') || '(root)'}: ${i.message}`)
@@ -166,18 +152,10 @@ function checkGeminiExtensionJson(
  * `pluginDir` is the absolute path to a `plugins/<name>/` directory.
  * All findings use `plugin: path.basename(pluginDir)`.
  */
-export function validateGeminiPlugin(pluginDir: string, onIoError?: FreshnessIoHandler): Finding[] {
+export function validateGeminiPlugin(pluginDir: string): Finding[] {
   const pluginName = path.basename(pluginDir);
   return [
-    ...(checkValidationIo(
-      () => checkAgentToolTranslations(pluginDir, pluginName, onIoError),
-      onIoError,
-      pluginName,
-    ) ?? []),
-    ...(checkValidationIo(
-      () => checkGeminiExtensionJson(pluginDir, pluginName, onIoError),
-      onIoError,
-      pluginName,
-    ) ?? []),
+    ...checkAgentToolTranslations(pluginDir, pluginName),
+    ...checkGeminiExtensionJson(pluginDir, pluginName),
   ];
 }

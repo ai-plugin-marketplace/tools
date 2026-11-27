@@ -314,9 +314,9 @@ Invoked by `aipm validate` (or as a subphase of `aipm build`). Inspects on-disk 
 ### 5.4 Phase invariants
 
 - Author produces inputs; Build produces outputs; Validate inspects both.
-- Both core build operations run validation once after writing artifacts. `build()` returns the per-plugin results array and skips freshness checks. `buildWithOutcome()` returns the results and validation findings, including freshness and published-surface checks. With `failFast` enabled, either operation rejects on hard structural findings. `buildWithOutcome()` also rejects when a filesystem error prevents a structural or freshness check.
+- `build()` returns the per-plugin results array and skips freshness checks during post-build validation. `buildWithOutcome()` runs the same build and then runs standalone validation, including freshness and the published-surface boundary. With `failFast` enabled, either operation rejects on hard structural findings. `buildWithOutcome()` also rejects on observed filesystem failures.
 - The CLI calls `build()` and then `validate()` with the published-surface boundary check disabled. Fatal errors go to stderr, and hard validation findings go to stdout with exit status 1. Artifact drift is hard in CI and soft locally. Standalone validation also checks the published-surface boundary.
-- `buildWithOutcome()` assumes source inputs stay unchanged by other processes during the call. It reports filesystem failures that prevent validation as hard diagnostics. Fatal generation errors reject with any findings already established.
+- One repository filesystem boundary observes lookups, path resolution, directory enumeration, and reads across generation and validation. `buildWithOutcome()` records failures from that boundary as hard `freshness-io` findings alongside the standalone validation findings. It checks file types before opening files and checks output paths stay inside the repository after resolving symlinks. Fatal generation errors reject with any findings already established. `buildWithOutcome()` assumes source inputs stay unchanged by other processes during the call.
 
 ---
 

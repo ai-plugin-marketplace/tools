@@ -15,7 +15,7 @@
  * @see docs/specs/architecture.md §10.5 (freshness check the CI workflow runs)
  */
 
-import { serializeRootManifest } from './artifacts.js';
+import { serializeRootManifest } from './build.js';
 
 const md = String.raw;
 const yaml = String.raw;

@@ -4,7 +4,7 @@
 
 ## BuildFreshnessIoFinding.code property
 
-Identifies a filesystem failure during validation.
+Identifies a filesystem failure observed during the build or its validation.
 
 **Signature:**
 

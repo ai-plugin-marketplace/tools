@@ -15,9 +15,7 @@
  * @see packages/core/docs/specs/architecture.md §8.1 (Finding, FindingCode)
  */
 
-import { checkValidationIo, readValidationJson } from '../../pipeline/validation-io.js';
-import type { FreshnessIoHandler } from '../../pipeline/validation-io.js';
-import * as fs from 'node:fs';
+import { referenceExists, repositoryFs as fs } from '../../pipeline/repository-fs.js';
 import * as path from 'node:path';
 
 import type { Finding } from '../../pipeline/types.js';
@@ -56,17 +54,14 @@ function normalisePathField(
 // Manifest file-ref validation
 // ---------------------------------------------------------------------------
 
-function validateManifestFileRefs(
-  pluginDir: string,
-  pluginName: string,
-  onIoError?: FreshnessIoHandler,
-): Finding[] {
+function validateManifestFileRefs(pluginDir: string, pluginName: string): Finding[] {
   const manifestPath = path.join(pluginDir, '.codex-plugin', 'plugin.json');
   if (!fs.existsSync(manifestPath)) return [];
 
-  const json = readValidationJson(manifestPath, onIoError, pluginName);
-  if (json === undefined) return [];
-  if (!json.ok) {
+  let raw: unknown;
+  try {
+    raw = JSON.parse(fs.readFileSync(manifestPath, 'utf-8'));
+  } catch {
     return [
       makeInvalid(
         pluginName,
@@ -76,7 +71,7 @@ function validateManifestFileRefs(
     ];
   }
 
-  const parsed = codexPluginManifestSchema.safeParse(json.value);
+  const parsed = codexPluginManifestSchema.safeParse(raw);
   if (!parsed.success) {
     const issues = parsed.error.issues.map((i) => i.message).join('; ');
     return [
@@ -128,7 +123,12 @@ function validateManifestFileRefs(
 
       const resolved = path.join(pluginDir, refPath.slice(2));
 
-      if (!fs.existsSync(resolved)) {
+      if (
+        !referenceExists(
+          resolved,
+          mustBeDir === undefined ? undefined : mustBeDir ? 'directory' : 'file',
+        )
+      ) {
         findings.push(
           makeInvalid(
             pluginName,
@@ -139,8 +139,7 @@ function validateManifestFileRefs(
         continue;
       }
 
-      const stat = checkValidationIo(() => fs.statSync(resolved), onIoError, pluginName);
-      if (stat === undefined) continue;
+      const stat = fs.statSync(resolved);
 
       if (mustBeDir === true && !stat.isDirectory()) {
         findings.push(
@@ -191,19 +190,11 @@ function validateManifestFileRefs(
  * `pluginDir` is the absolute path to a `plugins/<name>/` directory.
  * All findings use `plugin: path.basename(pluginDir)`.
  */
-export function validateCodexPlugin(pluginDir: string, onIoError?: FreshnessIoHandler): Finding[] {
+export function validateCodexPlugin(pluginDir: string): Finding[] {
   const pluginName = path.basename(pluginDir);
   return [
-    ...(checkValidationIo(
-      () => validateManifestFileRefs(pluginDir, pluginName, onIoError),
-      onIoError,
-      pluginName,
-    ) ?? []),
-    ...(checkValidationIo(
-      () => validateOpenPluginsConformance(pluginDir, pluginName),
-      onIoError,
-      pluginName,
-    ) ?? []),
+    ...validateManifestFileRefs(pluginDir, pluginName),
+    ...validateOpenPluginsConformance(pluginDir, pluginName),
   ];
 }
 

@@ -3,8 +3,7 @@
  * handed to every rule's `check()`.
  */
 
-import * as fs from 'node:fs';
-import type { FreshnessIoHandler } from '../pipeline/validation-io.js';
+import { repositoryFs as fs } from '../pipeline/repository-fs.js';
 import type { AipmWorkspace } from '../config.js';
 import type { ConfigCache } from '../pipeline/load-config.js';
 import type { TargetId } from '../pipeline/types.js';
@@ -26,7 +25,6 @@ export function createRuleContext(params: {
   workspace: AipmWorkspace | undefined;
   ci: boolean;
   skipFreshness?: boolean;
-  onFreshnessIoError?: FreshnessIoHandler | undefined;
   configCache?: ConfigCache;
   /**
    * Shared across every `RuleContext` built for one `lint()` invocation. Every absolute path
@@ -48,9 +46,6 @@ export function createRuleContext(params: {
     workspace: params.workspace,
     ci: params.ci,
     skipFreshness: params.skipFreshness ?? false,
-    ...(params.onFreshnessIoError === undefined
-      ? {}
-      : { onFreshnessIoError: params.onFreshnessIoError }),
     ...(params.configCache !== undefined ? { configCache: params.configCache } : {}),
     getDocument(absPath: string): Document | undefined {
       if (cache.has(absPath)) return cache.get(absPath);

@@ -54,13 +54,12 @@ import {
 | `listTargets`      | Return the `TargetId` values this toolkit version recognises       |
 
 `build()` returns a `BuildResult[]` and skips freshness checks during post-build validation.
-Use `buildWithOutcome()` with the same arguments to get `{ results, validation }` from one build
-and validation pass, including freshness and published-surface diagnostics. With `failFast: true`, both functions
-reject on hard structural findings after writing artifacts. `buildWithOutcome()` also rejects
-with `failFast: true` if a filesystem failure prevents a validation check. Otherwise those
-failures appear as hard `BuildFreshnessIoFinding` diagnostics with code `freshness-io`.
-Artifact drift is reported in the outcome's `validation`. The outcome retains ownership
-and collision findings from generation and adds any new collisions found during validation.
+Use `buildWithOutcome()` with the same arguments to get `{ results, validation }`. It runs the
+same build and then runs standalone validation, including freshness and published-surface
+diagnostics. Filesystem failures observed during the build or validation appear as hard
+`BuildFreshnessIoFinding` diagnostics with code `freshness-io`. Any such finding makes
+`validation.passed` false. With `failFast: true`, hard structural findings and filesystem failures
+reject the build. Artifact drift stays in the outcome and is hard in CI and soft locally.
 Fatal generation errors reject with any findings already established. Validation assumes source
 inputs stay unchanged by other processes during the call.
 

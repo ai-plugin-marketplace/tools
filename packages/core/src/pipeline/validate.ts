@@ -1,3 +1,4 @@
+import type { Dirent } from 'node:fs';
 /**
  * Cross-target validator for the pipeline layer.
  *
@@ -8,8 +9,13 @@
  * @see docs/specs/architecture.md §6, §8.1, §10.1, §10.2
  */
 
-import * as fs from 'node:fs';
-import * as os from 'node:os';
+import {
+  inputExists,
+  isFileEntry,
+  isObservedIoError,
+  repositoryFs as fs,
+  withRepositoryPlugin,
+} from './repository-fs.js';
 import * as path from 'node:path';
 import { parse as parseYaml } from 'yaml';
 import { z } from 'zod';
@@ -34,24 +40,14 @@ import {
   managedRegistryPaths,
   managedVendorRegistryPaths,
   mergeRootArtifacts,
-  parseRootOwnership,
-  readRootManifest,
   readRootManifestPaths,
+  regenerateBundleToTemp,
   rootManifestPath,
   rootRegistryArtifactFiles,
   serializeRootManifest,
-} from './artifacts.js';
-import type { RegistryArtifact, RootArtifacts } from './artifacts.js';
-import {
-  assertReadableFile,
-  assertRegularFile,
-  captureValidationIo,
-  checkValidationIo,
-  strictExists,
-} from './validation-io.js';
-import type { FreshnessIoHandler } from './validation-io.js';
+} from './build.js';
+import type { RegistryArtifact } from './build.js';
 import { discoverPlugins } from './discover.js';
-import type { Discovery } from './discover.js';
 import {
   ConfigLoadError,
   createConfigCache,
@@ -65,6 +61,7 @@ import { isToolkitSentinelFor, withoutGeneratorVersion } from './sentinel.js';
 import { CLAUDE_HOOKS_SOURCES } from '../targets/claude/transform.js';
 import { createRuleContext } from '../lint/context.js';
 import { diagnosticToFinding } from '../lint/diagnostic.js';
+import type { Diagnostic, InternalRuleContext, Rule } from '../lint/types.js';
 import {
   defaultMarketplaceNameRule,
   envelopeAdherenceRule,
@@ -213,49 +210,22 @@ const mcpConfigSchema = z
   })
   .loose();
 
-function readStructuralText(
-  file: string,
-  onIoError: FreshnessIoHandler | undefined,
-  plugin?: string,
-  optional = false,
-): string | undefined {
+/** Read and JSON-parse a file, returning undefined on any error. */
+function tryReadJson(filePath: string): unknown {
   try {
-    if (onIoError !== undefined) {
-      if (optional && !strictExists(file)) return undefined;
-      assertRegularFile(file);
-    }
-    return fs.readFileSync(file, 'utf-8');
-  } catch (err) {
-    if (onIoError !== undefined) {
-      if (!captureValidationIo(err, onIoError, plugin)) throw err;
-    }
-    return undefined;
-  }
-}
-
-/** Read and JSON-parse a structural input, returning undefined on parse failure. */
-function tryReadJson(filePath: string, onIoError?: FreshnessIoHandler, plugin?: string): unknown {
-  const content = readStructuralText(filePath, onIoError, plugin);
-  return content === undefined ? undefined : parseJson(content);
-}
-
-function parseJson(content: string): unknown {
-  try {
-    return JSON.parse(content) as unknown;
+    return JSON.parse(fs.readFileSync(filePath, 'utf-8')) as unknown;
   } catch {
     return undefined;
   }
 }
 
-/** Parse a name/version input whose content starts with YAML frontmatter. */
-function tryParseFrontmatter(
-  filePath: string,
-  onIoError?: FreshnessIoHandler,
-  plugin?: string,
-): unknown {
-  const content = readStructuralText(filePath, onIoError, plugin);
-  if (content === undefined) return undefined;
+/**
+ * Parse YAML frontmatter from a file whose content starts with "---".
+ * Returns the frontmatter object (as unknown) or undefined on parse failure.
+ */
+function tryParseFrontmatter(filePath: string): unknown {
   try {
+    const content = fs.readFileSync(filePath, 'utf-8');
     const match = /^---\s*\n([\s\S]*?)\n---/m.exec(content);
     if (!match) return undefined;
     return parseYaml(match[1] ?? '') as unknown;
@@ -278,14 +248,13 @@ const FRONTMATTER_RE = /^\uFEFF?---[ \t]*\r?\n([\s\S]*?)\r?\n---/;
  * file with no leading `---` frontmatter block is treated as "nothing to validate"
  * (undefined) — the presence/shape of required fields is a separate concern handled elsewhere.
  */
-function frontmatterParseError(
-  filePath: string,
-  onIoError: FreshnessIoHandler | undefined,
-  pluginName: string,
-  optional: boolean,
-): string | undefined {
-  const content = readStructuralText(filePath, onIoError, pluginName, optional);
-  if (content === undefined) return undefined;
+function frontmatterParseError(filePath: string): string | undefined {
+  let content: string;
+  try {
+    content = fs.readFileSync(filePath, 'utf-8');
+  } catch {
+    return undefined;
+  }
   const match = FRONTMATTER_RE.exec(content);
   if (!match) return undefined;
   try {
@@ -313,50 +282,41 @@ function frontmatterParseError(
  *
  * @see https://yaml.org/spec/1.2.2/#732-block-mappings — why `": "` in a plain scalar parses as a mapping
  */
-export function validateFrontmatterParses(
-  pluginDir: string,
-  pluginName: string,
-  onIoError?: FreshnessIoHandler,
-): Finding[] {
-  const files = [{ path: path.join(pluginDir, 'POWER.md'), optional: true }];
+export function validateFrontmatterParses(pluginDir: string, pluginName: string): Finding[] {
+  const files: string[] = [path.join(pluginDir, 'POWER.md')];
 
-  // Skills live one level deeper than agents and commands.
-  for (const sub of ['skills', 'agents', 'commands'] as const) {
+  // skills/<name>/SKILL.md — one directory level deep, mirroring discovery elsewhere.
+  const skillsDir = path.join(pluginDir, 'skills');
+  if (fs.existsSync(skillsDir)) {
+    let entries: Dirent[] = [];
+    try {
+      entries = fs.readdirSync(skillsDir, { withFileTypes: true });
+    } catch {
+      entries = [];
+    }
+    for (const entry of entries) {
+      if (entry.isDirectory()) files.push(path.join(skillsDir, entry.name, 'SKILL.md'));
+    }
+  }
+
+  // agents/*.md and commands/*.md — flat directories of frontmatter-bearing markdown.
+  for (const sub of ['agents', 'commands'] as const) {
     const dir = path.join(pluginDir, sub);
-    for (const entry of readOptionalDirectory(dir, onIoError, pluginName)) {
-      const candidate = path.join(dir, entry.name);
-      if (entry.isSymbolicLink() && onIoError !== undefined) {
-        // Probe linked inputs without extending frontmatter validation to their targets.
-        checkValidationIo(
-          () => {
-            const stat = fs.statSync(candidate);
-            if (sub === 'skills' && stat.isDirectory()) {
-              const skill = path.join(candidate, 'SKILL.md');
-              if (strictExists(skill)) assertReadableFile(skill);
-            } else if (sub !== 'skills' && entry.name.endsWith('.md')) {
-              assertReadableFile(candidate);
-            }
-          },
-          onIoError,
-          pluginName,
-        );
-        continue;
-      }
-      if (sub === 'skills' && entry.isDirectory()) {
-        files.push({ path: path.join(candidate, 'SKILL.md'), optional: true });
-      } else if (
-        sub !== 'skills' &&
-        (entry.isFile() || onIoError !== undefined) &&
-        entry.name.endsWith('.md')
-      ) {
-        files.push({ path: candidate, optional: false });
-      }
+    if (!fs.existsSync(dir)) continue;
+    let entries: Dirent[] = [];
+    try {
+      entries = fs.readdirSync(dir, { withFileTypes: true });
+    } catch {
+      entries = [];
+    }
+    for (const entry of entries) {
+      if (isFileEntry(dir, entry, '.md')) files.push(path.join(dir, entry.name));
     }
   }
 
   const findings: Finding[] = [];
-  for (const { path: file, optional } of files) {
-    const error = frontmatterParseError(file, onIoError, pluginName, optional);
+  for (const file of files) {
+    const error = frontmatterParseError(file);
     if (error !== undefined) {
       findings.push(
         hard(
@@ -428,7 +388,6 @@ interface MarketplaceIdentity {
 function resolveMarketplaceIdentity(
   repoRoot: string,
   workspace: AipmWorkspace | undefined,
-  onIoError?: FreshnessIoHandler,
 ): MarketplaceIdentity {
   if (workspace !== undefined) {
     const { marketplace } = workspace;
@@ -439,8 +398,8 @@ function resolveMarketplaceIdentity(
   }
 
   for (const registryPath of managedRegistryPaths(repoRoot)) {
-    if (!structuralLookup(registryPath, onIoError)) continue;
-    const parsed = registryMetadataSchema.safeParse(tryReadJson(registryPath, onIoError));
+    if (!fs.existsSync(registryPath)) continue;
+    const parsed = registryMetadataSchema.safeParse(tryReadJson(registryPath));
     if (!parsed.success) continue;
     const { name, owner } = parsed.data;
     // Only treat this registry as the identity source once it declares a `name` or an `owner.name`;
@@ -468,9 +427,8 @@ function resolveMarketplaceIdentity(
 export function checkDefaultMarketplaceName(
   repoRoot: string,
   workspace: AipmWorkspace | undefined,
-  onIoError?: FreshnessIoHandler,
 ): Finding[] {
-  const { name, ownerName } = resolveMarketplaceIdentity(repoRoot, workspace, onIoError);
+  const { name, ownerName } = resolveMarketplaceIdentity(repoRoot, workspace);
   const findings: Finding[] = [];
 
   if (name !== undefined && PLACEHOLDER_MARKETPLACE_NAMES.has(name)) {
@@ -555,7 +513,6 @@ export function validateEnvelopeShape(rawConfig: unknown, pluginName: string): F
 export function validateEnvelopeAdherence(
   pluginDir: string,
   envelope: readonly TargetId[],
-  onIoError?: FreshnessIoHandler,
 ): Finding[] {
   const findings: Finding[] = [];
   const envelopeSet = new Set(envelope);
@@ -569,7 +526,7 @@ export function validateEnvelopeAdherence(
     if (envelopeSet.has(target)) continue;
     for (const artifact of artifacts) {
       const full = path.join(pluginDir, artifact);
-      if (structuralLookup(full, onIoError, pluginName)) {
+      if (fs.existsSync(full)) {
         findings.push(
           hard(
             'envelope-adherence',
@@ -585,7 +542,7 @@ export function validateEnvelopeAdherence(
   // Check shared artifacts: must not exist if none of anyOf is in envelope
   for (const { file, anyOf } of SHARED_ARTIFACTS) {
     const full = path.join(pluginDir, file);
-    if (structuralLookup(full, onIoError, pluginName) && !anyOf.some((t) => envelopeSet.has(t))) {
+    if (fs.existsSync(full) && !anyOf.some((t) => envelopeSet.has(t))) {
       findings.push(
         hard(
           'envelope-adherence',
@@ -601,11 +558,8 @@ export function validateEnvelopeAdherence(
   // Claude Code, Codex and Open Plugins all load by default. Gemini now reads the copy in its dist
   // bundle, and a Claude build replaces this file, so a copy still marked this way is stale.
   const hooksJson = path.join(pluginDir, 'hooks', 'hooks.json');
-  const hooksJsonStat = checkValidationIo(
-    () => fs.statSync(hooksJson, { throwIfNoEntry: false }),
-    onIoError,
-    pluginName,
-  );
+  inputExists(hooksJson, 'file');
+  const hooksJsonStat = fs.statSync(hooksJson, { throwIfNoEntry: false });
   if (hooksJsonStat !== undefined && !hooksJsonStat.isFile()) {
     findings.push(
       hard(
@@ -616,19 +570,10 @@ export function validateEnvelopeAdherence(
       ),
     );
   }
-  const hasGeminiHooks =
+  if (
     hooksJsonStat?.isFile() === true &&
-    checkValidationIo(
-      () =>
-        isToolkitSentinelFor(
-          fs.readFileSync(hooksJson, 'utf-8'),
-          'json-field',
-          CLAUDE_HOOKS_SOURCES,
-        ),
-      onIoError,
-      pluginName,
-    );
-  if (hasGeminiHooks) {
+    isToolkitSentinelFor(fs.readFileSync(hooksJson, 'utf-8'), 'json-field', CLAUDE_HOOKS_SOURCES)
+  ) {
     findings.push(
       hard(
         'envelope-adherence',
@@ -644,7 +589,7 @@ export function validateEnvelopeAdherence(
     const required = TARGET_MIN_REQUIRED[target];
     for (const artifact of required) {
       const full = path.join(pluginDir, artifact);
-      if (structuralLookup(full, onIoError, pluginName) === false) {
+      if (!inputExists(full, 'file')) {
         findings.push(
           hard(
             'envelope-adherence',
@@ -659,11 +604,23 @@ export function validateEnvelopeAdherence(
     // Vercel special case: require at least one skills/*/SKILL.md (one level deep)
     if (target === 'vercel') {
       const skillsDir = path.join(pluginDir, 'skills');
-      const hasSkill = readOptionalDirectory(skillsDir, onIoError, pluginName).some(
-        (entry) =>
-          entry.isDirectory() &&
-          structuralLookup(path.join(skillsDir, entry.name, 'SKILL.md'), onIoError, pluginName),
-      );
+      let hasSkill = false;
+      if (fs.existsSync(skillsDir)) {
+        try {
+          const subdirs = fs.readdirSync(skillsDir, { withFileTypes: true });
+          for (const dirent of subdirs) {
+            if (dirent.isDirectory()) {
+              const skillMd = path.join(skillsDir, dirent.name, 'SKILL.md');
+              if (inputExists(skillMd, 'file')) {
+                hasSkill = true;
+                break;
+              }
+            }
+          }
+        } catch {
+          // Unreadable directory — treat as no skills
+        }
+      }
       if (!hasSkill) {
         findings.push(
           hard(
@@ -694,25 +651,24 @@ export function validateEnvelopeAdherence(
 export function validateNameConsistency(
   pluginDir: string,
   envelope: readonly TargetId[],
-  onIoError?: FreshnessIoHandler,
 ): Finding[] {
   const findings: Finding[] = [];
-  const pluginName = path.basename(pluginDir);
+  const expectedName = path.basename(pluginDir);
 
   for (const target of envelope) {
     switch (target) {
       case 'claude': {
         const manifestPath = path.join(pluginDir, '.claude-plugin/plugin.json');
-        if (!structuralLookup(manifestPath, onIoError, pluginName)) break;
-        const manifest = tryReadJson(manifestPath, onIoError, pluginName);
+        if (!fs.existsSync(manifestPath)) break;
+        const manifest = tryReadJson(manifestPath);
         const parsed = z.object({ name: z.string().optional() }).loose().safeParse(manifest);
         if (!parsed.success || parsed.data.name === undefined) break;
-        if (parsed.data.name !== pluginName) {
+        if (parsed.data.name !== expectedName) {
           findings.push(
             hard(
               'name-consistency',
-              pluginName,
-              `'.claude-plugin/plugin.json' has name '${parsed.data.name}' but plugin directory is '${pluginName}'.`,
+              expectedName,
+              `'.claude-plugin/plugin.json' has name '${parsed.data.name}' but plugin directory is '${expectedName}'.`,
             ),
           );
         }
@@ -720,16 +676,16 @@ export function validateNameConsistency(
       }
       case 'codex': {
         const manifestPath = path.join(pluginDir, '.codex-plugin/plugin.json');
-        if (!structuralLookup(manifestPath, onIoError, pluginName)) break;
-        const manifest = tryReadJson(manifestPath, onIoError, pluginName);
+        if (!fs.existsSync(manifestPath)) break;
+        const manifest = tryReadJson(manifestPath);
         const parsed = z.object({ name: z.string().optional() }).loose().safeParse(manifest);
         if (!parsed.success || parsed.data.name === undefined) break;
-        if (parsed.data.name !== pluginName) {
+        if (parsed.data.name !== expectedName) {
           findings.push(
             hard(
               'name-consistency',
-              pluginName,
-              `'.codex-plugin/plugin.json' has name '${parsed.data.name}' but plugin directory is '${pluginName}'.`,
+              expectedName,
+              `'.codex-plugin/plugin.json' has name '${parsed.data.name}' but plugin directory is '${expectedName}'.`,
             ),
           );
         }
@@ -737,16 +693,16 @@ export function validateNameConsistency(
       }
       case 'cursor': {
         const manifestPath = path.join(pluginDir, '.cursor-plugin/plugin.json');
-        if (!structuralLookup(manifestPath, onIoError, pluginName)) break;
-        const manifest = tryReadJson(manifestPath, onIoError, pluginName);
+        if (!fs.existsSync(manifestPath)) break;
+        const manifest = tryReadJson(manifestPath);
         const parsed = z.object({ name: z.string().optional() }).loose().safeParse(manifest);
         if (!parsed.success || parsed.data.name === undefined) break;
-        if (parsed.data.name !== pluginName) {
+        if (parsed.data.name !== expectedName) {
           findings.push(
             hard(
               'name-consistency',
-              pluginName,
-              `'.cursor-plugin/plugin.json' has name '${parsed.data.name}' but plugin directory is '${pluginName}'.`,
+              expectedName,
+              `'.cursor-plugin/plugin.json' has name '${parsed.data.name}' but plugin directory is '${expectedName}'.`,
             ),
           );
         }
@@ -754,16 +710,16 @@ export function validateNameConsistency(
       }
       case 'gemini': {
         const manifestPath = path.join(pluginDir, 'gemini-extension.json');
-        if (!structuralLookup(manifestPath, onIoError, pluginName)) break;
-        const manifest = tryReadJson(manifestPath, onIoError, pluginName);
+        if (!fs.existsSync(manifestPath)) break;
+        const manifest = tryReadJson(manifestPath);
         const parsed = z.object({ name: z.string() }).loose().safeParse(manifest);
         if (!parsed.success) break;
-        if (parsed.data.name !== pluginName) {
+        if (parsed.data.name !== expectedName) {
           findings.push(
             hard(
               'name-consistency',
-              pluginName,
-              `'gemini-extension.json' has name '${parsed.data.name}' but plugin directory is '${pluginName}'.`,
+              expectedName,
+              `'gemini-extension.json' has name '${parsed.data.name}' but plugin directory is '${expectedName}'.`,
             ),
           );
         }
@@ -771,16 +727,16 @@ export function validateNameConsistency(
       }
       case 'kiro': {
         const powerMdPath = path.join(pluginDir, 'POWER.md');
-        if (!structuralLookup(powerMdPath, onIoError, pluginName)) break;
-        const fm = tryParseFrontmatter(powerMdPath, onIoError, pluginName);
+        if (!fs.existsSync(powerMdPath)) break;
+        const fm = tryParseFrontmatter(powerMdPath);
         const parsed = z.object({ name: z.string() }).loose().safeParse(fm);
         if (!parsed.success) break;
-        if (parsed.data.name !== pluginName) {
+        if (parsed.data.name !== expectedName) {
           findings.push(
             hard(
               'name-consistency',
-              pluginName,
-              `'POWER.md' frontmatter has name '${parsed.data.name}' but plugin directory is '${pluginName}'.`,
+              expectedName,
+              `'POWER.md' frontmatter has name '${parsed.data.name}' but plugin directory is '${expectedName}'.`,
             ),
           );
         }
@@ -788,16 +744,16 @@ export function validateNameConsistency(
       }
       case 'open-plugins': {
         const manifestPath = path.join(pluginDir, '.plugin/plugin.json');
-        if (!structuralLookup(manifestPath, onIoError, pluginName)) break;
-        const manifest = tryReadJson(manifestPath, onIoError, pluginName);
+        if (!fs.existsSync(manifestPath)) break;
+        const manifest = tryReadJson(manifestPath);
         const parsed = z.object({ name: z.string().optional() }).loose().safeParse(manifest);
         if (!parsed.success || parsed.data.name === undefined) break;
-        if (parsed.data.name !== pluginName) {
+        if (parsed.data.name !== expectedName) {
           findings.push(
             hard(
               'name-consistency',
-              pluginName,
-              `'.plugin/plugin.json' has name '${parsed.data.name}' but plugin directory is '${pluginName}'.`,
+              expectedName,
+              `'.plugin/plugin.json' has name '${parsed.data.name}' but plugin directory is '${expectedName}'.`,
             ),
           );
         }
@@ -835,7 +791,6 @@ export async function validateVersionConsistency(
   pluginDir: string,
   envelope: readonly TargetId[],
   configCache?: ConfigCache,
-  onIoError?: FreshnessIoHandler,
 ): Promise<Finding[]> {
   const findings: Finding[] = [];
   const pluginName = path.basename(pluginDir);
@@ -846,8 +801,8 @@ export async function validateVersionConsistency(
     switch (target) {
       case 'claude': {
         const manifestPath = path.join(pluginDir, '.claude-plugin/plugin.json');
-        if (!structuralLookup(manifestPath, onIoError, pluginName)) break;
-        const manifest = tryReadJson(manifestPath, onIoError, pluginName);
+        if (!fs.existsSync(manifestPath)) break;
+        const manifest = tryReadJson(manifestPath);
         const parsed = z.object({ version: z.string().optional() }).loose().safeParse(manifest);
         if (!parsed.success || parsed.data.version === undefined) break;
         if (parsed.data.version !== expectedVersion) {
@@ -864,8 +819,8 @@ export async function validateVersionConsistency(
       }
       case 'codex': {
         const manifestPath = path.join(pluginDir, '.codex-plugin/plugin.json');
-        if (!structuralLookup(manifestPath, onIoError, pluginName)) break;
-        const manifest = tryReadJson(manifestPath, onIoError, pluginName);
+        if (!fs.existsSync(manifestPath)) break;
+        const manifest = tryReadJson(manifestPath);
         const parsed = z.object({ version: z.string().optional() }).loose().safeParse(manifest);
         if (!parsed.success || parsed.data.version === undefined) break;
         if (parsed.data.version !== expectedVersion) {
@@ -882,8 +837,8 @@ export async function validateVersionConsistency(
       }
       case 'cursor': {
         const manifestPath = path.join(pluginDir, '.cursor-plugin/plugin.json');
-        if (!structuralLookup(manifestPath, onIoError, pluginName)) break;
-        const manifest = tryReadJson(manifestPath, onIoError, pluginName);
+        if (!fs.existsSync(manifestPath)) break;
+        const manifest = tryReadJson(manifestPath);
         const parsed = z.object({ version: z.string().optional() }).loose().safeParse(manifest);
         if (!parsed.success || parsed.data.version === undefined) break;
         if (parsed.data.version !== expectedVersion) {
@@ -900,8 +855,8 @@ export async function validateVersionConsistency(
       }
       case 'gemini': {
         const manifestPath = path.join(pluginDir, 'gemini-extension.json');
-        if (!structuralLookup(manifestPath, onIoError, pluginName)) break;
-        const manifest = tryReadJson(manifestPath, onIoError, pluginName);
+        if (!fs.existsSync(manifestPath)) break;
+        const manifest = tryReadJson(manifestPath);
         const parsed = z.object({ version: z.string().optional() }).loose().safeParse(manifest);
         if (!parsed.success || parsed.data.version === undefined) break;
         if (parsed.data.version !== expectedVersion) {
@@ -918,8 +873,8 @@ export async function validateVersionConsistency(
       }
       case 'kiro': {
         const powerMdPath = path.join(pluginDir, 'POWER.md');
-        if (!structuralLookup(powerMdPath, onIoError, pluginName)) break;
-        const fm = tryParseFrontmatter(powerMdPath, onIoError, pluginName);
+        if (!fs.existsSync(powerMdPath)) break;
+        const fm = tryParseFrontmatter(powerMdPath);
         const parsed = z.object({ version: z.string() }).loose().safeParse(fm);
         if (!parsed.success) break;
         if (parsed.data.version !== expectedVersion) {
@@ -936,8 +891,8 @@ export async function validateVersionConsistency(
       }
       case 'open-plugins': {
         const manifestPath = path.join(pluginDir, '.plugin/plugin.json');
-        if (!structuralLookup(manifestPath, onIoError, pluginName)) break;
-        const manifest = tryReadJson(manifestPath, onIoError, pluginName);
+        if (!fs.existsSync(manifestPath)) break;
+        const manifest = tryReadJson(manifestPath);
         const parsed = z.object({ version: z.string().optional() }).loose().safeParse(manifest);
         if (!parsed.success || parsed.data.version === undefined) break;
         if (parsed.data.version !== expectedVersion) {
@@ -973,11 +928,7 @@ export async function validateVersionConsistency(
  *
  * Emits `mcp-key-sync` findings.
  */
-export function validateMcpKeySync(
-  pluginDir: string,
-  envelope: readonly TargetId[],
-  onIoError?: FreshnessIoHandler,
-): Finding[] {
+export function validateMcpKeySync(pluginDir: string, envelope: readonly TargetId[]): Finding[] {
   const pluginName = path.basename(pluginDir);
   const envelopeSet = new Set(envelope);
 
@@ -991,13 +942,10 @@ export function validateMcpKeySync(
   const kiroMcpPath = path.join(pluginDir, 'mcp.json');
 
   // If either file is missing, skip the sync check (adherence check handles missing files)
-  const hasClaudeCursorMcp = structuralLookup(claudeCursorMcpPath, onIoError, pluginName);
-  if (!hasClaudeCursorMcp && onIoError === undefined) return [];
-  const hasKiroMcp = structuralLookup(kiroMcpPath, onIoError, pluginName);
-  if (!hasClaudeCursorMcp || !hasKiroMcp) return [];
+  if (!fs.existsSync(claudeCursorMcpPath) || !fs.existsSync(kiroMcpPath)) return [];
 
-  const claudeCursorRaw = tryReadJson(claudeCursorMcpPath, onIoError, pluginName);
-  const kiroRaw = tryReadJson(kiroMcpPath, onIoError, pluginName);
+  const claudeCursorRaw = tryReadJson(claudeCursorMcpPath);
+  const kiroRaw = tryReadJson(kiroMcpPath);
 
   const claudeCursorParsed = mcpConfigSchema.safeParse(claudeCursorRaw);
   const kiroParsed = mcpConfigSchema.safeParse(kiroRaw);
@@ -1085,40 +1033,6 @@ function extractCodexSource(raw: unknown, pluginName: string): SourceExtraction 
   return { status: 'found', source: entry.source.path };
 }
 
-/** Validate present files even when the plugin has a single target. */
-function validateMcpFiles(pluginDir: string, onIoError: FreshnessIoHandler): Finding[] {
-  const findings: Finding[] = [];
-  const plugin = path.basename(pluginDir);
-  for (const rel of ['.mcp.json', 'mcp.json']) {
-    const content = readStructuralText(path.join(pluginDir, rel), onIoError, plugin, true);
-    if (content === undefined) continue;
-    if (!mcpConfigSchema.safeParse(parseJson(content)).success) {
-      findings.push(hard('schema-invalid', plugin, `Invalid MCP file '${rel}'.`));
-    }
-  }
-  return findings;
-}
-
-function validateHandAuthoredRegistries(
-  repoRoot: string,
-  onIoError: FreshnessIoHandler,
-): Finding[] {
-  const findings: Finding[] = [];
-  for (const { marketplaceRel, extractSource } of MARKETPLACE_REGISTRY_CHECKS) {
-    const file = path.join(repoRoot, ...marketplaceRel);
-    const content = readStructuralText(file, onIoError, undefined, true);
-    if (content === undefined) continue;
-    if (extractSource(parseJson(content), '').status === 'parse-error') {
-      findings.push({
-        severity: 'hard',
-        code: 'marketplace-registration',
-        message: `Failed to parse marketplace file '${file}'.`,
-      });
-    }
-  }
-  return findings;
-}
-
 /**
  * Verify the plugin is listed in the appropriate template-level marketplace.json files.
  *
@@ -1143,7 +1057,6 @@ export function validateMarketplaceRegistration(
   pluginDir: string,
   repoRoot: string,
   envelope: readonly TargetId[],
-  onIoError?: FreshnessIoHandler,
 ): Finding[] {
   const findings: Finding[] = [];
   const pluginName = path.basename(pluginDir);
@@ -1162,9 +1075,7 @@ export function validateMarketplaceRegistration(
     const marketplacePath = path.join(repoRoot, ...marketplaceRel);
     const inEnvelope = envelopeSet.has(target);
 
-    const exists = structuralLookup(marketplacePath, onIoError, pluginName);
-    if (exists === undefined) continue;
-    if (!exists) {
+    if (!fs.existsSync(marketplacePath)) {
       if (inEnvelope) {
         findings.push(
           hard(
@@ -1179,11 +1090,11 @@ export function validateMarketplaceRegistration(
       continue;
     }
 
-    const raw = tryReadJson(marketplacePath, onIoError, pluginName);
+    const raw = tryReadJson(marketplacePath);
     const extraction = extractSource(raw, pluginName);
 
     if (extraction.status === 'parse-error') {
-      if (inEnvelope && onIoError === undefined) {
+      if (inEnvelope) {
         findings.push(
           hard(
             'marketplace-registration',
@@ -1272,10 +1183,7 @@ export function validateCrossTarget(
  * target's `validate.ts` entry point and returns its findings (mostly `schema-invalid`). The
  * orchestrator dispatches only for targets in the envelope.
  */
-const TARGET_VALIDATORS: Record<
-  TargetId,
-  (pluginDir: string, onIoError?: FreshnessIoHandler) => Finding[]
-> = {
+const TARGET_VALIDATORS: Record<TargetId, (pluginDir: string) => Finding[]> = {
   claude: validateClaudePlugin,
   codex: validateCodexPlugin,
   cursor: validateCursorPlugin,
@@ -1292,30 +1200,10 @@ const TARGET_VALIDATORS: Record<
 export function validatePerTargetSchemas(
   pluginDir: string,
   envelope: readonly TargetId[],
-  onIoError?: FreshnessIoHandler,
 ): Finding[] {
   const findings: Finding[] = [];
-  const pluginName = path.basename(pluginDir);
   for (const target of envelope) {
-    if (onIoError !== undefined) {
-      const usable = checkValidationIo(
-        () => {
-          for (const rel of TARGET_MIN_REQUIRED[target]) {
-            const file = path.join(pluginDir, rel);
-            if (strictExists(file)) assertRegularFile(file);
-          }
-          return true;
-        },
-        onIoError,
-        pluginName,
-      );
-      if (usable === undefined) continue;
-    }
-    checkValidationIo(
-      () => findings.push(...TARGET_VALIDATORS[target](pluginDir, onIoError)),
-      onIoError,
-      pluginName,
-    );
+    findings.push(...TARGET_VALIDATORS[target](pluginDir));
   }
   return findings;
 }
@@ -1323,38 +1211,6 @@ export function validatePerTargetSchemas(
 // ---------------------------------------------------------------------------
 // Freshness check (§10.5)
 // ---------------------------------------------------------------------------
-
-export interface RootOwnership {
-  findings: Finding[];
-  collidedOwners: ReadonlySet<TargetId>;
-  protectedPaths: ReadonlySet<string>;
-  writtenPaths: ReadonlySet<string> | undefined;
-}
-
-/** Undefined means a failed lookup. Do not report the input as absent in that case. */
-function structuralLookup(
-  file: string,
-  onIoError: FreshnessIoHandler | undefined,
-  plugin?: string,
-): boolean | undefined {
-  return onIoError === undefined
-    ? fs.existsSync(file)
-    : checkValidationIo(() => strictExists(file), onIoError, plugin);
-}
-
-function readOptionalDirectory(
-  dir: string,
-  onIoError?: FreshnessIoHandler,
-  plugin?: string,
-): fs.Dirent[] {
-  const exists = onIoError === undefined ? fs.existsSync : strictExists;
-  try {
-    if (exists(dir)) return fs.readdirSync(dir, { withFileTypes: true });
-  } catch (err) {
-    if (onIoError !== undefined && !captureValidationIo(err, onIoError, plugin)) throw err;
-  }
-  return [];
-}
 
 /**
  * Build a `freshness` Finding. Severity is `hard` in CI (a stale tree must fail the build) and
@@ -1394,131 +1250,96 @@ export function checkFreshness(
   distDir: string,
   envelope: readonly TargetId[],
   ci: boolean,
-  onIoError?: FreshnessIoHandler,
 ): Finding[] {
   const findings: Finding[] = [];
   const pluginName = path.basename(pluginDir);
-  const exists = onIoError === undefined ? fs.existsSync : strictExists;
 
   // ── In-plugin hook JSONs ──────────────────────────────────────────────────
-  let hookArtifacts: ReturnType<typeof computePluginHookArtifacts> = [];
+  let hookArtifacts: ReturnType<typeof computePluginHookArtifacts>;
   try {
-    hookArtifacts = computePluginHookArtifacts(pluginDir, envelope, undefined, exists);
+    hookArtifacts = computePluginHookArtifacts(pluginDir, envelope);
   } catch (err) {
-    if (!captureValidationIo(err, onIoError, pluginName)) {
-      const message = err instanceof Error ? err.message : String(err);
-      findings.push(
-        freshnessFinding(
-          ci || onIoError !== undefined,
-          pluginName,
-          'Unable to compute expected hook output: ' + message,
-          'fix the hooks source and run `aipm build`.',
-        ),
-      );
-    }
-    if (onIoError === undefined) return findings;
+    // A malformed hooks source means the transform can't run — surface as freshness drift.
+    const message = err instanceof Error ? err.message : String(err);
+    return [
+      freshnessFinding(
+        ci,
+        pluginName,
+        `Unable to compute expected hook output: ${message}`,
+        `fix the hooks source and run \`aipm build\`.`,
+      ),
+    ];
   }
 
   for (const artifact of hookArtifacts) {
-    checkValidationIo(
-      () => {
-        const rel = path.relative(pluginDir, artifact.absPath);
-        if (!exists(artifact.absPath)) {
-          findings.push(
-            freshnessFinding(
-              ci,
-              pluginName,
-              `Generated file '${rel}' is missing.`,
-              `run \`aipm build\` to generate it.`,
-            ),
-          );
-          return;
-        }
-        const onDisk = fs.readFileSync(artifact.absPath, 'utf-8');
-        // Compare modulo the generator-version stamp (§4.3.1): a differently-versioned but
-        // content-identical artifact is NOT stale — version safety is the build downgrade guard's job,
-        // not freshness's. Content, source, or structural drift still differs after normalization.
-        const mode = artifact.sentinelMode;
-        if (
-          withoutGeneratorVersion(onDisk, mode) !==
-          withoutGeneratorVersion(artifact.expectedContent, mode)
-        ) {
-          findings.push(
-            freshnessFinding(
-              ci,
-              pluginName,
-              `Generated file '${rel}' is stale — it differs from what \`aipm build\` would produce (hand-edited or out of date).`,
-              `run \`aipm build\` to regenerate it; edit the source '${artifact.source}', not the generated file.`,
-            ),
-          );
-        }
-      },
-      onIoError,
-      pluginName,
-    );
+    const rel = path.relative(pluginDir, artifact.absPath);
+    if (!fs.existsSync(artifact.absPath)) {
+      findings.push(
+        freshnessFinding(
+          ci,
+          pluginName,
+          `Generated file '${rel}' is missing.`,
+          `run \`aipm build\` to generate it.`,
+        ),
+      );
+      continue;
+    }
+    const onDisk = fs.readFileSync(artifact.absPath, 'utf-8');
+    // Compare modulo the generator-version stamp (§4.3.1): a differently-versioned but
+    // content-identical artifact is NOT stale — version safety is the build downgrade guard's job,
+    // not freshness's. Content, source, or structural drift still differs after normalization.
+    const mode = artifact.sentinelMode;
+    if (
+      withoutGeneratorVersion(onDisk, mode) !==
+      withoutGeneratorVersion(artifact.expectedContent, mode)
+    ) {
+      findings.push(
+        freshnessFinding(
+          ci,
+          pluginName,
+          `Generated file '${rel}' is stale — it differs from what \`aipm build\` would produce (hand-edited or out of date).`,
+          `run \`aipm build\` to regenerate it; edit the source '${artifact.source}', not the generated file.`,
+        ),
+      );
+    }
   }
 
   // ── dist/** bundle trees (byte-parity via regeneration) ───────────────────
-  for (const bundle of computeDistBundles(pluginDir, distDir, envelope, exists)) {
-    checkValidationIo(
-      () => {
-        let tempDir: string | undefined;
-        try {
-          const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'aipm-freshness-'));
-          // The legacy validator only cleaned up after successful regeneration.
-          if (onIoError !== undefined) tempDir = dir;
-          try {
-            bundle.regenerate(dir);
-          } catch (err) {
-            if (onIoError === undefined) throw err;
-            if (!captureValidationIo(err, onIoError, pluginName)) {
-              const message = err instanceof Error ? err.message : String(err);
-              findings.push(
-                freshnessFinding(
-                  true,
-                  pluginName,
-                  'Unable to regenerate the ' + bundle.target + ' bundle: ' + message,
-                ),
-              );
-            }
-            return;
-          }
-          tempDir = dir;
-          const drift = compareTrees(bundle.destDir, tempDir, onIoError, pluginName);
-          for (const { rel, missing } of drift) {
-            const distRel = path.relative(distDir, path.join(bundle.destDir, rel));
-            // A drifted path that isn't on disk at all was never built (e.g. first build hasn't run
-            // yet) — report it as `missing`, not `stale`, so the user isn't told a nonexistent file
-            // "differs" from expected output (issue #97).
-            if (missing ?? !fs.existsSync(path.join(bundle.destDir, rel))) {
-              findings.push(
-                freshnessFinding(
-                  ci,
-                  pluginName,
-                  `Generated bundle file 'dist/${distRel}' is missing.`,
-                  `run \`aipm build\` to generate the ${bundle.target} bundle.`,
-                ),
-              );
-              continue;
-            }
-            findings.push(
-              freshnessFinding(
-                ci,
-                pluginName,
-                `Generated bundle file 'dist/${distRel}' is stale — it differs from what \`aipm build\` would produce.`,
-                `run \`aipm build\` to regenerate the ${bundle.target} bundle.`,
-              ),
-            );
-          }
-        } finally {
-          if (tempDir !== undefined && exists(tempDir)) {
-            fs.rmSync(tempDir, { recursive: true });
-          }
+  for (const bundle of computeDistBundles(pluginDir, distDir, envelope)) {
+    let tempDir: string | undefined;
+    try {
+      tempDir = regenerateBundleToTemp(bundle);
+      const drift = compareTrees(bundle.destDir, tempDir);
+      for (const rel of drift) {
+        const distRel = path.relative(distDir, path.join(bundle.destDir, rel));
+        // A drifted path that isn't on disk at all was never built (e.g. first build hasn't run
+        // yet) — report it as `missing`, not `stale`, so the user isn't told a nonexistent file
+        // "differs" from expected output (issue #97).
+        if (!fs.existsSync(path.join(bundle.destDir, rel))) {
+          findings.push(
+            freshnessFinding(
+              ci,
+              pluginName,
+              `Generated bundle file 'dist/${distRel}' is missing.`,
+              `run \`aipm build\` to generate the ${bundle.target} bundle.`,
+            ),
+          );
+          continue;
         }
-      },
-      onIoError,
-      pluginName,
-    );
+        findings.push(
+          freshnessFinding(
+            ci,
+            pluginName,
+            `Generated bundle file 'dist/${distRel}' is stale — it differs from what \`aipm build\` would produce.`,
+            `run \`aipm build\` to regenerate the ${bundle.target} bundle.`,
+          ),
+        );
+      }
+    } finally {
+      if (tempDir !== undefined && fs.existsSync(tempDir)) {
+        fs.rmSync(tempDir, { recursive: true });
+      }
+    }
   }
 
   return findings;
@@ -1543,12 +1364,10 @@ export async function checkRegistryFreshness(
   workspace: AipmWorkspace,
   ci: boolean,
   cache?: ConfigCache,
-  onIoError?: FreshnessIoHandler,
 ): Promise<Finding[]> {
-  const exists = onIoError === undefined ? fs.existsSync : strictExists;
   let expected: RegistryArtifact[];
   try {
-    const registryPlugins = await collectRegistryPlugins(repoRoot, pluginDirs, cache, exists);
+    const registryPlugins = await collectRegistryPlugins(repoRoot, pluginDirs, cache);
     // Repo-root registries (open-plugins) are collision-guarded and freshness-checked via the
     // generated-root sidecar path (checkRootArtifactFreshness); exclude them here so their
     // missing/stale/orphan state is reported once, not double-counted.
@@ -1556,13 +1375,12 @@ export async function checkRegistryFreshness(
       (r) => !isRootRegistryTarget(r.target),
     );
   } catch (err) {
-    if (captureValidationIo(err, onIoError)) return [];
     // A plugin config that won't load is reported per-plugin as envelope-invalid elsewhere; here
     // we surface the inability to compute the registry oracle as repo-scoped freshness drift.
     const message = err instanceof Error ? err.message : String(err);
     return [
       freshnessFinding(
-        ci || onIoError !== undefined,
+        ci,
         undefined,
         `Unable to compute expected marketplace registries: ${message}`,
         'fix the offending aipm.config.ts and run `aipm build`.',
@@ -1572,31 +1390,29 @@ export async function checkRegistryFreshness(
 
   const findings: Finding[] = [];
   for (const registry of expected) {
-    checkValidationIo(() => {
-      const rel = path.relative(repoRoot, registry.absPath);
-      if (!exists(registry.absPath)) {
-        findings.push(
-          freshnessFinding(
-            ci,
-            undefined,
-            `Generated registry '${rel}' is missing.`,
-            'run `aipm build` to generate it.',
-          ),
-        );
-        return;
-      }
-      const onDisk = fs.readFileSync(registry.absPath, 'utf-8');
-      if (onDisk !== registry.expectedContent) {
-        findings.push(
-          freshnessFinding(
-            ci,
-            undefined,
-            `Generated registry '${rel}' is stale — it differs from what \`aipm build\` would produce (hand-edited or out of date).`,
-            "run `aipm build` to regenerate it; edit `aipm.workspace.ts` / each plugin's `aipm.config.ts`, not the generated registry.",
-          ),
-        );
-      }
-    }, onIoError);
+    const rel = path.relative(repoRoot, registry.absPath);
+    if (!fs.existsSync(registry.absPath)) {
+      findings.push(
+        freshnessFinding(
+          ci,
+          undefined,
+          `Generated registry '${rel}' is missing.`,
+          'run `aipm build` to generate it.',
+        ),
+      );
+      continue;
+    }
+    const onDisk = fs.readFileSync(registry.absPath, 'utf-8');
+    if (onDisk !== registry.expectedContent) {
+      findings.push(
+        freshnessFinding(
+          ci,
+          undefined,
+          `Generated registry '${rel}' is stale — it differs from what \`aipm build\` would produce (hand-edited or out of date).`,
+          "run `aipm build` to regenerate it; edit `aipm.workspace.ts` / each plugin's `aipm.config.ts`, not the generated registry.",
+        ),
+      );
+    }
   }
 
   // Orphan check: a managed registry committed for a target NO plugin declares anymore is not in
@@ -1604,9 +1420,7 @@ export async function checkRegistryFreshness(
   // but isn't expected — `aipm build` removes these, so its presence means the tree is stale.
   const expectedPaths = new Set(expected.map((r) => r.absPath));
   for (const orphan of managedVendorRegistryPaths(repoRoot)) {
-    if (expectedPaths.has(orphan)) continue;
-    checkValidationIo(() => {
-      if (!exists(orphan)) return;
+    if (!expectedPaths.has(orphan) && fs.existsSync(orphan)) {
       const rel = path.relative(repoRoot, orphan);
       findings.push(
         freshnessFinding(
@@ -1616,26 +1430,10 @@ export async function checkRegistryFreshness(
           'run `aipm build` to remove the orphaned registry, or add a plugin that declares its target.',
         ),
       );
-    }, onIoError);
+    }
   }
 
   return findings;
-}
-
-async function computeExpectedRootArtifacts(
-  repoRoot: string,
-  pluginDirs: readonly string[],
-  workspace: AipmWorkspace,
-  cache: ConfigCache | undefined,
-  onHostError?: (error: unknown) => void,
-  exists = fs.existsSync,
-): Promise<RootArtifacts> {
-  const plugins = await collectRegistryPlugins(repoRoot, pluginDirs, cache, exists);
-  const registries = computeRegistryArtifacts(repoRoot, plugins, workspace);
-  return mergeRootArtifacts(
-    computeRootArtifacts(repoRoot, plugins, workspace, onHostError, exists),
-    rootRegistryArtifactFiles(repoRoot, registries),
-  );
 }
 
 /**
@@ -1666,85 +1464,48 @@ export async function checkRootArtifactFreshness(
   ci: boolean,
   skipFreshness: boolean,
   cache?: ConfigCache,
-  onIoError?: FreshnessIoHandler,
-  ownership?: RootOwnership,
 ): Promise<Finding[]> {
-  const exists = onIoError === undefined ? fs.existsSync : strictExists;
-  const findings: Finding[] = [];
-  const regenerationErrors: unknown[] = [];
-  const onRegenerationError = (err: unknown): void => {
-    if (captureValidationIo(err, onIoError)) return;
-    const message = err instanceof Error ? err.message : String(err);
-    findings.push(
-      freshnessFinding(
-        ci || onIoError !== undefined,
-        undefined,
-        'Unable to compute expected repo-root artifacts: ' + message,
-        'fix the offending aipm.config.ts and run `aipm build`.',
-      ),
-    );
-  };
-  let root: RootArtifacts;
+  let root: ReturnType<typeof computeRootArtifacts>;
   try {
-    root = await computeExpectedRootArtifacts(
-      repoRoot,
-      pluginDirs,
-      workspace,
-      cache,
-      onIoError === undefined ? undefined : (err) => regenerationErrors.push(err),
-      exists,
+    const plugins = await collectRegistryPlugins(repoRoot, pluginDirs, cache);
+    // Merge the repo-root registries (open-plugins) into the root-artifact set so ONE collision
+    // guard, sidecar tracked-set, and orphan sweep cover every repo-root file the toolkit owns
+    // (OP-D5/VT-4, option (a)). A foreign root marketplace.json therefore raises
+    // `root-artifact-collision` and is never overwritten or orphan-removed.
+    const rootRegistries = computeRegistryArtifacts(repoRoot, plugins, workspace).filter((r) =>
+      isRootRegistryTarget(r.target),
+    );
+    root = mergeRootArtifacts(
+      computeRootArtifacts(repoRoot, plugins, workspace),
+      rootRegistryArtifactFiles(repoRoot, rootRegistries),
     );
   } catch (err) {
-    if (!skipFreshness) onRegenerationError(err);
-    return findings;
+    // A plugin config that won't load is reported per-plugin as envelope-invalid elsewhere; only
+    // surface the inability to compute the root oracle as freshness drift when freshness is checked.
+    if (skipFreshness) return [];
+    const message = err instanceof Error ? err.message : String(err);
+    return [
+      freshnessFinding(
+        ci,
+        undefined,
+        `Unable to compute expected repo-root artifacts: ${message}`,
+        'fix the offending aipm.config.ts and run `aipm build`.',
+      ),
+    ];
   }
 
-  for (const error of regenerationErrors) onRegenerationError(error);
+  const findings: Finding[] = [];
 
-  let priorTracked: string[] | undefined;
-  let manifestContent: string | undefined;
-  const collidedOwners = new Set(ownership?.collidedOwners);
-  const failedLookups = new Set<string>();
-  findings.push(
-    ...root.findings.filter(
-      (finding) =>
-        !ownership?.findings.some(
-          (known) => known.code === finding.code && known.message === finding.message,
-        ),
-    ),
-  );
-  if (onIoError === undefined) {
-    priorTracked = readRootManifestPaths(repoRoot);
-  } else {
-    checkValidationIo(() => {
-      manifestContent = readRootManifest(repoRoot, exists);
-      try {
-        priorTracked = manifestContent === undefined ? [] : parseRootOwnership(manifestContent);
-      } catch {
-        // Generation already reported the invalid sidecar. Do not use its ownership claims.
-      }
-    }, onIoError);
-  }
-  if (priorTracked === undefined && ownership?.writtenPaths === undefined) return findings;
-  const trackedForCollisions = [...(priorTracked ?? []), ...(ownership?.writtenPaths ?? [])];
-  const collisions = detectRootCollisions(repoRoot, root, trackedForCollisions, (abs, tracked) => {
-    try {
-      return exists(abs) && !tracked;
-    } catch (err) {
-      if (!captureValidationIo(err, onIoError)) throw err;
-      failedLookups.add(abs);
-      return false;
-    }
-  });
-  for (const owner of collisions.collidedOwners) collidedOwners.add(owner);
-  findings.push(
-    ...collisions.findings.filter(
-      (finding) =>
-        !ownership?.findings.some(
-          (known) => known.code === finding.code && known.message === finding.message,
-        ),
-    ),
-  );
+  // 1. N=1 gate findings (always hard, own code). Surfaced regardless of `skipFreshness` so the
+  // post-build validate (which skips freshness) still fails fast on an ambiguous host declaration.
+  findings.push(...root.findings);
+
+  // 2. Collision findings against the committed sidecar's tracked set (build's safety guard 3).
+  // Also surfaced regardless of `skipFreshness` — a collision is a structural refusal, not drift.
+  const priorTracked = readRootManifestPaths(repoRoot);
+  const collisions = detectRootCollisions(repoRoot, root, priorTracked);
+  const { collidedOwners } = collisions;
+  findings.push(...collisions.findings);
 
   // The freshness-coded checks (missing/stale/orphan/sidecar) are skipped after a fresh build.
   if (skipFreshness) return findings;
@@ -1756,37 +1517,30 @@ export async function checkRootArtifactFreshness(
     if (collidedOwners.has(file.owner)) continue;
     const rel = file.relPath;
     expectedTracked.push(rel);
-    checkValidationIo(() => {
-      const abs = path.join(repoRoot, ...rel.split('/'));
-      if (failedLookups.has(abs) || ownership?.protectedPaths.has(abs)) return;
-      if (!exists(abs)) {
-        findings.push(
-          freshnessFinding(
-            ci,
-            undefined,
-            `Generated repo-root artifact '${rel}' is missing.`,
-            'run `aipm build` to generate it.',
-          ),
-        );
-        return;
-      }
-      const onDisk = fs.readFileSync(abs);
-      if (!onDisk.equals(file.content)) {
-        findings.push(
-          freshnessFinding(
-            ci,
-            undefined,
-            `Generated repo-root artifact '${rel}' is stale — it differs from what \`aipm build\` would produce (hand-edited or out of date).`,
-            "run `aipm build` to regenerate it; edit the owning plugin's source, not the generated repo-root file.",
-          ),
-        );
-      }
-    }, onIoError);
+    const abs = path.join(repoRoot, ...rel.split('/'));
+    if (!fs.existsSync(abs)) {
+      findings.push(
+        freshnessFinding(
+          ci,
+          undefined,
+          `Generated repo-root artifact '${rel}' is missing.`,
+          'run `aipm build` to generate it.',
+        ),
+      );
+      continue;
+    }
+    const onDisk = fs.readFileSync(abs);
+    if (!onDisk.equals(file.content)) {
+      findings.push(
+        freshnessFinding(
+          ci,
+          undefined,
+          `Generated repo-root artifact '${rel}' is stale — it differs from what \`aipm build\` would produce (hand-edited or out of date).`,
+          "run `aipm build` to regenerate it; edit the owning plugin's source, not the generated repo-root file.",
+        ),
+      );
+    }
   }
-
-  // The complete tracked set is required to check for orphans and sidecar drift.
-  if (regenerationErrors.length > 0 || failedLookups.size > 0 || priorTracked === undefined)
-    return findings;
 
   // 3b. Orphans: any path the committed sidecar recorded that build would no longer write but which
   // still sits on disk. `aipm build` removes these, so their presence means the tree is stale.
@@ -1794,8 +1548,7 @@ export async function checkRootArtifactFreshness(
   for (const rel of priorTracked) {
     if (expectedSet.has(rel)) continue;
     const abs = path.join(repoRoot, ...rel.split('/'));
-    checkValidationIo(() => {
-      if (!exists(abs)) return;
+    if (fs.existsSync(abs)) {
       findings.push(
         freshnessFinding(
           ci,
@@ -1804,7 +1557,7 @@ export async function checkRootArtifactFreshness(
           'run `aipm build` to remove the orphaned artifact.',
         ),
       );
-    }, onIoError);
+    }
   }
 
   // 3c. The sidecar manifest itself is a generated, freshness-checked artifact: its bytes must
@@ -1812,8 +1565,7 @@ export async function checkRootArtifactFreshness(
   // AND no sidecar exists, the expected state is "no sidecar" — only flag a stale/missing sidecar
   // when one is expected (non-empty tracked set) or one already exists on disk.
   const manifestAbs = rootManifestPath(repoRoot);
-  const manifestExists =
-    onIoError === undefined ? fs.existsSync(manifestAbs) : manifestContent !== undefined;
+  const manifestExists = fs.existsSync(manifestAbs);
   if (expectedTracked.length > 0 || manifestExists) {
     const expectedManifest = serializeRootManifest(expectedTracked);
     if (!manifestExists) {
@@ -1825,22 +1577,15 @@ export async function checkRootArtifactFreshness(
           'run `aipm build` to generate it.',
         ),
       );
-    } else {
-      checkValidationIo(() => {
-        if (
-          (onIoError === undefined ? fs.readFileSync(manifestAbs, 'utf-8') : manifestContent) ===
-          expectedManifest
-        )
-          return;
-        findings.push(
-          freshnessFinding(
-            ci,
-            undefined,
-            `Generated root manifest '${path.relative(repoRoot, manifestAbs)}' is stale — it differs from what \`aipm build\` would produce.`,
-            'run `aipm build` to regenerate it.',
-          ),
-        );
-      }, onIoError);
+    } else if (fs.readFileSync(manifestAbs, 'utf-8') !== expectedManifest) {
+      findings.push(
+        freshnessFinding(
+          ci,
+          undefined,
+          `Generated root manifest '${path.relative(repoRoot, manifestAbs)}' is stale — it differs from what \`aipm build\` would produce.`,
+          'run `aipm build` to regenerate it.',
+        ),
+      );
     }
   }
 
@@ -1851,67 +1596,40 @@ export async function checkRootArtifactFreshness(
  * Compare two directory trees and return the relative paths that differ (present in only one
  * side, or present in both with differing bytes). An empty result means the trees are identical.
  */
-function compareTrees(
-  actualDir: string,
-  expectedDir: string,
-  onIoError: FreshnessIoHandler | undefined,
-  plugin: string,
-): { rel: string; missing?: boolean }[] {
-  const exists = onIoError === undefined ? fs.existsSync : strictExists;
-  const collect = (dir: string) => {
-    const unreadable = new Set<string>();
-    const files = new Set(
-      collectFilesRelative(dir, exists, (err, subdir) => {
-        if (!captureValidationIo(err, onIoError, plugin)) throw err;
-        unreadable.add(path.relative(dir, subdir));
-      }),
-    );
-    return {
-      files,
-      // An unreadable ancestor makes presence unknown for this path.
-      includesDirectoryOf: (rel: string) => {
-        let parent = path.dirname(rel);
-        while (parent !== '.') {
-          if (unreadable.has(parent)) return false;
-          parent = path.dirname(parent);
-        }
-        return !unreadable.has('');
-      },
-    };
-  };
-  const actual = collect(actualDir);
-  const expected = collect(expectedDir);
+function compareTrees(actualDir: string, expectedDir: string): string[] {
+  const actual = new Set(collectFilesRelative(actualDir));
+  const expected = new Set(collectFilesRelative(expectedDir));
   const drift = new Set<string>();
 
-  for (const rel of actual.files) {
-    if (!expected.files.has(rel)) {
-      if (expected.includesDirectoryOf(rel)) drift.add(rel);
+  for (const rel of actual) {
+    if (!expected.has(rel)) {
+      drift.add(rel);
       continue;
     }
-    checkValidationIo(
-      () => {
-        const a = fs.readFileSync(path.join(actualDir, rel));
-        const b = fs.readFileSync(path.join(expectedDir, rel));
-        if (!a.equals(b)) drift.add(rel);
-      },
-      onIoError,
-      plugin,
-    );
+    const a = fs.readFileSync(path.join(actualDir, rel));
+    const b = fs.readFileSync(path.join(expectedDir, rel));
+    if (!a.equals(b)) drift.add(rel);
   }
-  for (const rel of expected.files) {
-    if (!actual.files.has(rel) && actual.includesDirectoryOf(rel)) drift.add(rel);
+  for (const rel of expected) {
+    if (!actual.has(rel)) drift.add(rel);
   }
 
-  return [...drift].sort().map((rel) => ({
-    rel,
-    // Preserve the legacy validator's second lookup when it classifies drift.
-    ...(onIoError === undefined ? {} : { missing: !actual.files.has(rel) }),
-  }));
+  return [...drift].sort();
 }
 
 // ---------------------------------------------------------------------------
 // runValidate — the validate orchestrator (§5.3, §10.1, §10.3)
 // ---------------------------------------------------------------------------
+
+/** Let independent rules run when an observed read prevented one rule from completing. */
+async function checkRule(rule: Rule, ctx: InternalRuleContext): Promise<Diagnostic[]> {
+  try {
+    return await withRepositoryPlugin(ctx.pluginDir, () => rule.check(ctx));
+  } catch (error) {
+    if (!isObservedIoError(error)) throw error;
+    return [];
+  }
+}
 
 /**
  * Validate one plugin or every plugin under a repo root (§5.3). Runs the validators in the order
@@ -1931,37 +1649,14 @@ function compareTrees(
  *
  * @param targetPath - Absolute path to a single plugin directory or a repo root.
  * @param opts - Validate options. `ci` controls freshness severity (default: local/soft).
- * @param state - Internal build validation state.
  * @returns The combined validation result.
  */
 export async function runValidate(
   targetPath: string,
   opts?: ValidateOptions & { ci?: boolean },
-  state?: {
-    rootOwnership: RootOwnership | undefined;
-    generationDiscovery: Discovery;
-    findings: Finding[];
-    onIoError: FreshnessIoHandler;
-  },
 ): Promise<ValidationResult> {
   const ci = opts?.ci ?? false;
   const skipFreshness = opts?.skipFreshness ?? false;
-
-  const findings = state?.findings ?? [];
-  const onFreshnessIoError = state?.onIoError;
-  const exists = onFreshnessIoError === undefined ? fs.existsSync : strictExists;
-  let completeTopology = true;
-  const discover = (target: string): Promise<Discovery> =>
-    discoverPlugins(
-      target,
-      exists,
-      onFreshnessIoError === undefined
-        ? undefined
-        : (err, directory) => {
-            if (!captureValidationIo(err, onFreshnessIoError, path.basename(directory))) throw err;
-            completeTopology = false;
-          },
-    );
 
   // Discovery loads the optional `aipm.repo.ts`. An invalid repo config makes the whole repo's
   // topology unresolvable, so surface it as a single repo-scoped `repo-config-invalid` finding
@@ -1969,18 +1664,18 @@ export async function runValidate(
   // the thrown error escape the validator.
   let discovery;
   try {
-    discovery = await discover(targetPath);
+    discovery = await discoverPlugins(targetPath);
   } catch (err) {
     if (err instanceof ConfigLoadError) {
-      findings.push({ severity: 'hard', code: 'repo-config-invalid', message: err.message });
-    } else if (!captureValidationIo(err, onFreshnessIoError)) {
-      throw err;
+      return {
+        findings: [{ severity: 'hard', code: 'repo-config-invalid', message: err.message }],
+        passed: false,
+      };
     }
-    if (state === undefined) return { findings, passed: false };
-    completeTopology = false;
-    discovery = state.generationDiscovery;
+    throw err;
   }
   const { repoRoot, distDir, pluginDirs } = discovery;
+  const findings: Finding[] = [];
 
   // One per-invocation config memo so each plugin's aipm.config.ts is transpiled once — reused by
   // the main loop below and the repo-level registry freshness step (see ConfigCache).
@@ -1992,22 +1687,18 @@ export async function runValidate(
   // absent, the historical hand-authored-registry path runs unchanged. An invalid workspace config
   // surfaces as a single repo-scoped finding (parallel to `repo-config-invalid`).
   let workspace: AipmWorkspace | undefined;
-  let workspaceKnown = true;
   try {
-    workspace = await loadWorkspaceConfig(repoRoot, exists);
+    workspace = await loadWorkspaceConfig(repoRoot);
   } catch (err) {
-    workspaceKnown = false;
     if (err instanceof ConfigLoadError) {
-      findings.push({ severity: 'hard', code: 'repo-config-invalid', message: err.message });
-      if (onFreshnessIoError === undefined) return { findings, passed: false };
-    } else if (!captureValidationIo(err, onFreshnessIoError)) {
-      throw err;
+      return {
+        findings: [{ severity: 'hard', code: 'repo-config-invalid', message: err.message }],
+        passed: false,
+      };
     }
+    throw err;
   }
   const generatesRegistries = workspace !== undefined;
-  if (onFreshnessIoError !== undefined && workspaceKnown && !generatesRegistries) {
-    findings.push(...validateHandAuthoredRegistries(repoRoot, onFreshnessIoError));
-  }
 
   for (const pluginDir of pluginDirs) {
     const pluginName = path.basename(pluginDir);
@@ -2015,7 +1706,7 @@ export async function runValidate(
     // ── 1. Envelope load + shape validation ─────────────────────────────────
     let envelope: readonly TargetId[];
     try {
-      const config = await loadPluginConfig(pluginDir, configCache, exists);
+      const config = await loadPluginConfig(pluginDir, configCache);
       envelope = config.targets;
     } catch (err) {
       // Distinguish "no/invalid config" (envelope-invalid) from unexpected errors. Either way,
@@ -2044,52 +1735,54 @@ export async function runValidate(
       workspace,
       ci,
       skipFreshness,
-      onFreshnessIoError,
       configCache,
     });
 
     // ── 2. Per-target schema validation ─────────────────────────────────────
-    const schemaFindings = (await targetSchemaRule.check(ctx)).map((d) =>
+    const schemaFindings = (await checkRule(targetSchemaRule, ctx)).map((d) =>
       diagnosticToFinding(d, ci),
     );
     findings.push(...schemaFindings);
-    if (onFreshnessIoError !== undefined) {
-      findings.push(...validateMcpFiles(pluginDir, onFreshnessIoError));
-    }
     const hasBlockingSchemaError = schemaFindings.some((f) => f.severity === 'hard');
 
     // ── 3. Envelope adherence ───────────────────────────────────────────────
     findings.push(
-      ...(await envelopeAdherenceRule.check(ctx)).map((d) => diagnosticToFinding(d, ci)),
+      ...(await checkRule(envelopeAdherenceRule, ctx)).map((d) => diagnosticToFinding(d, ci)),
     );
 
     // ── 3b. Frontmatter validity ────────────────────────────────────────────
     // Host-agnostic: invalid YAML frontmatter loads on lenient hosts (Claude) but fails on
     // strict ones (Codex). Runs for every plugin regardless of target envelope.
     findings.push(
-      ...(await frontmatterParsesRule.check(ctx)).map((d) => diagnosticToFinding(d, ci)),
+      ...(await checkRule(frontmatterParsesRule, ctx)).map((d) => diagnosticToFinding(d, ci)),
     );
 
     // ── 4. Cross-target consistency (§10.1 step 4: multi-target only; §10.3: schema blocks) ──
     if (envelope.length > 1 && !hasBlockingSchemaError) {
       findings.push(
-        ...(await nameConsistencyRule.check(ctx)).map((d) => diagnosticToFinding(d, ci)),
+        ...(await checkRule(nameConsistencyRule, ctx)).map((d) => diagnosticToFinding(d, ci)),
       );
       findings.push(
-        ...(await versionConsistencyRule.check(ctx)).map((d) => diagnosticToFinding(d, ci)),
+        ...(await checkRule(versionConsistencyRule, ctx)).map((d) => diagnosticToFinding(d, ci)),
       );
-      findings.push(...(await mcpKeySyncRule.check(ctx)).map((d) => diagnosticToFinding(d, ci)));
+      findings.push(
+        ...(await checkRule(mcpKeySyncRule, ctx)).map((d) => diagnosticToFinding(d, ci)),
+      );
       // When registries are generated, their correctness is enforced by freshness below — skip the
       // hand-authored-registry check to avoid double findings (design spec, locked decision 2).
-      if (workspaceKnown && !generatesRegistries) {
+      if (!generatesRegistries) {
         findings.push(
-          ...(await marketplaceRegistrationRule.check(ctx)).map((d) => diagnosticToFinding(d, ci)),
+          ...(await checkRule(marketplaceRegistrationRule, ctx)).map((d) =>
+            diagnosticToFinding(d, ci),
+          ),
         );
       }
     }
 
     // ── 5. Freshness ─────────────────────────────────────────────────────────
-    findings.push(...(await pluginFreshnessRule.check(ctx)).map((d) => diagnosticToFinding(d, ci)));
+    findings.push(
+      ...(await checkRule(pluginFreshnessRule, ctx)).map((d) => diagnosticToFinding(d, ci)),
+    );
   }
 
   // ── 6. Repo-level default/placeholder marketplace-name check (always SOFT) ──
@@ -2099,7 +1792,7 @@ export async function runValidate(
   // `aipm.workspace.ts` when present, else from a committed repo-root registry's top-level
   // `name`/`owner.name`. A placeholder name collides with the upstream marketplace and strands
   // plugins, so warn — but never fail (soft, does not flip `passed`).
-  if (workspaceKnown && path.resolve(targetPath) === repoRoot) {
+  if (path.resolve(targetPath) === repoRoot) {
     const repoLevelCtx = createRuleContext({
       pluginDir: repoRoot,
       repoRoot,
@@ -2109,11 +1802,10 @@ export async function runValidate(
       workspace,
       ci,
       skipFreshness,
-      onFreshnessIoError,
       configCache,
     });
     findings.push(
-      ...(await defaultMarketplaceNameRule.check(repoLevelCtx)).map((d) =>
+      ...(await checkRule(defaultMarketplaceNameRule, repoLevelCtx)).map((d) =>
         diagnosticToFinding(d, ci),
       ),
     );
@@ -2129,21 +1821,12 @@ export async function runValidate(
   // whenever a workspace is present — even under `skipFreshness` — because its `single-artifact-host`
   // / `root-artifact-collision` findings are structural gates (not drift), and `runBuild`'s
   // post-build validate (which skips freshness) must still fail fast on them.
-  let allPluginDirs: string[] | undefined;
   if (workspace !== undefined) {
-    try {
-      // Repo-root discovery already covers the full registry and root artifact inputs.
-      allPluginDirs =
-        path.resolve(targetPath) === repoRoot ? pluginDirs : (await discover(repoRoot)).pluginDirs;
-    } catch (err) {
-      if (onFreshnessIoError !== undefined && err instanceof ConfigLoadError) {
-        findings.push({ severity: 'hard', code: 'repo-config-invalid', message: err.message });
-      } else if (!captureValidationIo(err, onFreshnessIoError)) {
-        throw err;
-      }
-    }
-  }
-  if (workspace !== undefined && allPluginDirs !== undefined && completeTopology) {
+    // For repo-root input, pluginDirs already covers the whole repo — reuse it (and the warm
+    // config cache) rather than re-discovering and reloading. Single-plugin input needs a
+    // repo-wide re-scan so the oracle stays repo-complete.
+    const isRepoRoot = path.resolve(targetPath) === repoRoot;
+    const allPluginDirs = isRepoRoot ? pluginDirs : (await discoverPlugins(repoRoot)).pluginDirs;
     const repoScopedCtx = createRuleContext({
       pluginDir: repoRoot,
       repoRoot,
@@ -2153,42 +1836,30 @@ export async function runValidate(
       workspace,
       ci,
       skipFreshness,
-      onFreshnessIoError,
       configCache,
     });
     if (!skipFreshness) {
       findings.push(
-        ...(await registryFreshnessRule.check(repoScopedCtx)).map((d) =>
+        ...(await checkRule(registryFreshnessRule, repoScopedCtx)).map((d) =>
           diagnosticToFinding(d, ci),
         ),
       );
     }
-    if (state?.rootOwnership === undefined) {
-      findings.push(
-        ...(await rootArtifactFreshnessRule.check(repoScopedCtx)).map((d) =>
-          diagnosticToFinding(d, ci),
-        ),
-      );
-    } else {
-      findings.push(
-        ...(await checkRootArtifactFreshness(
-          repoRoot,
-          allPluginDirs,
-          workspace,
-          ci,
-          skipFreshness,
-          configCache,
-          onFreshnessIoError,
-          state.rootOwnership,
-        )),
-      );
-    }
+    findings.push(
+      ...(await checkRule(rootArtifactFreshnessRule, repoScopedCtx)).map((d) =>
+        diagnosticToFinding(d, ci),
+      ),
+    );
   }
 
   // ── 8. Published-surface boundary: unpublished skills must be marked internal (#118) ──
-  // Install channels that scan the repository for SKILL.md files ignore registries. This rule
-  // runs independently of freshness and is a no-op when there is no repo-wide published surface.
-  // The results-only build opts out.
+  // Repo-level and independent of registry generation: install channels that scan the repository
+  // for SKILL.md files (the `skills` CLI) ignore registries entirely, so a registry that is
+  // correct says nothing about what those channels offer. The rule classifies skills against the
+  // repo-wide published set and is a no-op when `repoRoot` is not an aipm repo root (a lone plugin
+  // directory has no published surface to guard). Not a freshness check, so it is independent of
+  // `skipFreshness`; `build` opts out through its own option, because a contributor file outside
+  // the plugins says nothing about whether the build output is valid.
   if (!(opts?.skipPublishedSurfaceBoundary ?? false)) {
     const boundaryCtx = createRuleContext({
       pluginDir: repoRoot,
@@ -2201,7 +1872,7 @@ export async function runValidate(
       skipFreshness,
       configCache,
     });
-    for (const diagnostic of await unpublishedSkillInstallableRule.check(boundaryCtx)) {
+    for (const diagnostic of await checkRule(unpublishedSkillInstallableRule, boundaryCtx)) {
       // `Finding.plugin` means "the plugin this finding is about". An unpublished skill belongs to
       // no plugin, so the field is left unset rather than carrying the diagnostic's file path; the
       // message already names the file.

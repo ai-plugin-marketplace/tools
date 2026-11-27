@@ -17,9 +17,7 @@
  * @see https://agentskills.io (agentskills.io spec — source of name/description constraints)
  */
 
-import { assertRegularFile, checkValidationIo } from '../../pipeline/validation-io.js';
-import type { FreshnessIoHandler } from '../../pipeline/validation-io.js';
-import * as fs from 'node:fs';
+import { repositoryFs as fs } from '../../pipeline/repository-fs.js';
 import * as path from 'node:path';
 
 import { parse as parseYaml } from 'yaml';
@@ -214,23 +212,14 @@ function validateSkillMd(skillPath: string, pluginName: string): Finding[] {
  * `pluginDir` is the absolute path to a `plugins/<name>/` directory.
  * All findings use `plugin: path.basename(pluginDir)`.
  */
-export function validateVercelPlugin(pluginDir: string, onIoError?: FreshnessIoHandler): Finding[] {
+export function validateVercelPlugin(pluginDir: string): Finding[] {
   const pluginName = path.basename(pluginDir);
   const skillsDir = path.join(pluginDir, 'skills');
   const skillPaths = findSkillMds(skillsDir);
 
   const findings: Finding[] = [];
   for (const skillPath of skillPaths) {
-    findings.push(
-      ...(checkValidationIo(
-        () => {
-          if (onIoError !== undefined) assertRegularFile(skillPath);
-          return validateSkillMd(skillPath, pluginName);
-        },
-        onIoError,
-        pluginName,
-      ) ?? []),
-    );
+    findings.push(...validateSkillMd(skillPath, pluginName));
   }
   return findings;
 }

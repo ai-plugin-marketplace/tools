@@ -23,9 +23,7 @@
  * @see docs/specs/architecture.md §12.5 (internal module shape), §3.4 (target isolation)
  */
 
-import { checkValidationIo, readValidationJson } from '../../pipeline/validation-io.js';
-import type { FreshnessIoHandler } from '../../pipeline/validation-io.js';
-import * as fs from 'node:fs';
+import { isFileEntry, repositoryFs as fs } from '../../pipeline/repository-fs.js';
 import * as path from 'node:path';
 
 import { parse as parseYaml } from 'yaml';
@@ -162,17 +160,14 @@ function validatePowerMd(pluginDir: string, pluginName: string): Finding[] {
  * If `mcp.json` exists, parse JSON and validate against `kiroMcpConfigSchema`.
  * Missing file → no finding (envelope-adherence owns that check).
  */
-function validateMcpJson(
-  pluginDir: string,
-  pluginName: string,
-  onIoError?: FreshnessIoHandler,
-): Finding[] {
+function validateMcpJson(pluginDir: string, pluginName: string): Finding[] {
   const mcpPath = path.join(pluginDir, 'mcp.json');
   if (!fs.existsSync(mcpPath)) return [];
 
-  const json = readValidationJson(mcpPath, onIoError, pluginName);
-  if (json === undefined) return [];
-  if (!json.ok) {
+  let raw: unknown;
+  try {
+    raw = JSON.parse(fs.readFileSync(mcpPath, 'utf-8')) as unknown;
+  } catch {
     return [
       hardSchemaFinding(
         pluginName,
@@ -182,7 +177,7 @@ function validateMcpJson(
     ];
   }
 
-  const result = kiroMcpConfigSchema.safeParse(json.value);
+  const result = kiroMcpConfigSchema.safeParse(raw);
   if (!result.success) {
     const issues = result.error.issues
       .map((i) => `${i.path.join('.') || '(root)'}: ${i.message}`)
@@ -240,11 +235,7 @@ function extractAgentTools(content: string): string[] {
  * Severity is soft — unmapped tools are dropped from the Kiro bundle but do not
  * block the build.
  */
-function validateAgentToolNames(
-  pluginDir: string,
-  pluginName: string,
-  onIoError?: FreshnessIoHandler,
-): Finding[] {
+function validateAgentToolNames(pluginDir: string, pluginName: string): Finding[] {
   const agentsDir = path.join(pluginDir, 'agents');
   if (!fs.existsSync(agentsDir)) return [];
 
@@ -252,16 +243,11 @@ function validateAgentToolNames(
   const findings: Finding[] = [];
 
   for (const entry of entries) {
-    if (!entry.isFile() || !entry.name.endsWith('.md')) continue;
+    if (!isFileEntry(agentsDir, entry, '.md')) continue;
 
     const agentName = entry.name.replace(/\.md$/, '');
     const agentPath = path.join(agentsDir, entry.name);
-    const content = checkValidationIo(
-      () => fs.readFileSync(agentPath, 'utf-8'),
-      onIoError,
-      pluginName,
-    );
-    if (content === undefined) continue;
+    const content = fs.readFileSync(agentPath, 'utf-8');
     const tools = extractAgentTools(content);
 
     for (const tool of tools) {
@@ -293,21 +279,12 @@ function validateAgentToolNames(
  * Returns zero or more Findings. Callers combine these with other targets'
  * findings and the cross-target findings in the pipeline validator.
  */
-export function validateKiroPlugin(pluginDir: string, onIoError?: FreshnessIoHandler): Finding[] {
+export function validateKiroPlugin(pluginDir: string): Finding[] {
   const pluginName = path.basename(pluginDir);
 
   return [
-    ...(checkValidationIo(() => validatePowerMd(pluginDir, pluginName), onIoError, pluginName) ??
-      []),
-    ...(checkValidationIo(
-      () => validateMcpJson(pluginDir, pluginName, onIoError),
-      onIoError,
-      pluginName,
-    ) ?? []),
-    ...(checkValidationIo(
-      () => validateAgentToolNames(pluginDir, pluginName, onIoError),
-      onIoError,
-      pluginName,
-    ) ?? []),
+    ...validatePowerMd(pluginDir, pluginName),
+    ...validateMcpJson(pluginDir, pluginName),
+    ...validateAgentToolNames(pluginDir, pluginName),
   ];
 }

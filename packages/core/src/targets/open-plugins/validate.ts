@@ -19,9 +19,7 @@
  * @see docs/specs/architecture.md §8.1 (Finding, FindingCode)
  */
 
-import { checkValidationIo, readValidationJson } from '../../pipeline/validation-io.js';
-import type { FreshnessIoHandler } from '../../pipeline/validation-io.js';
-import * as fs from 'node:fs';
+import { referenceExists, repositoryFs as fs } from '../../pipeline/repository-fs.js';
 import * as path from 'node:path';
 
 import type { Finding } from '../../pipeline/types.js';
@@ -86,17 +84,14 @@ export function resolveContainedPath(pluginDir: string, refPath: string): string
 // Manifest schema + file-ref validation
 // ---------------------------------------------------------------------------
 
-function validateManifest(
-  pluginDir: string,
-  pluginName: string,
-  onIoError?: FreshnessIoHandler,
-): Finding[] {
+function validateManifest(pluginDir: string, pluginName: string): Finding[] {
   const manifestPath = path.join(pluginDir, '.plugin', 'plugin.json');
   if (!fs.existsSync(manifestPath)) return [];
 
-  const json = readValidationJson(manifestPath, onIoError, pluginName);
-  if (json === undefined) return [];
-  if (!json.ok) {
+  let raw: unknown;
+  try {
+    raw = JSON.parse(fs.readFileSync(manifestPath, 'utf-8'));
+  } catch {
     return [
       makeInvalid(
         pluginName,
@@ -106,7 +101,7 @@ function validateManifest(
     ];
   }
 
-  const parsed = openPluginsManifestSchema.safeParse(json.value);
+  const parsed = openPluginsManifestSchema.safeParse(raw);
   if (!parsed.success) {
     const issues = parsed.error.issues.map((i) => i.message).join('; ');
     return [
@@ -138,7 +133,7 @@ function validateManifest(
         );
         continue;
       }
-      if (!fs.existsSync(resolved)) {
+      if (!referenceExists(resolved)) {
         findings.push(
           makeInvalid(
             pluginName,
@@ -214,21 +209,10 @@ function validateMetadataDirIsolation(pluginDir: string, pluginName: string): Fi
  * `pluginDir` is the absolute path to a `plugins/<name>/` directory. All findings use
  * `plugin: path.basename(pluginDir)`.
  */
-export function validateOpenPluginsPlugin(
-  pluginDir: string,
-  onIoError?: FreshnessIoHandler,
-): Finding[] {
+export function validateOpenPluginsPlugin(pluginDir: string): Finding[] {
   const pluginName = path.basename(pluginDir);
   return [
-    ...(checkValidationIo(
-      () => validateManifest(pluginDir, pluginName, onIoError),
-      onIoError,
-      pluginName,
-    ) ?? []),
-    ...(checkValidationIo(
-      () => validateMetadataDirIsolation(pluginDir, pluginName),
-      onIoError,
-      pluginName,
-    ) ?? []),
+    ...validateManifest(pluginDir, pluginName),
+    ...validateMetadataDirIsolation(pluginDir, pluginName),
   ];
 }

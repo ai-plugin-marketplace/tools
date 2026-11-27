@@ -4,7 +4,7 @@
 
 ## BuildFreshnessIoFinding.severity property
 
-Validation I/O failures are hard in every environment.
+Filesystem failures are hard in every environment.
 
 **Signature:**
 

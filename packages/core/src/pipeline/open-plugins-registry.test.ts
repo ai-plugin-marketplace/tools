@@ -28,7 +28,7 @@ import * as path from 'node:path';
 
 import { afterEach, describe, expect, it } from 'vitest';
 
-import { serializeRootManifest } from './artifacts.js';
+import { serializeRootManifest } from './build.js';
 import { runBuild } from './build.js';
 import { runValidate } from './validate.js';
 import { synthRegistryRepo } from '../test-support/synth-plugin.js';

@@ -20,14 +20,7 @@
  * @see packages/core/docs/specs/architecture.md §8.1 (Finding, FindingCode)
  */
 
-import {
-  assertReadableFile,
-  checkValidationIo,
-  readValidationJson,
-  strictExists,
-} from '../../pipeline/validation-io.js';
-import type { FreshnessIoHandler } from '../../pipeline/validation-io.js';
-import * as fs from 'node:fs';
+import { isFileEntry, referenceExists, repositoryFs as fs } from '../../pipeline/repository-fs.js';
 import * as path from 'node:path';
 
 import { parse as parseYaml } from 'yaml';
@@ -73,17 +66,14 @@ function normalisePathField(
 // Manifest file-ref validation
 // ---------------------------------------------------------------------------
 
-function validateManifestFileRefs(
-  pluginDir: string,
-  pluginName: string,
-  onIoError?: FreshnessIoHandler,
-): Finding[] {
+function validateManifestFileRefs(pluginDir: string, pluginName: string): Finding[] {
   const manifestPath = path.join(pluginDir, '.cursor-plugin', 'plugin.json');
   if (!fs.existsSync(manifestPath)) return [];
 
-  const json = readValidationJson(manifestPath, onIoError, pluginName);
-  if (json === undefined) return [];
-  if (!json.ok) {
+  let raw: unknown;
+  try {
+    raw = JSON.parse(fs.readFileSync(manifestPath, 'utf-8'));
+  } catch {
     return [
       makeInvalid(
         pluginName,
@@ -93,7 +83,7 @@ function validateManifestFileRefs(
     ];
   }
 
-  const parsed = cursorPluginManifestSchema.safeParse(json.value);
+  const parsed = cursorPluginManifestSchema.safeParse(raw);
   if (!parsed.success) {
     const issues = parsed.error.issues.map((i) => i.message).join('; ');
     return [
@@ -145,7 +135,12 @@ function validateManifestFileRefs(
 
       const resolved = path.join(pluginDir, refPath.slice(2));
 
-      if (!fs.existsSync(resolved)) {
+      if (
+        !referenceExists(
+          resolved,
+          mustBeDir === undefined ? undefined : mustBeDir ? 'directory' : 'file',
+        )
+      ) {
         findings.push(
           makeInvalid(
             pluginName,
@@ -156,8 +151,7 @@ function validateManifestFileRefs(
         continue;
       }
 
-      const stat = checkValidationIo(() => fs.statSync(resolved), onIoError, pluginName);
-      if (stat === undefined) continue;
+      const stat = fs.statSync(resolved);
 
       if (mustBeDir === true && !stat.isDirectory()) {
         findings.push(
@@ -253,17 +247,14 @@ function validateRetiredHooksRef(pluginDir: string, pluginName: string): Finding
  * The toolkit stamps a top-level `_generated` sentinel onto the file (§4.3); it is a
  * toolkit-owned field, so it is dropped before the strict schema check rather than rejected.
  */
-function validateCursorHooksFile(
-  pluginDir: string,
-  pluginName: string,
-  onIoError?: FreshnessIoHandler,
-): Finding[] {
+function validateCursorHooksFile(pluginDir: string, pluginName: string): Finding[] {
   const hooksPath = path.join(pluginDir, 'hooks', 'cursor.json');
   if (!fs.existsSync(hooksPath)) return [];
 
-  const json = readValidationJson(hooksPath, onIoError, pluginName);
-  if (json === undefined) return [];
-  if (!json.ok) {
+  let raw: unknown;
+  try {
+    raw = JSON.parse(fs.readFileSync(hooksPath, 'utf-8'));
+  } catch {
     return [
       makeInvalid(
         pluginName,
@@ -272,7 +263,6 @@ function validateCursorHooksFile(
       ),
     ];
   }
-  const raw = json.value;
 
   // Drop the toolkit-owned `_generated` sentinel (§4.3) so the strict schema validates only the
   // hook payload rather than rejecting the sentinel field.
@@ -322,39 +312,17 @@ function parseMdcFrontmatter(content: string): Record<string, unknown> | null {
   return parsed as Record<string, unknown>;
 }
 
-function validateCursorRules(
-  pluginDir: string,
-  pluginName: string,
-  onIoError?: FreshnessIoHandler,
-): Finding[] {
+function validateCursorRules(pluginDir: string, pluginName: string): Finding[] {
   const rulesDir = path.join(pluginDir, 'rules');
-  if (!(onIoError === undefined ? fs.existsSync(rulesDir) : strictExists(rulesDir))) return [];
+  if (!fs.existsSync(rulesDir)) return [];
 
   const findings: Finding[] = [];
 
   const entries = fs.readdirSync(rulesDir, { withFileTypes: true });
   for (const entry of entries) {
-    if (!entry.name.endsWith('.mdc')) continue;
-
+    if (!isFileEntry(rulesDir, entry, '.mdc')) continue;
     const filePath = path.join(rulesDir, entry.name);
-    if (!entry.isFile()) {
-      if (onIoError !== undefined) {
-        checkValidationIo(
-          () => {
-            assertReadableFile(filePath);
-          },
-          onIoError,
-          pluginName,
-        );
-      }
-      continue;
-    }
-    const content = checkValidationIo(
-      () => fs.readFileSync(filePath, 'utf-8'),
-      onIoError,
-      pluginName,
-    );
-    if (content === undefined) continue;
+    const content = fs.readFileSync(filePath, 'utf-8');
 
     let frontmatter: Record<string, unknown> | null;
     try {
@@ -399,34 +367,14 @@ function validateCursorRules(
  * `pluginDir` is the absolute path to a `plugins/<name>/` directory.
  * All findings use `plugin: path.basename(pluginDir)`.
  */
-export function validateCursorPlugin(pluginDir: string, onIoError?: FreshnessIoHandler): Finding[] {
+export function validateCursorPlugin(pluginDir: string): Finding[] {
   const pluginName = path.basename(pluginDir);
   return [
-    ...(checkValidationIo(
-      () => validateManifestFileRefs(pluginDir, pluginName, onIoError),
-      onIoError,
-      pluginName,
-    ) ?? []),
-    ...(checkValidationIo(
-      () => validateRetiredHooksRef(pluginDir, pluginName),
-      onIoError,
-      pluginName,
-    ) ?? []),
-    ...(checkValidationIo(
-      () => validateCursorHooksFile(pluginDir, pluginName, onIoError),
-      onIoError,
-      pluginName,
-    ) ?? []),
-    ...(checkValidationIo(
-      () => validateCursorRules(pluginDir, pluginName, onIoError),
-      onIoError,
-      pluginName,
-    ) ?? []),
-    ...(checkValidationIo(
-      () => validateOpenPluginsConformance(pluginDir, pluginName),
-      onIoError,
-      pluginName,
-    ) ?? []),
+    ...validateManifestFileRefs(pluginDir, pluginName),
+    ...validateRetiredHooksRef(pluginDir, pluginName),
+    ...validateCursorHooksFile(pluginDir, pluginName),
+    ...validateCursorRules(pluginDir, pluginName),
+    ...validateOpenPluginsConformance(pluginDir, pluginName),
   ];
 }
 

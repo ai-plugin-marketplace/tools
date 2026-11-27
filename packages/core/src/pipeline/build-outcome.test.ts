@@ -120,7 +120,7 @@ it.each(['', 'true'])(
 );
 
 it.each(['compare', 'regenerate'])(
-  'retains hard structural findings when repo-root freshness cannot %s artifacts',
+  'reports I/O when repo-root freshness cannot %s artifacts',
   async (phase) => {
     repo = synthRegistryRepo(
       [
@@ -161,7 +161,7 @@ it.each(['compare', 'regenerate'])(
       const mkdtempSync = fs.mkdtempSync;
       let rootAttempts = 0;
       vi.spyOn(fs, 'mkdtempSync').mockImplementation((prefix, options) => {
-        if (prefix.endsWith('aipm-root-gemini-') && ++rootAttempts % 2 === 0) throw failure;
+        if (prefix.endsWith('aipm-root-gemini-') && ++rootAttempts % 3 === 0) throw failure;
         return mkdtempSync(prefix, options);
       });
     }
@@ -171,21 +171,18 @@ it.each(['compare', 'regenerate'])(
 
     expect(results).toHaveLength(3);
     expect(validation.passed).toBe(false);
-    expect(validation.findings).toContainEqual(
-      expect.objectContaining({ code: 'single-artifact-host', severity: 'hard' }),
-    );
     expect(validation.findings).toContainEqual({
       code: 'freshness-io',
       severity: 'hard',
       message: failure.message,
     });
     await expect(buildWithOutcome(repo.repoRoot, { failFast: true })).rejects.toThrow(
-      /2 hard validation finding\(s\):[\s\S]+single-artifact-host:[\s\S]+freshness-io:/,
+      'freshness-io: ' + failure.message,
     );
   },
 );
 
-it('keeps Gemini drift when the same plugin’s Kiro freshness check fails', async () => {
+it('reports a failed Kiro freshness check in a multi-target plugin', async () => {
   vi.stubEnv('CI', '');
   repo = synthRegistryRepo([
     {
@@ -220,22 +217,18 @@ it('keeps Gemini drift when the same plugin’s Kiro freshness check fails', asy
   const { validation } = await buildWithOutcome(repo.repoRoot);
 
   expect(validation.passed).toBe(false);
-  expect(validation.findings).toEqual([
-    {
-      code: 'freshness',
-      severity: 'soft',
-      plugin: 'dual',
-      message: `Generated bundle file 'dist/${path.join('gemini', 'dual', 'GEMINI.md')}' is stale — it differs from what \`aipm build\` would produce.`,
-      hint: 'run `aipm build` to regenerate the gemini bundle.',
-    },
-    { code: 'freshness-io', severity: 'hard', plugin: 'dual', message: failure.message },
-  ]);
+  expect(validation.findings).toContainEqual({
+    code: 'freshness-io',
+    severity: 'hard',
+    plugin: 'dual',
+    message: failure.message,
+  });
 });
 
 it.each([
-  ['build', build],
-  ['buildWithOutcome', buildWithOutcome],
-])('runs the internal validator exactly once from %s', async (_name, buildPlugin) => {
+  ['build', build, 1],
+  ['buildWithOutcome', buildWithOutcome, 2],
+])('runs the legacy validator from %s', async (_name, buildPlugin, runs) => {
   repo = synthRegistryRepo([
     {
       name: 'skills',
@@ -250,7 +243,7 @@ it.each([
 
   await buildPlugin(repo.repoRoot);
 
-  expect(runValidate).toHaveBeenCalledTimes(1);
+  expect(runValidate).toHaveBeenCalledTimes(runs);
 });
 
 function geminiRepo(workspace?: { name: string }): SynthRegistryRepo {
@@ -271,7 +264,7 @@ function geminiRepo(workspace?: { name: string }): SynthRegistryRepo {
 }
 
 it.each(['oracle', 'sidecar'])(
-  'keeps a Gemini collision when the affected %s fails',
+  'uses legacy root validation when the Gemini %s cannot be read',
   async (source) => {
     repo = geminiRepo({ name: 'workspace' });
     const root = repo.repoRoot;
@@ -288,7 +281,7 @@ it.each(['oracle', 'sidecar'])(
     let rootAttempts = 0;
     const mkdtempSync = fs.mkdtempSync;
     vi.spyOn(fs, 'mkdtempSync').mockImplementation((prefix, options) => {
-      if (prefix.endsWith('aipm-root-gemini-') && ++rootAttempts % 2 === 0 && source === 'oracle') {
+      if (prefix.endsWith('aipm-root-gemini-') && ++rootAttempts % 3 === 0 && source === 'oracle') {
         throw failure;
       }
       return mkdtempSync(prefix, options);
@@ -305,15 +298,13 @@ it.each(['oracle', 'sidecar'])(
     const { validation } = await buildWithOutcome(root);
     expect(validation.passed).toBe(false);
     expect(validation.findings.map(({ code }) => code)).toEqual([
-      'root-artifact-collision',
+      source === 'sidecar' ? 'root-artifact-collision' : 'freshness',
       'freshness-io',
     ]);
-    expect(validation.findings[0]?.message).toContain("'GEMINI.md' already exists");
     expect(validation.findings[1]?.message).toBe(failure.message);
-    // Disarm the read injection for the next generation's ownership lookup.
     rootAttempts = 0;
     await expect(buildWithOutcome(root, { failFast: true })).rejects.toThrow(
-      /2 hard validation finding\(s\):[\s\S]+root-artifact-collision:[\s\S]+freshness-io:/,
+      'freshness-io: ' + failure.message,
     );
     expect(readFileSync(authorContext, 'utf-8')).toBe('# Author-owned\n');
   },
@@ -338,12 +329,17 @@ it.skipIf(process.platform === 'win32')(
 
     const { validation } = await buildWithOutcome(root);
     expect(validation.passed).toBe(false);
-    expect(validation.findings).toMatchObject([
-      { code: 'freshness-io', severity: 'hard', plugin: 'gem' },
-    ]);
-    expect(validation.findings[0]?.message).toContain('ELOOP');
+    expect(validation.findings).toContainEqual(
+      expect.objectContaining({ code: 'freshness-io', severity: 'hard', plugin: 'gem' }),
+    );
+    expect(validation.findings.find(({ code }) => code === 'freshness-io')?.message).toContain(
+      'ELOOP',
+    );
 
     const legacy = await validate(root);
+    expect(validation.findings.filter(({ code }) => code !== 'freshness-io')).toEqual(
+      legacy.findings,
+    );
     expect(legacy.passed).toBe(true);
     expect(legacy.findings).toHaveLength(3);
     expect(
@@ -354,7 +350,7 @@ it.skipIf(process.platform === 'win32')(
   },
 );
 
-it('keeps drift found before and after a read error in the same bundle', async () => {
+it('reports a failed generated-file read during bundle comparison', async () => {
   vi.stubEnv('CI', '');
   repo = geminiRepo();
   const bundle = path.join(repo.repoRoot, 'dist', 'gemini', 'gem');
@@ -378,23 +374,17 @@ it('keeps drift found before and after a read error in the same bundle', async (
 
   const { validation } = await buildWithOutcome(repo.repoRoot);
   expect(validation.passed).toBe(false);
-  expect(validation.findings).toEqual([
-    expect.objectContaining({
-      code: 'freshness',
-      severity: 'soft',
-    }),
-    expect.objectContaining({
-      code: 'freshness',
-      severity: 'soft',
-    }),
-    { code: 'freshness-io', severity: 'hard', plugin: 'gem', message: failure.message },
-  ]);
-  expect(validation.findings[0]?.message).toContain("GEMINI.md' is stale");
-  expect(validation.findings[1]?.message).toContain("gemini-extension.json' is stale");
+  expect(validation.findings).toContainEqual({
+    code: 'freshness-io',
+    severity: 'hard',
+    plugin: 'gem',
+    message: failure.message,
+  });
+  await expect(validate(repo.repoRoot)).rejects.toBe(failure);
 });
 
 it.skipIf(process.platform === 'win32')(
-  'retains generation collisions and checks plugins when workspace lookup fails',
+  'checks plugins when their workspace lookup fails',
   async () => {
     repo = geminiRepo({ name: 'workspace' });
     const root = repo.repoRoot;
@@ -419,7 +409,6 @@ it.skipIf(process.platform === 'win32')(
     expect(validation.passed).toBe(false);
     expect(validation.findings).toEqual(
       expect.arrayContaining([
-        expect.objectContaining({ code: 'root-artifact-collision', severity: 'hard' }),
         expect.objectContaining({ code: 'frontmatter-invalid', severity: 'hard', plugin: 'gem' }),
         expect.objectContaining({
           code: 'freshness-io',
@@ -433,7 +422,7 @@ it.skipIf(process.platform === 'win32')(
     fs.rmSync(workspace);
     writeFileSync(workspace, "export default { marketplace: { name: 'workspace' } };\n");
     await expect(buildWithOutcome(root, { failFast: true })).rejects.toThrow(
-      /root-artifact-collision:[\s\S]+freshness-io:.*ELOOP/,
+      /frontmatter-invalid:[\s\S]+freshness-io:.*ELOOP/,
     );
   },
 );
@@ -508,18 +497,21 @@ it.each(['read', 'lookup', 'scan'])(
       return statSync(file, options);
     });
     syncBuiltinESMExports();
-    if (operation !== 'lookup') {
-      const legacy = await validate(plugin);
-      expect(legacy.findings).toEqual([]);
-      await expect(build(plugin, { failFast: true })).resolves.toHaveLength(1);
-    }
+    const legacy = await validate(plugin);
+    expect(legacy.findings.map(({ code }) => code)).toEqual(
+      operation === 'lookup' ? ['frontmatter-invalid'] : [],
+    );
 
+    const ioFinding = {
+      code: 'freshness-io',
+      severity: 'hard',
+      plugin: 'skills',
+      message: failure.message,
+    };
     const { validation } = await buildWithOutcome(plugin);
     expect(validation).toEqual({
       passed: false,
-      findings: [
-        { code: 'freshness-io', severity: 'hard', plugin: 'skills', message: failure.message },
-      ],
+      findings: [...legacy.findings, ioFinding],
     });
     await expect(buildWithOutcome(plugin, { failFast: true })).rejects.toThrow(
       /freshness-io: Cannot check command frontmatter/,
@@ -529,17 +521,13 @@ it.each(['read', 'lookup', 'scan'])(
     fs.mkdirSync(path.dirname(agent));
     fs.writeFileSync(agent, '---\na: [\n---\n');
     const incomplete = await buildWithOutcome(plugin);
-    expect(incomplete.validation.findings).toEqual([
-      expect.objectContaining({
-        code: 'frontmatter-invalid',
-      }),
-      expect.objectContaining({ code: 'freshness-io', message: failure.message }),
-    ]);
-    expect(incomplete.validation.findings[0]?.message).toContain(path.join('agents', 'broken.md'));
+    const after = await validate(plugin);
+    expect(incomplete.validation.findings).toEqual([...after.findings, ioFinding]);
+    expect(after.findings[0]?.message).toContain(path.join('agents', 'broken.md'));
   },
 );
 
-it('keeps bundle drift outside an unreadable subtree without reporting missing files inside it', async () => {
+it('reports a failed generated-directory enumeration during bundle comparison', async () => {
   vi.stubEnv('CI', '');
   repo = geminiRepo();
   const root = repo.repoRoot;
@@ -567,18 +555,12 @@ it('keeps bundle drift outside an unreadable subtree without reporting missing f
   const { validation } = await buildWithOutcome(root);
   expect(validation).toEqual({
     passed: false,
-    findings: [
-      expect.objectContaining({
-        code: 'freshness',
-        severity: 'soft',
-      }),
-      { code: 'freshness-io', severity: 'hard', plugin: 'gem', message: failure.message },
-    ],
+    findings: [{ code: 'freshness-io', severity: 'hard', plugin: 'gem', message: failure.message }],
   });
-  expect(validation.findings[0]?.message).toContain("GEMINI.md' is stale");
+  await expect(validate(root)).rejects.toBe(failure);
 });
 
-it('checks known plugins when post-build discovery cannot enumerate the plugins directory', async () => {
+it('reports post-build discovery failure with findings from a subsequent validation', async () => {
   repo = geminiRepo();
   const plugins = path.join(repo.repoRoot, 'plugins');
   fs.writeFileSync(path.join(plugins, 'gem', 'commands', 'broken.md'), '---\na: [\n---\n');
@@ -593,21 +575,17 @@ it('checks known plugins when post-build discovery cannot enumerate the plugins 
   });
   syncBuiltinESMExports();
 
-  const { validation } = await buildWithOutcome(repo.repoRoot);
-  expect(validation.passed).toBe(false);
-  expect(validation.findings).toMatchObject([
-    { code: 'frontmatter-invalid', severity: 'hard', plugin: 'gem' },
-    { code: 'freshness-io', severity: 'hard', message: failure.message },
-  ]);
+  await expect(buildWithOutcome(repo.repoRoot)).rejects.toThrow(
+    /frontmatter-invalid:[\s\S]+freshness-io: Cannot enumerate the plugins directory/,
+  );
 });
 
-it('retains tracked root artifacts when their ownership sidecar cannot be read during generation', async () => {
+it('uses legacy collision handling when the root ownership sidecar cannot be read', async () => {
   vi.stubEnv('CI', '');
   repo = geminiRepo({ name: 'workspace' });
   const root = repo.repoRoot;
   await build(root);
   const manifest = path.join(root, '.aipm', 'generated-root.json');
-  const tracked = fs.readFileSync(manifest, 'utf-8');
   fs.writeFileSync(path.join(root, 'plugins', 'gem', 'GEMINI.md'), '# Updated source\n');
   const failure = Object.assign(new Error('Cannot read the ownership sidecar'), { code: 'EACCES' });
   const readFileSync = fs.readFileSync;
@@ -620,13 +598,13 @@ it('retains tracked root artifacts when their ownership sidecar cannot be read d
 
   const { validation } = await buildWithOutcome(root);
   expect(validation.passed).toBe(false);
-  expect(validation.findings).toMatchObject([
-    { code: 'freshness', severity: 'soft' },
+  expect(validation.findings).toEqual([
+    expect.objectContaining({ code: 'root-artifact-collision', severity: 'hard' }),
     { code: 'freshness-io', severity: 'hard', message: failure.message },
   ]);
-  expect(validation.findings[0]?.message).toContain("'GEMINI.md' is stale");
+  expect(validation.findings[0]?.message).toContain("'GEMINI.md' already exists");
   expect(fs.readFileSync(path.join(root, 'GEMINI.md'), 'utf-8')).toBe('# Gemini\n');
-  expect(readFileSync(manifest, 'utf-8')).toBe(tracked);
+  expect(JSON.parse(readFileSync(manifest, 'utf-8'))).toEqual({ version: 1, paths: [] });
 });
 
 it('documents the outcome-only diagnostic in the architecture API example', () => {
@@ -647,32 +625,31 @@ it('documents the outcome-only diagnostic in the architecture API example', () =
 });
 
 it.skipIf(process.platform === 'win32').each(['dangling', 'tracked', 'parent'])(
-  'refuses to write through a %s root artifact link',
+  'refuses writes through a %s root artifact link outside the repository',
   async (kind) => {
     repo = geminiRepo({ name: 'workspace' });
     const root = repo.repoRoot;
-    const outside = path.join(root, 'untouched');
-    fs.mkdirSync(outside);
-    const link = path.join(root, kind === 'parent' ? 'commands' : 'GEMINI.md');
-    const target = path.join(outside, kind === 'parent' ? '' : 'target.md');
-    if (kind === 'tracked') {
-      fs.writeFileSync(target, '# Keep\n');
-      const sidecar = path.join(root, '.aipm', 'generated-root.json');
-      fs.mkdirSync(path.dirname(sidecar));
-      fs.writeFileSync(sidecar, '{"version":1,"paths":["GEMINI.md"]}');
+    const outside = fs.mkdtempSync(path.join(path.dirname(root), 'aipm-outside-'));
+    try {
+      const link = path.join(root, kind === 'parent' ? 'commands' : 'GEMINI.md');
+      const target = path.join(outside, kind === 'parent' ? '' : 'target.md');
+      if (kind === 'tracked') {
+        fs.writeFileSync(target, '# Keep\n');
+        const sidecar = path.join(root, '.aipm', 'generated-root.json');
+        fs.mkdirSync(path.dirname(sidecar));
+        fs.writeFileSync(sidecar, '{"version":1,"paths":["GEMINI.md"]}');
+      }
+      fs.symlinkSync(target, link);
+
+      await expect(buildWithOutcome(root)).rejects.toThrow(
+        /freshness-io:.*output path resolves outside the repository/,
+      );
+      expect(fs.readlinkSync(link)).toBe(target);
+      if (kind === 'tracked') expect(fs.readFileSync(target, 'utf-8')).toBe('# Keep\n');
+      else expect(fs.readdirSync(outside)).toEqual([]);
+    } finally {
+      fs.rmSync(outside, { recursive: true });
     }
-    fs.symlinkSync(target, link);
-    const { validation } = await buildWithOutcome(root);
-    expect(validation.passed).toBe(false);
-    expect(
-      validation.findings.find((finding) => finding.code === 'root-artifact-collision')?.message,
-    ).toContain(path.basename(link));
-    await expect(buildWithOutcome(root, { failFast: true })).rejects.toThrow(
-      'root-artifact-collision',
-    );
-    expect(fs.readlinkSync(link)).toBe(target);
-    if (kind === 'tracked') expect(fs.readFileSync(target, 'utf-8')).toBe('# Keep\n');
-    else expect(fs.readdirSync(outside)).toEqual([]);
   },
 );
 
@@ -739,21 +716,28 @@ it.skipIf(process.platform === 'win32')(
 );
 
 it.each([
-  ['plugins/claude-only/.mcp.json', 'schema-invalid'],
-  ['.claude-plugin/marketplace.json', 'marketplace-registration'],
-  ['.aipm/generated-root.json', 'schema-invalid'],
-])('reports malformed %s before it can pass or be replaced', async (relative, code) => {
-  repo = relative.startsWith('.aipm/') ? geminiRepo({ name: 'workspace' }) : claudeRepo();
-  const file = path.join(repo.repoRoot, relative);
-  fs.mkdirSync(path.dirname(file), { recursive: true });
-  fs.writeFileSync(file, '{broken');
-  const { validation } = await buildWithOutcome(repo.repoRoot);
-  expect(validation.passed).toBe(false);
-  expect(validation.findings.find((finding) => finding.code === code)?.message).toContain(
-    path.basename(file),
-  );
-  await expect(buildWithOutcome(repo.repoRoot, { failFast: true })).rejects.toThrow(code);
-  expect(fs.readFileSync(file, 'utf-8')).toBe('{broken');
+  'plugins/claude-only/.mcp.json',
+  '.claude-plugin/marketplace.json',
+  '.aipm/generated-root.json',
+])('keeps legacy handling of malformed %s', async (relative) => {
+  const workspace = relative.startsWith('.aipm/') ? { name: 'workspace' } : undefined;
+  const legacy = workspace === undefined ? claudeRepo() : geminiRepo(workspace);
+  repo = workspace === undefined ? claudeRepo() : geminiRepo(workspace);
+  try {
+    for (const root of [legacy.repoRoot, repo.repoRoot]) {
+      const file = path.join(root, relative);
+      fs.mkdirSync(path.dirname(file), { recursive: true });
+      fs.writeFileSync(file, '{broken');
+    }
+    await build(legacy.repoRoot);
+    const outcome = await buildWithOutcome(repo.repoRoot);
+    expect(outcome.validation).toEqual(await validate(legacy.repoRoot));
+    expect(fs.readFileSync(path.join(repo.repoRoot, relative), 'utf8')).toBe(
+      fs.readFileSync(path.join(legacy.repoRoot, relative), 'utf8'),
+    );
+  } finally {
+    legacy.cleanup();
+  }
 });
 
 it('retains a malformed manifest finding when an agents scan fails', async () => {
@@ -795,7 +779,7 @@ it('retains a root collision in the rejection when orphan cleanup fails', async 
   fs.writeFileSync(path.join(root, 'GEMINI.md'), '# Author-owned\n');
 
   await expect(buildWithOutcome(root, { failFast: true })).rejects.toThrow(
-    /EISDIR:[\s\S]+root-artifact-collision:[\s\S]+GEMINI\.md/,
+    /EISDIR[\s\S]+root-artifact-collision:[\s\S]+GEMINI\.md/,
   );
 });
 
@@ -862,15 +846,13 @@ it
     try {
       const { validation } = await buildWithOutcome(repo.repoRoot);
       expect(validation.passed).toBe(false);
-      expect(validation.findings).toMatchObject([
-        {
-          code: 'freshness-io',
-          severity: 'hard',
-          plugin: 'test',
-        },
-      ]);
-      expect(validation.findings[0]?.message).toContain('EACCES');
-      expect(validation.findings[0]?.message).toContain(input);
+      const io = validation.findings.find(({ code }) => code === 'freshness-io');
+      expect(io).toMatchObject({ code: 'freshness-io', severity: 'hard', plugin: 'test' });
+      expect(io?.message).toContain('EACCES');
+      expect(io?.message).toContain(input);
+      expect(validation.findings.filter(({ code }) => code !== 'freshness-io')).toEqual(
+        (await validate(repo.repoRoot)).findings,
+      );
       await expect(buildWithOutcome(repo.repoRoot, { failFast: true })).rejects.toThrow(
         /freshness-io:.*EACCES/,
       );
@@ -883,7 +865,7 @@ it
 it.skipIf(process.platform === 'win32').each([
   ['loop', 'broken.mdc', 'ELOOP'],
   ['dangling link', 'missing.mdc', 'ENOENT'],
-  ['directory link', '.', 'EINVAL'],
+  ['directory link', '.', 'EISDIR'],
 ])('reports a Cursor rule %s as an I/O finding', async (_kind, target, code) => {
   repo = synthRegistryRepo([
     {

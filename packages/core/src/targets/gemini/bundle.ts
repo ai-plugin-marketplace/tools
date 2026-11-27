@@ -6,7 +6,7 @@
  * @see docs/specs/architecture.md §12.4 (transform step + per-target folder layout)
  */
 
-import * as fs from 'node:fs';
+import { inputExists, repositoryFs as fs } from '../../pipeline/repository-fs.js';
 import * as path from 'node:path';
 
 import { convertClaudeHooksYamlToGeminiJson, rewriteAgentFrontmatterTools } from './transform.js';
@@ -20,32 +20,32 @@ function copyFile(src: string, dest: string): void {
   fs.copyFileSync(src, dest);
 }
 
-function copyDir(src: string, dest: string, exists: typeof fs.existsSync): void {
-  if (!exists(src)) return;
+function copyDir(src: string, dest: string): void {
+  if (!fs.existsSync(src)) return;
   fs.mkdirSync(dest, { recursive: true });
   for (const entry of fs.readdirSync(src, { withFileTypes: true })) {
     const srcPath = path.join(src, entry.name);
     const destPath = path.join(dest, entry.name);
     if (entry.isDirectory()) {
-      copyDir(srcPath, destPath, exists);
+      copyDir(srcPath, destPath);
     } else {
       copyFile(srcPath, destPath);
     }
   }
 }
 
-function copyIfExists(src: string, dest: string, exists: typeof fs.existsSync): boolean {
-  if (!exists(src)) return false;
+function copyIfExists(src: string, dest: string, expected: 'file' | 'directory'): boolean {
+  if (!inputExists(src, expected)) return false;
   if (fs.statSync(src).isDirectory()) {
-    copyDir(src, dest, exists);
+    copyDir(src, dest);
   } else {
     copyFile(src, dest);
   }
   return true;
 }
 
-function cleanDir(dir: string, exists: typeof fs.existsSync): void {
-  if (exists(dir)) {
+function cleanDir(dir: string): void {
+  if (fs.existsSync(dir)) {
     fs.rmSync(dir, { recursive: true });
   }
 }
@@ -73,13 +73,10 @@ function collectRelativePaths(dir: string): string[] {
  * Rewrite all `.md` files inside `agentsDir` in-place, translating Claude Code tool
  * names to Gemini CLI equivalents. Returns a map of filename → dropped tools.
  */
-function rewriteAgentsDir(
-  agentsDir: string,
-  exists: typeof fs.existsSync,
-): Record<string, string[]> {
+function rewriteAgentsDir(agentsDir: string): Record<string, string[]> {
   const droppedToolsByAgent: Record<string, string[]> = {};
 
-  if (!exists(agentsDir)) return droppedToolsByAgent;
+  if (!fs.existsSync(agentsDir)) return droppedToolsByAgent;
 
   for (const file of fs.readdirSync(agentsDir)) {
     if (!file.endsWith('.md')) continue;
@@ -118,9 +115,8 @@ function rewriteAgentsDir(
 export function bundleGeminiPlugin(
   pluginDir: string,
   destDir: string,
-  exists = fs.existsSync,
 ): { emitted: string[]; droppedToolsByAgent: Record<string, string[]> } {
-  cleanDir(destDir, exists);
+  cleanDir(destDir);
 
   // ── Flat files (only if present) ──────────────────────────────────────────
   // README.md/LICENSE are deliberately NOT copied here: the template repo (commit d2d9923,
@@ -134,22 +130,22 @@ export function bundleGeminiPlugin(
   // guard (build.ts) — generation must never try to own files it does not generate.
   const flatFiles = ['gemini-extension.json', 'GEMINI.md'];
   for (const name of flatFiles) {
-    copyIfExists(path.join(pluginDir, name), path.join(destDir, name), exists);
+    copyIfExists(path.join(pluginDir, name), path.join(destDir, name), 'file');
   }
 
   // ── Directories: skills/ and agents/ ─────────────────────────────────────
   const plainDirs = ['skills', 'agents'];
   for (const dir of plainDirs) {
-    copyIfExists(path.join(pluginDir, dir), path.join(destDir, dir), exists);
+    copyIfExists(path.join(pluginDir, dir), path.join(destDir, dir), 'directory');
   }
 
   // Rewrite agent tool names after copying
-  const droppedToolsByAgent = rewriteAgentsDir(path.join(destDir, 'agents'), exists);
+  const droppedToolsByAgent = rewriteAgentsDir(path.join(destDir, 'agents'));
 
   // ── commands/: .toml files only ───────────────────────────────────────────
   const commandsSrc = path.join(pluginDir, 'commands');
   const commandsDest = path.join(destDir, 'commands');
-  if (exists(commandsSrc)) {
+  if (fs.existsSync(commandsSrc)) {
     const tomlFiles = fs.readdirSync(commandsSrc).filter((f) => f.endsWith('.toml'));
     if (tomlFiles.length > 0) {
       fs.mkdirSync(commandsDest, { recursive: true });
@@ -166,7 +162,7 @@ export function bundleGeminiPlugin(
   const yamlCandidates = ['claude.yaml', 'claude.yml'];
   for (const candidate of yamlCandidates) {
     const yamlPath = path.join(hooksSrc, candidate);
-    if (exists(yamlPath)) {
+    if (fs.existsSync(yamlPath)) {
       const yamlContent = fs.readFileSync(yamlPath, 'utf-8');
       const jsonContent = convertClaudeHooksYamlToGeminiJson(yamlContent);
       const hooksDestDir = path.join(destDir, 'hooks');

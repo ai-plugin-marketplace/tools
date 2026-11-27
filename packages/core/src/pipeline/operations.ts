@@ -12,7 +12,8 @@
 
 import * as path from 'node:path';
 
-import { runBuild, runBuildWithOutcome } from './build.js';
+import { runBuild } from './build.js';
+import { runBuildWithOutcome } from './build-outcome.js';
 import { runInit } from './init.js';
 import { loadRepoConfig } from './load-config.js';
 import { runRefreshScaffold } from './scaffold-refresh.js';
@@ -55,8 +56,8 @@ export function build(targetPath: string, opts?: BuildOptions): Promise<BuildRes
 
 /**
  * Build a single plugin or every plugin under a repo root. Returns one result per built plugin
- * along with post-build validation findings. Artifact drift is hard in CI and soft locally.
- * Filesystem failures that prevent validation checks are hard findings in either environment.
+ * and the findings from standalone validation after the build. Artifact drift is hard in CI and soft locally.
+ * Filesystem failures on repository inputs are hard findings in either environment.
  * Includes the published-surface boundary check from {@link validate}.
  * Validation assumes source inputs stay unchanged by other processes during the call.
  *

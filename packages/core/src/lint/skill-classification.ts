@@ -1,3 +1,4 @@
+import type { Dirent } from 'node:fs';
 /**
  * Repo-wide skill classification for the published-surface boundary rules (L-D13).
  *
@@ -20,10 +21,10 @@
  */
 
 import { execFileSync } from 'node:child_process';
-import * as fs from 'node:fs';
+import { inputExists, repositoryFs as fs } from '../pipeline/repository-fs.js';
 import * as path from 'node:path';
 
-import { readRootManifestPaths } from '../pipeline/artifacts.js';
+import { readRootManifestPaths } from '../pipeline/build.js';
 import { discoverPlugins } from '../pipeline/discover.js';
 import { hasRepoConfig, loadRepoConfig } from '../pipeline/load-config.js';
 import type { RuleContext } from './types.js';
@@ -129,7 +130,7 @@ function listSkillFilesViaGit(repoRoot: string): string[] | undefined {
     if (segments.some((segment) => WALK_SKIP_DIRS.has(segment))) continue;
     const abs = path.join(repoRoot, ...segments);
     // A tracked-but-deleted file is still listed by `--cached`; only files present on disk count.
-    if (fs.existsSync(abs)) out.push(abs);
+    if (inputExists(abs, 'file')) out.push(abs);
   }
   return out;
 }
@@ -145,7 +146,7 @@ function listSkillFilesViaWalk(repoRoot: string): string[] {
   while (stack.length > 0) {
     const dir = stack.pop();
     if (dir === undefined) break;
-    let entries: fs.Dirent[];
+    let entries: Dirent[];
     try {
       entries = fs.readdirSync(dir, { withFileTypes: true });
     } catch {
@@ -153,6 +154,7 @@ function listSkillFilesViaWalk(repoRoot: string): string[] {
     }
     for (const entry of entries) {
       const abs = path.join(dir, entry.name);
+      if (isSkillFileName(entry.name) && !entry.isFile()) inputExists(abs, 'file');
       if (entry.isDirectory()) {
         if (WALK_SKIP_DIRS.has(entry.name)) continue;
         if (fs.existsSync(path.join(abs, '.git'))) continue;

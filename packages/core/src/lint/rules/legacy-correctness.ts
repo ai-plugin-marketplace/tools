@@ -44,11 +44,8 @@ export const envelopeAdherenceRule: Rule = {
     // Envelope adherence needs the resolved aipm.config.ts envelope — aipm-repo only.
     appliesTo: ['aipm-repo'],
   },
-  check(ctx: InternalRuleContext): Diagnostic[] {
-    return wrap(ENVELOPE_ADHERENCE_ID)(
-      ctx,
-      validateEnvelopeAdherence(ctx.pluginDir, ctx.envelope, ctx.onFreshnessIoError),
-    );
+  check(ctx: RuleContext): Diagnostic[] {
+    return wrap(ENVELOPE_ADHERENCE_ID)(ctx, validateEnvelopeAdherence(ctx.pluginDir, ctx.envelope));
   },
 };
 
@@ -63,12 +60,9 @@ export const frontmatterParsesRule: Rule = {
     // Content-only (needs just the file's frontmatter) — applies wherever such files can appear.
     appliesTo: ['aipm-repo', 'claude-plugin', 'open-plugins', 'skills-dir', 'claude-user-config'],
   },
-  check(ctx: InternalRuleContext): Diagnostic[] {
+  check(ctx: RuleContext): Diagnostic[] {
     const pluginName = path.basename(ctx.pluginDir);
-    return wrap(FRONTMATTER_INVALID_ID)(
-      ctx,
-      validateFrontmatterParses(ctx.pluginDir, pluginName, ctx.onFreshnessIoError),
-    );
+    return wrap(FRONTMATTER_INVALID_ID)(ctx, validateFrontmatterParses(ctx.pluginDir, pluginName));
   },
 };
 
@@ -83,11 +77,8 @@ export const nameConsistencyRule: Rule = {
     // Cross-target consistency requires the resolved aipm.config.ts envelope — aipm-repo only.
     appliesTo: ['aipm-repo'],
   },
-  check(ctx: InternalRuleContext): Diagnostic[] {
-    return wrap(NAME_CONSISTENCY_ID)(
-      ctx,
-      validateNameConsistency(ctx.pluginDir, ctx.envelope, ctx.onFreshnessIoError),
-    );
+  check(ctx: RuleContext): Diagnostic[] {
+    return wrap(NAME_CONSISTENCY_ID)(ctx, validateNameConsistency(ctx.pluginDir, ctx.envelope));
   },
 };
 
@@ -103,12 +94,7 @@ export const versionConsistencyRule: Rule = {
     appliesTo: ['aipm-repo'],
   },
   async check(ctx: InternalRuleContext): Promise<Diagnostic[]> {
-    const findings = await validateVersionConsistency(
-      ctx.pluginDir,
-      ctx.envelope,
-      ctx.configCache,
-      ctx.onFreshnessIoError,
-    );
+    const findings = await validateVersionConsistency(ctx.pluginDir, ctx.envelope, ctx.configCache);
     return wrap(VERSION_CONSISTENCY_ID)(ctx, findings);
   },
 };
@@ -123,11 +109,8 @@ export const mcpKeySyncRule: Rule = {
     // Cross-target consistency requires the resolved aipm.config.ts envelope — aipm-repo only.
     appliesTo: ['aipm-repo'],
   },
-  check(ctx: InternalRuleContext): Diagnostic[] {
-    return wrap(MCP_KEY_SYNC_ID)(
-      ctx,
-      validateMcpKeySync(ctx.pluginDir, ctx.envelope, ctx.onFreshnessIoError),
-    );
+  check(ctx: RuleContext): Diagnostic[] {
+    return wrap(MCP_KEY_SYNC_ID)(ctx, validateMcpKeySync(ctx.pluginDir, ctx.envelope));
   },
 };
 
@@ -142,15 +125,10 @@ export const marketplaceRegistrationRule: Rule = {
     // The repo-root marketplace.json concept is aipm-repo-specific.
     appliesTo: ['aipm-repo'],
   },
-  check(ctx: InternalRuleContext): Diagnostic[] {
+  check(ctx: RuleContext): Diagnostic[] {
     return wrap(MARKETPLACE_REGISTRATION_ID)(
       ctx,
-      validateMarketplaceRegistration(
-        ctx.pluginDir,
-        ctx.repoRoot,
-        ctx.envelope,
-        ctx.onFreshnessIoError,
-      ),
+      validateMarketplaceRegistration(ctx.pluginDir, ctx.repoRoot, ctx.envelope),
     );
   },
 };
@@ -165,10 +143,10 @@ export const defaultMarketplaceNameRule: Rule = {
     // Marketplace identity is an aipm workspace/registry concept — aipm-repo only.
     appliesTo: ['aipm-repo'],
   },
-  check(ctx: InternalRuleContext): Diagnostic[] {
+  check(ctx: RuleContext): Diagnostic[] {
     return wrap(DEFAULT_MARKETPLACE_NAME_ID)(
       ctx,
-      checkDefaultMarketplaceName(ctx.repoRoot, ctx.workspace, ctx.onFreshnessIoError),
+      checkDefaultMarketplaceName(ctx.repoRoot, ctx.workspace),
     );
   },
 };

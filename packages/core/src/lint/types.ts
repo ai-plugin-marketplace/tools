@@ -4,7 +4,6 @@
  * @see docs/specs/lint-engine.md L-D1 (Diagnostic), L-D4 (Rule)
  */
 
-import type { FreshnessIoHandler } from '../pipeline/validation-io.js';
 import type { AipmWorkspace } from '../config.js';
 import type { ConfigCache } from '../pipeline/load-config.js';
 import type { FindingCode, TargetId } from '../pipeline/types.js';
@@ -126,8 +125,6 @@ export interface InternalRuleContext extends RuleContext {
    * `skipFreshness` — set only by `validate()`'s post-build re-validation; `lint()` never sets it.
    */
   readonly skipFreshness: boolean;
-  /** Report filesystem errors through the opt-in build outcome. */
-  readonly onFreshnessIoError?: FreshnessIoHandler;
   /**
    * Optional per-invocation `aipm.config.ts` transpile memo (see `pipeline/load-config.ts`'s
    * `ConfigCache`), threaded through so repo-scoped freshness rules reuse the same cache
